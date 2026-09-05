@@ -1,0 +1,40 @@
+{
+  "productName": "Theme Forge Nebular Fusion",
+  "version": "0.1.0",
+  "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Theme Forge Nebular Fusion",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 620,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "externalBin": ["binaries/tfsb-studio-service"],
+    "resources": ["sidecar-payload/**/*"],
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "shortDescription": "Evidence-bound Theme Forge integration workbench",
+    "longDescription": "Theme Forge Nebular Fusion is a local human-first workbench for reviewing deterministic Theme Forge candidate evidence.",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}
