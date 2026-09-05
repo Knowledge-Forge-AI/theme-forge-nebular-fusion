@@ -1,0 +1,41 @@
+{
+  "name": "@knowledge-forge-ai/theme-forge-nebular-fusion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Theme Forge Nebular Fusion application",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.2"
+  },
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "vite build",
+    "sidecar:prepare": "node tools/sidecar-prepare.mjs",
+    "sidecar:verify": "node tools/sidecar-verify.mjs",
+    "sidecar:clean": "node tools/sidecar-clean.mjs",
+    "sidecar:test": "node --test tools/sidecar-builder-tests.mjs tools/sidecar-transcript-tests.mjs",
+    "sidecar:transcript": "node tools/sidecar-transcript.mjs",
+    "tauri": "tauri",
+    "tauri:build": "tauri build --bundles app --target aarch64-apple-darwin",
+    "tauri:build:sidecar": "npm run sidecar:prepare && npm run tauri:build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.6",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

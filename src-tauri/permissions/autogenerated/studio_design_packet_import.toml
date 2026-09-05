@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-design-packet-import"
+description = "Enables the studio_design_packet_import command without any pre-configured scope."
+commands.allow = ["studio_design_packet_import"]
+
+[[permission]]
+identifier = "deny-studio-design-packet-import"
+description = "Denies the studio_design_packet_import command without any pre-configured scope."
+commands.deny = ["studio_design_packet_import"]

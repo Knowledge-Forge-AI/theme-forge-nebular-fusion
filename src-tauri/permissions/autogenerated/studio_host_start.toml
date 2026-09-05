@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-host-start"
+description = "Enables the studio_host_start command without any pre-configured scope."
+commands.allow = ["studio_host_start"]
+
+[[permission]]
+identifier = "deny-studio-host-start"
+description = "Denies the studio_host_start command without any pre-configured scope."
+commands.deny = ["studio_host_start"]

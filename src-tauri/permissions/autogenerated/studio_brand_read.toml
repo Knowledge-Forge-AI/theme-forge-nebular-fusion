@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-brand-read"
+description = "Enables the studio_brand_read command without any pre-configured scope."
+commands.allow = ["studio_brand_read"]
+
+[[permission]]
+identifier = "deny-studio-brand-read"
+description = "Denies the studio_brand_read command without any pre-configured scope."
+commands.deny = ["studio_brand_read"]

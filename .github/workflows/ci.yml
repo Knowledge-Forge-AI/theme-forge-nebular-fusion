@@ -1,0 +1,382 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebular-ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  source-policy:
+    name: Public staging source policy and receipt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate PR source policy
+        env:
+          TFSB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          TFSB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          TFSB_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TFSB_EVENT_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$TFSB_BASE_REF" != "main" ]; then
+            echo "::error::Base ref must be main, got $TFSB_BASE_REF"
+            exit 1
+          fi
+          if [ "$TFSB_HEAD_REF" != "staging" ]; then
+            echo "::error::Head ref must be staging, got $TFSB_HEAD_REF"
+            exit 1
+          fi
+          if [ "$TFSB_HEAD_REPOSITORY" != "$TFSB_EVENT_REPOSITORY" ]; then
+            echo "::error::PR must originate from the same repository, got $TFSB_HEAD_REPOSITORY"
+            exit 1
+          fi
+      - name: Checkout exact staging head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Record staging head receipt
+        run: |
+          mkdir -p .test-reports/source-policy
+          node tools/ci/exact-head.mjs --output .test-reports/source-policy/receipt.json --expected-branch staging --expected-base main --checkout-role staging-head
+      - name: Bind source policy receipt
+        run: node tools/ci/artifact-manifest.mjs --root .test-reports/source-policy --output .test-reports/source-policy/artifact-manifest.json --job source-policy --require receipt.json
+      - name: Upload source policy receipt
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: source-policy-receipt
+          path: .test-reports/source-policy/
+          if-no-files-found: error
+          retention-days: 14
+
+  frontend:
+    name: Frontend typecheck, tests, build, and audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: source-policy
+    steps:
+      - name: Checkout PR merge candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Record exact-head receipt
+        run: |
+          mkdir -p .test-reports/frontend
+          node tools/ci/exact-head.mjs --output .test-reports/frontend/receipt.json --expected-branch staging --expected-base main --checkout-role merge-candidate
+      - run: npm ci
+      - name: Verify and extract declared Node build types
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { execFileSync } from "node:child_process";
+          import { readFileSync, cpSync, mkdtempSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { extractReleaseArchive } from "./tools/ci/artifact-manifest.mjs";
+          const binding = JSON.parse(readFileSync("authenticated-inputs/tooling/binding.json", "utf8"));
+          const types = binding.buildTypes;
+          const expected = [["@types/node", "22.20.1", "node_modules/@types/node"], ["undici-types", "6.21.0", "node_modules/undici-types"]];
+          if (binding.schema !== "tfsb.nebular-verification-tooling-v1" || binding.schemaVersion !== 1 || !types || typeof types.filename !== "string" || !/^[a-z0-9._-]+\.tgz$/i.test(types.filename) || !/^[a-f0-9]{64}$/.test(types.sha256) || !Array.isArray(types.packages) || expected.some(([name, version, prefix]) => !types.packages.some((pkg) => pkg.name === name && pkg.version === version && pkg.prefix === prefix))) throw new Error("invalid declared build-types binding");
+          const archive = "authenticated-inputs/tooling-tarball/" + types.filename;
+          const digest = createHash("sha256").update(readFileSync(archive)).digest("hex");
+          if (digest !== types.sha256) throw new Error("build-types archive digest mismatch");
+          const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\n");
+          if (entries.some((entry) => entry.startsWith("/") || entry.split("/").includes("..")) || expected.some(([, , prefix]) => !entries.includes(prefix + "/package.json"))) throw new Error("build-types archive contents mismatch");
+          const scratch = mkdtempSync(join(tmpdir(), "nebular-build-types-"));
+          try {
+            await extractReleaseArchive({ archivePath: archive, destination: scratch, expectedSha256: types.sha256 });
+            for (const [, , path] of expected) cpSync(join(scratch, path), path, { recursive: true });
+          } finally { rmSync(scratch, { recursive: true, force: true }); }
+          NODE
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev
+      - run: npm run sidecar:test
+      - name: Archive frontend release surface
+        run: tar -czf .test-reports/frontend/frontend-dist.tar.gz -C dist .
+      - name: Bind frontend artifact bytes
+        run: node tools/ci/artifact-manifest.mjs --root .test-reports/frontend --output .test-reports/frontend/artifact-manifest.json --job frontend --require receipt.json --require frontend-dist.tar.gz
+      - name: Upload frontend artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: frontend-artifacts
+          path: .test-reports/frontend/
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-arm64:
+    name: macOS-arm64 Rust host, Tauri build, and sidecar qualification
+    runs-on: macos-15
+    timeout-minutes: 30
+    needs: source-policy
+    steps:
+      - name: Checkout PR merge candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Record exact-head receipt
+        run: |
+          mkdir -p .test-reports/nebular/node-authenticity
+          node tools/ci/exact-head.mjs --output .test-reports/nebular/receipt.json --expected-branch staging --expected-base main --checkout-role merge-candidate
+      - name: Select repository-pinned Rust 1.98.0 toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          rustc --version
+          cargo --version
+      - run: npm ci
+      - run: npm run build
+      - name: Verify Node authenticity
+        run: |
+          node tools/ci/verify-node-authenticity.mjs --download-dir "$RUNNER_TEMP/node-v22.23.2" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+          cp "$RUNNER_TEMP/node-authenticated" .test-reports/nebular/node-runtime
+          cp "$RUNNER_TEMP/node-v22.23.2/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
+      - name: Build and verify sidecar payload twice
+        run: |
+          ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
+          test -n "$ROOT_TGZ"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ"
+          cp src-tauri/sidecar-payload/manifest.json "$RUNNER_TEMP/manifest-first.json"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ"
+          cmp "$RUNNER_TEMP/manifest-first.json" src-tauri/sidecar-payload/manifest.json
+          node tools/sidecar-verify.mjs
+          tar -czf .test-reports/nebular/sidecar-payload.tar.gz -C src-tauri sidecar-payload
+      - name: Execute sidecar protocol transcripts
+        run: |
+          node tools/sidecar-transcript.mjs > .test-reports/nebular/sidecar-transcript.json
+      - name: Rust qualification gates
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features -- --test-threads=1
+          cargo test --locked --doc
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
+      - name: Build macOS Tauri application
+        run: npm run tauri:build
+      - name: Verify application bundle and security ACL
+        run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Theme Forge Nebular Fusion.app"
+          codesign --force --sign - "$APP"
+          node tools/ci/verify-nebular-bundle.mjs --app "$APP" --node "$RUNNER_TEMP/node-authenticated" --payload src-tauri/sidecar-payload --output .test-reports/nebular/bundle-identity.json --launch
+          node -e 'import { readFileSync, writeFileSync } from "node:fs"; const value = JSON.parse(readFileSync(".test-reports/nebular/bundle-identity.json", "utf8")); writeFileSync(".test-reports/nebular/signing-facts.json", JSON.stringify(value.signing, null, 2) + "\n");'
+          tar -czf .test-reports/nebular/nebular-fusion.app.tar.gz -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos "Theme Forge Nebular Fusion.app"
+      - name: Bind Nebular artifact bytes
+        run: |
+          node tools/ci/artifact-manifest.mjs --root .test-reports/nebular --output .test-reports/nebular/artifact-manifest.json --job macos-arm64 --require receipt.json --require node-authenticity/receipt.json --require node-authenticity/SHASUMS256.txt.asc --require node-runtime --require sidecar-payload.tar.gz --require sidecar-transcript.json --require nebular-fusion.app.tar.gz --require bundle-identity.json --require signing-facts.json
+      - name: Upload Nebular Fusion macOS artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        if: always()
+        with:
+          name: nebular-macos-arm64-artifacts
+          path: .test-reports/nebular/
+          if-no-files-found: error
+          retention-days: 14
+
+  codeql:
+    name: Advanced CodeQL analysis (${{ matrix.language }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    needs: source-policy
+    env:
+      TFSB_LANGUAGE: ${{ matrix.language }}
+      TFSB_MATRIX_JSON: '{"language":"${{ matrix.language }}"}'
+      TFSB_CODEQL_REPORT_DIR: .test-reports/codeql-${{ matrix.language }}
+    permissions:
+      contents: read
+      security-events: write # Required by CodeQL analysis upload.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            os: ubuntu-24.04
+          - language: actions
+            os: ubuntu-24.04
+          - language: rust
+            os: macos-15
+    steps:
+      - name: Checkout PR merge candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Record exact-head receipt
+        run: |
+          mkdir -p "$TFSB_CODEQL_REPORT_DIR"
+          node tools/ci/exact-head.mjs --output "$TFSB_CODEQL_REPORT_DIR/receipt.json" --expected-branch staging --expected-base main --checkout-role merge-candidate
+      - name: Initialize CodeQL Action
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+          build-mode: none
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  supply-chain:
+    name: Supply chain, Syft SBOMs, Grype scan, and Cargo audit
+    runs-on: macos-15
+    timeout-minutes: 20
+    needs:
+      - source-policy
+      - frontend
+      - macos-arm64
+    steps:
+      - name: Checkout PR merge candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Record exact-head receipt
+        run: |
+          mkdir -p .test-reports/supply-chain
+          node tools/ci/exact-head.mjs --output .test-reports/supply-chain/receipt.json --expected-branch staging --expected-base main --checkout-role merge-candidate
+      - name: Download product release artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: ${{ runner.temp }}/tfsb-nebular-supply/
+      - name: Materialize Nebular release surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          TFSB_INPUT_DIR="$RUNNER_TEMP/tfsb-nebular-supply"
+          TFSB_RELEASE_DIR="$RUNNER_TEMP/tfsb-nebular-release"
+          rm -rf "$TFSB_RELEASE_DIR"
+          mkdir -p "$TFSB_RELEASE_DIR/app" "$TFSB_RELEASE_DIR/frontend" "$TFSB_RELEASE_DIR/frontend/install" "$TFSB_RELEASE_DIR/runtime/node-authenticity" "$TFSB_RELEASE_DIR/sidecar"
+          nebular="$TFSB_INPUT_DIR/nebular-macos-arm64-artifacts"
+          frontend="$TFSB_INPUT_DIR/frontend-artifacts"
+          for file in nebular-fusion.app.tar.gz bundle-identity.json signing-facts.json; do
+            test -s "$nebular/$file"
+            cp "$nebular/$file" "$TFSB_RELEASE_DIR/app/$file"
+          done
+          for file in node-runtime; do
+            test -s "$nebular/$file"
+            cp "$nebular/$file" "$TFSB_RELEASE_DIR/runtime/$file"
+          done
+          mkdir -p "$TFSB_RELEASE_DIR/runtime/catalog"
+          cp "$TFSB_RELEASE_DIR/runtime/node-runtime" "$TFSB_RELEASE_DIR/runtime/catalog/node"
+          cmp "$TFSB_RELEASE_DIR/runtime/node-runtime" "$TFSB_RELEASE_DIR/runtime/catalog/node"
+          for file in node-authenticity/receipt.json node-authenticity/SHASUMS256.txt.asc; do
+            test -s "$nebular/$file"
+            cp "$nebular/$file" "$TFSB_RELEASE_DIR/runtime/$file"
+          done
+          for file in sidecar-payload.tar.gz sidecar-transcript.json; do
+            test -s "$nebular/$file"
+            cp "$nebular/$file" "$TFSB_RELEASE_DIR/sidecar/$file"
+          done
+          mkdir -p "$TFSB_RELEASE_DIR/app/extracted"
+          node tools/ci/artifact-manifest.mjs --archive "$nebular/nebular-fusion.app.tar.gz" --manifest "$nebular/artifact-manifest.json" --extract-to "$TFSB_RELEASE_DIR/app/extracted"
+          node tools/ci/artifact-manifest.mjs --archive "$nebular/sidecar-payload.tar.gz" --manifest "$nebular/artifact-manifest.json" --extract-to "$TFSB_RELEASE_DIR/sidecar/extracted"
+          test -s "$frontend/frontend-dist.tar.gz"
+          cp "$frontend/frontend-dist.tar.gz" "$TFSB_RELEASE_DIR/frontend/frontend-dist.tar.gz"
+          node tools/ci/artifact-manifest.mjs --archive "$frontend/frontend-dist.tar.gz" --manifest "$frontend/artifact-manifest.json" --extract-to "$TFSB_RELEASE_DIR/frontend/install"
+          mkdir -p "$RUNNER_TEMP/tfsb-nebular-inventory/frontend" "$RUNNER_TEMP/tfsb-nebular-inventory/rust" "$RUNNER_TEMP/tfsb-nebular-inventory/core"
+          cp package.json package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/frontend/"
+          cp src-tauri/Cargo.toml src-tauri/Cargo.lock "$RUNNER_TEMP/tfsb-nebular-inventory/rust/"
+          cp authenticated-inputs/core/package.json authenticated-inputs/core/package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/core/"
+      - name: Run Syft SBOM generation and Grype vulnerability scan
+        run: |
+          TFSB_RELEASE_DIR="$RUNNER_TEMP/tfsb-nebular-release"
+          node tools/ci/run-syft-grype.mjs --target "$TFSB_RELEASE_DIR" --output-dir .test-reports/supply-chain --name nebular-fusion             --component-input "shipped-runtime:node=$TFSB_RELEASE_DIR/runtime/catalog"             --component-input "build-input:frontend-lock=$RUNNER_TEMP/tfsb-nebular-inventory/frontend"             --component-input "build-input:rust-lock=$RUNNER_TEMP/tfsb-nebular-inventory/rust"             --component-input "build-input:paired-core=$RUNNER_TEMP/tfsb-nebular-inventory/core"             --component-catalogers node=binary-classifier-cataloger             --component-catalogers frontend-lock=javascript-lock-cataloger,javascript-package-cataloger             --component-catalogers rust-lock=rust-cargo-lock-cataloger             --component-catalogers paired-core=javascript-lock-cataloger,javascript-package-cataloger
+      - name: Run selected workflow and secret checks
+        run: node tools/ci/run-workflow-checks.mjs --root . --output-dir .test-reports/workflow-checks
+      - name: Retain workflow and secret check outputs
+        run: |
+          rm -rf .test-reports/supply-chain/workflow-checks
+          mv .test-reports/workflow-checks .test-reports/supply-chain/workflow-checks
+      - name: Install cargo-audit
+        run: cargo +1.98.0 install cargo-audit --version 0.22.2 --locked
+      - name: Run Cargo audit
+        run: cargo +1.98.0 audit --json --file src-tauri/Cargo.lock > .test-reports/supply-chain/cargo-audit.json
+      - name: Bind supply-chain artifacts
+        run: |
+          node tools/ci/artifact-manifest.mjs --root .test-reports/supply-chain --output .test-reports/supply-chain/artifact-manifest.json --job supply-chain --require receipt.json --require nebular-fusion.syft.json --require nebular-fusion.spdx.json --require nebular-fusion.cdx.json --require nebular-fusion.grype.json --require nebular-fusion.grype.sarif --require nebular-fusion.receipt.json --require workflow-checks/actionlint.result.json --require workflow-checks/zizmor.result.json --require workflow-checks/betterleaks.result.json --require workflow-checks/workflow-checks.receipt.json --require workflow-checks/betterleaks.report.json --require cargo-audit.json
+      - name: Upload supply chain artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: supply-chain-artifacts
+          path: .test-reports/supply-chain/
+          if-no-files-found: error
+          retention-days: 14
+
+  evidence-aggregate:
+    name: Evidence aggregation and qualification gate
+    runs-on: ubuntu-24.04
+    if: always()
+    env:
+      TFSB_NEEDS_JSON: ${{ toJson(needs) }}
+    timeout-minutes: 15
+    needs:
+      - source-policy
+      - frontend
+      - macos-arm64
+      - codeql
+      - supply-chain
+    steps:
+      - name: Checkout PR merge candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - name: Download all job artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: .downloaded-artifacts/
+      - name: Aggregate evidence and generate qualification manifest
+        run: |
+          mkdir -p .test-reports/evidence-aggregate
+          node tools/ci/exact-head.mjs --output .test-reports/evidence-aggregate/receipt.json --expected-branch staging --expected-base main --checkout-role merge-candidate
+          node tools/ci/evidence-aggregator.mjs --download-dir .downloaded-artifacts --output-dir .test-reports/evidence-aggregate --product nebular-fusion --expected-receipt .test-reports/evidence-aggregate/receipt.json --needs-json "$TFSB_NEEDS_JSON"
+      - name: Upload evidence aggregate artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        if: always()
+        with:
+          name: evidence-aggregate-artifacts
+          path: .test-reports/evidence-aggregate/
+          if-no-files-found: error
+          retention-days: 14

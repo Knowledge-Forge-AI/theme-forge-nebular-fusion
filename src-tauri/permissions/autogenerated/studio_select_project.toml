@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-select-project"
+description = "Enables the studio_select_project command without any pre-configured scope."
+commands.allow = ["studio_select_project"]
+
+[[permission]]
+identifier = "deny-studio-select-project"
+description = "Denies the studio_select_project command without any pre-configured scope."
+commands.deny = ["studio_select_project"]

@@ -1,0 +1,9 @@
+import { useEffect, useRef } from "react";
+import type { PlanEffect } from "./plan-effect";
+
+export function PlanConfirmation({ acknowledged, effect, disabled = false, onAcknowledge, onApply, onDiscard }: { readonly acknowledged: boolean; readonly effect: PlanEffect; readonly disabled?: boolean; readonly onAcknowledge: (checked: boolean) => void; readonly onApply: () => void; readonly onDiscard: () => void }) {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus(); }, []);
+  useEffect(() => { if (disabled && heading.current?.contains(document.activeElement)) heading.current.focus(); }, [disabled]);
+  return <section className="plan-confirmation" role="dialog" aria-modal="false" aria-labelledby="plan-confirmation-title" aria-describedby="plan-effect-description" onKeyDown={(event) => { if (event.key === "Escape" && !disabled) { onAcknowledge(false); heading.current?.focus(); } }}><h4 id="plan-confirmation-title" ref={heading} tabIndex={-1}>Confirm this exact retained plan</h4><p id="plan-effect-description">{effect === "verified-no-op" ? "This plan is a verified no-output-change plan. Discarding it is recommended." : effect === "canonical-or-lock-only-change-possible" ? "No external asset files will be written; canonical package lock metadata may still advance." : effect === "change-required" ? "This plan requires a baseline state change." : "This plan changes external outputs."}</p><label><input type="checkbox" checked={acknowledged} disabled={disabled} onChange={(event) => onAcknowledge(event.target.checked)} /> I reviewed this exact plan and its destinations.</label><div className="plan-actions"><button type="button" disabled={disabled || !acknowledged} onClick={onApply}>Apply this exact plan</button><button type="button" disabled={disabled} onClick={onDiscard}>Discard plan</button></div></section>;
+}
