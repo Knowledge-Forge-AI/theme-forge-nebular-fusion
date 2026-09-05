@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main Studio window with only fixed application commands",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "allow-studio-brand-read",
+    "allow-studio-brand-plan-start",
+    "allow-studio-brand-plan-cancel",
+    "allow-studio-host-start",
+    "allow-studio-host-status",
+    "allow-studio-select-project",
+    "allow-studio-select-source",
+    "allow-studio-host-shutdown",
+    "allow-studio-design-packet-import",
+    "allow-studio-design-packet-export"
+  ]
+}

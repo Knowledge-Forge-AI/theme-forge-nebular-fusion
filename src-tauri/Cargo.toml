@@ -1,0 +1,43 @@
+[package]
+name = "theme-forge-nebular-fusion"
+version = "0.1.0"
+description = "Theme Forge Nebular Fusion native bootstrap"
+edition = "2024"
+rust-version = "1.98.0"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[features]
+test-sidecar-harness = []
+
+[[bin]]
+name = "tfsb-studio-fake-sidecar"
+path = "tests/support/fake-sidecar.rs"
+required-features = ["test-sidecar-harness"]
+
+[lib]
+name = "tfsb_studio_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+base64 = { version = "=0.22.1", default-features = false, features = ["alloc"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+tauri = { version = "=2.11.5", features = [] }
+tauri-plugin-dialog = { version = "=2.7.2", default-features = false }
+unicode-normalization = { version = "=0.1.25", default-features = false, features = ["std"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
