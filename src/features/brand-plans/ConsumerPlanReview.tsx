@@ -1,0 +1,5 @@
+import type { ConsumerPlanSummary } from "../../brand-plans/contracts";
+
+export function ConsumerPlanReview({ summary }: { readonly summary: ConsumerPlanSummary }) {
+  return <section aria-labelledby="consumer-plan-review"><h4 id="consumer-plan-review">Consumer {summary.operation} plan details</h4><dl className="summary-grid"><div><dt>Packages</dt><dd>{summary.packages.join(", ")}</dd></div><div><dt>Profiles</dt><dd>{summary.profiles.join(", ") || "Lock reuse"}</dd></div><div><dt>Next lock digest</dt><dd><code>{summary.lockDigest}</code></dd></div><div><dt>Optional omissions</dt><dd>{summary.omittedOptional.join(", ") || "None"}</dd></div></dl><table><caption>Every planned consumer output</caption><thead><tr><th>Kind</th><th>Package / source</th><th>Destination</th><th>Byte digest</th></tr></thead><tbody>{summary.outputs.map((output) => <tr key={`${output.packageId}/${output.destination}/${output.sourceId}`}><td>{output.kind}</td><td><code>{output.packageId}/{output.sourceId}</code></td><td><code>{output.destination}</code></td><td><code>{output.byteDigest}</code></td></tr>)}</tbody></table></section>;
+}

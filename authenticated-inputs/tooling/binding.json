@@ -1,0 +1,50 @@
+{
+  "schema": "tfsb.nebular-verification-tooling-v1",
+  "schemaVersion": 1,
+  "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
+  "sourceTree": "9fb37969cee753fc57ebba8df5e203960959a1a3",
+  "packages": [
+    {
+      "name": "openpgp",
+      "version": "6.3.1",
+      "filename": "openpgp-6.3.1.tgz",
+      "sha256": "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b",
+      "provenance": "npm-ci-from-composed-stellar-tree; deterministic-repack"
+    }
+  ],
+  "buildTypes": {
+    "schema": "tfsb.nebular-build-types-v1",
+    "schemaVersion": 1,
+    "filename": "node-build-types.tgz",
+    "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6",
+    "sourceTree": "9fb37969cee753fc57ebba8df5e203960959a1a3",
+    "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
+    "packages": [
+      {
+        "name": "@types/node",
+        "version": "22.20.1",
+        "prefix": "node_modules/@types/node",
+        "packageJsonSha256": "1e6d3bbbc5082745123d236b38dce0eacdab987d4ac9e57e299e55f780c170de",
+        "lock": {
+          "version": "22.20.1",
+          "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.1.tgz",
+          "integrity": "sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q=="
+        },
+        "provenance": "npm-ci-from-composed-stellar-tree"
+      },
+      {
+        "name": "undici-types",
+        "version": "6.21.0",
+        "prefix": "node_modules/undici-types",
+        "packageJsonSha256": "11f873b423b96a5ad444a099685ca6b9de1379dcd83fd8d368e757ddb53658e4",
+        "lock": {
+          "version": "6.21.0",
+          "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz",
+          "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="
+        },
+        "provenance": "npm-ci-from-composed-stellar-tree"
+      }
+    ],
+    "provenance": "npm-ci-from-composed-stellar-tree; deterministic-repack"
+  }
+}
