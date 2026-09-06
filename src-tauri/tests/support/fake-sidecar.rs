@@ -283,6 +283,8 @@ fn main() -> io::Result<()> {
             for completed in 0..128 {
                 stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{first_id},\"stage\":\"scanning\",\"total\":128}}}}\n").as_bytes())?;
             }
+            stdout.flush()?;
+            thread::sleep(Duration::from_secs(5));
         }
         "bad-progress" => stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":2,\"requestId\":{},\"stage\":\"unknown\",\"total\":1}}}}\n", first_id + 1).as_bytes())?,
         "partial" => {
