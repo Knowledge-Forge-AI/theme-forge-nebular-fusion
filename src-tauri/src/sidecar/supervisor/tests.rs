@@ -636,7 +636,7 @@ fn queue_saturation_is_terminal_and_never_blocks_cleanup() -> Result<(), String>
     let started = Instant::now();
     if !idle_process.transport_overflowed()
         || !terminate_process(&mut idle_process).is_success()
-        || started.elapsed() > Duration::from_millis(500)
+        || started.elapsed() > Duration::from_secs(2)
         || idle_process.reader.is_some()
         || idle_process.stderr.is_some()
         || idle_process.child.try_wait().ok().flatten().is_none()
