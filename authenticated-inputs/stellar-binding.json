@@ -4,12 +4,12 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
-    "compositionManifestSha256": "a2b1944129eb3433c8ab308cabcb5d417ac2c8e3e064bbdb099e153028670a55",
-    "composedTreeDigest": "52712ad34a754e0fec9bee7d5f70704bb3df63248f14c0d1c218513f9cf9980d",
+    "sourceTree": "4fee05144c605ac662276ce2ae9b78290ac2f434",
+    "compositionManifestSha256": "cd932437007e81db1bde563342923ed933e1e5c31e59e96244e25a8e3e195168",
+    "composedTreeDigest": "7301886ee5e102177a17488c1ac69ddbfb91a9a3092781c99e15f3980dd95e8d",
     "compositionTarball": {
       "filename": "theme-forge-stellar-burst-staging.tar.gz",
-      "sha256": "aa374aacb9af747e3d1e074bd7baf9a4bdf933005226f4ba1e25d2d36ea96364"
+      "sha256": "fb2c5ec21156ef71133e582724c4010e63aa946b611945d0db42f9f3eb1c2e6b"
     },
     "packageJsonSha256": "d86e68fb96e5b5fca7da8b875b37ed61218c02e6b14db04cf61f3b48b6ddd380",
     "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
@@ -21,7 +21,7 @@
   },
   "package": {
     "filename": "knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
-    "sha256": "1725aa2003b3f2bb0cc00cd80cdbe2d3ca0b51ad58c4709f44670fea0dbe8cff"
+    "sha256": "5b3c107ebaacecc025b72fa53a5b39934b598e1ca6c66ccf4cdc5c44aac8dfbd"
   },
   "raster": {
     "filename": "knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -33,7 +33,7 @@
     "schema": "tfsb.nebular-verification-tooling-v1",
     "schemaVersion": 1,
     "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
-    "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
+    "sourceTree": "4fee05144c605ac662276ce2ae9b78290ac2f434",
     "packages": [
       {
         "name": "openpgp",
@@ -48,7 +48,7 @@
       "schemaVersion": 1,
       "filename": "node-build-types.tgz",
       "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6",
-      "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
+      "sourceTree": "4fee05144c605ac662276ce2ae9b78290ac2f434",
       "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
       "packages": [
         {
