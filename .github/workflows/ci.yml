@@ -323,6 +323,7 @@ jobs:
         run: |
           rm -rf .test-reports/supply-chain/workflow-checks
           mv .test-reports/workflow-checks .test-reports/supply-chain/workflow-checks
+          find .test-reports/supply-chain -type f -size 0 -delete
       - name: Install cargo-audit
         run: cargo +1.98.0 install cargo-audit --version 0.22.2 --locked
       - name: Run Cargo audit
