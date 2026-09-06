@@ -4,12 +4,12 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "d2681d0b0b5297236082b25954e58936a50fc305",
-    "compositionManifestSha256": "4e37ad1d73d6bdc7b40dfb57ebbe6368dd41fb7822c14395254d4a6f6e7b1f7f",
-    "composedTreeDigest": "89fafe6583070a56baa5c3f0c0906477618b175bd988c3036d11f2e8116d8c64",
+    "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
+    "compositionManifestSha256": "a2b1944129eb3433c8ab308cabcb5d417ac2c8e3e064bbdb099e153028670a55",
+    "composedTreeDigest": "52712ad34a754e0fec9bee7d5f70704bb3df63248f14c0d1c218513f9cf9980d",
     "compositionTarball": {
       "filename": "theme-forge-stellar-burst-staging.tar.gz",
-      "sha256": "b51f159c8fc5ce923ce1aab724832b489bec4bd23eb4e1d5fd3d00708044902e"
+      "sha256": "aa374aacb9af747e3d1e074bd7baf9a4bdf933005226f4ba1e25d2d36ea96364"
     },
     "packageJsonSha256": "d86e68fb96e5b5fca7da8b875b37ed61218c02e6b14db04cf61f3b48b6ddd380",
     "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
@@ -33,7 +33,7 @@
     "schema": "tfsb.nebular-verification-tooling-v1",
     "schemaVersion": 1,
     "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
-    "sourceTree": "d2681d0b0b5297236082b25954e58936a50fc305",
+    "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
     "packages": [
       {
         "name": "openpgp",
@@ -48,7 +48,7 @@
       "schemaVersion": 1,
       "filename": "node-build-types.tgz",
       "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6",
-      "sourceTree": "d2681d0b0b5297236082b25954e58936a50fc305",
+      "sourceTree": "cc91dc5125d5c46dbb29879bd9ae7af03b9b2fd9",
       "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
       "packages": [
         {
