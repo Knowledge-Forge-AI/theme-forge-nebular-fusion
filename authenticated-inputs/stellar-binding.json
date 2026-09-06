@@ -4,8 +4,8 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "6b3a382684c44f0fb024d4876914c60207e68bdf",
-    "compositionManifestSha256": "1996ef85829e6569e54a03b5493a9e059d115ce6eea43a70f56306dd98ddfb1e",
+    "sourceTree": "291e6ccd8ddc4495ce76120536d6f16e2ef054df",
+    "compositionManifestSha256": "50265995ad6ca4bfe14c68475d358d7743422ccd1b61b53e3797adf8aa780f6d",
     "composedTreeDigest": "2743d0ba09ee22e33c3d0ffd55cad9607745ce055ab55844aba043c6f08c5521",
     "compositionTarball": {
       "filename": "theme-forge-stellar-burst-staging.tar.gz",
@@ -33,7 +33,7 @@
     "schema": "tfsb.nebular-verification-tooling-v1",
     "schemaVersion": 1,
     "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
-    "sourceTree": "6b3a382684c44f0fb024d4876914c60207e68bdf",
+    "sourceTree": "291e6ccd8ddc4495ce76120536d6f16e2ef054df",
     "packages": [
       {
         "name": "openpgp",
@@ -48,7 +48,7 @@
       "schemaVersion": 1,
       "filename": "node-build-types.tgz",
       "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6",
-      "sourceTree": "6b3a382684c44f0fb024d4876914c60207e68bdf",
+      "sourceTree": "291e6ccd8ddc4495ce76120536d6f16e2ef054df",
       "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
       "packages": [
         {
