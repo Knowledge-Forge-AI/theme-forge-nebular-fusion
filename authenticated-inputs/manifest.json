@@ -1,13 +1,13 @@
 {
   "fileCount": 9,
-  "totalBytes": 5580805,
-  "treeDigest": "dc5a5dd1459aea67d645251a1fa53bcee8d6c643bef4471920485b63430cd8c9",
+  "totalBytes": 5578667,
+  "treeDigest": "90234491359d299ba015e962852080287d168a7aaf777733f00e64f2a9824c17",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
-      "size": 548550,
+      "size": 546438,
       "mode": 384,
-      "sha256": "e4d2a6e13949eeb8d8a082f14ade1dc77fbf30f88c101253232e54eeadf25183"
+      "sha256": "1725aa2003b3f2bb0cc00cd80cdbe2d3ca0b51ad58c4709f44670fea0dbe8cff"
     },
     {
       "path": "core/package-lock.json",
@@ -23,9 +23,9 @@
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
-      "size": 20529,
+      "size": 20503,
       "mode": 384,
-      "sha256": "af5ce77fe1b1e92645024a7104ce644cb2de071ae94acb137f9c4d32f2a2257c"
+      "sha256": "860a3162df7558326e18965503154feab99983130d2775c0d846d8548eab43e3"
     },
     {
       "path": "raster/package-lock.json",
@@ -37,7 +37,7 @@
       "path": "stellar-binding.json",
       "size": 3701,
       "mode": 384,
-      "sha256": "576067c21d42cd4c063eb37172a59f98f9e7bb133c48ff4beaeade9d8ee8bf50"
+      "sha256": "95186e5e623ffda749650178d3fc00a49690a119f7a096533d7850f5026f0705"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",
@@ -55,7 +55,7 @@
       "path": "tooling/binding.json",
       "size": 2078,
       "mode": 384,
-      "sha256": "ed2c9fa41a86d7af90e385a452bd764564e0e3af53ae7d5365b43e3316dfcf97"
+      "sha256": "617fe748fdab8806278e62ac1c6d7d4817fa0fb1400490315cf5d8bb9cf40b0f"
     }
   ]
 }

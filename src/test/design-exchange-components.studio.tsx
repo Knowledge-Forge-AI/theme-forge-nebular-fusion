@@ -289,6 +289,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(brief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
     expect(await screen.findByText(brief.title)).toBeTruthy();
+    await screen.findByLabelText("mark-small");
     expect(screen.getByText(/2 targets/i)).toBeTruthy();
 
     // Import candidates
@@ -376,6 +377,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleBrief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
     await screen.findByText(sampleBrief.title);
+    await screen.findByLabelText("mark-small");
 
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
@@ -533,7 +535,7 @@ describe("complete design-exchange controls", () => {
     await screen.findByText("Candidate Recipe Mismatch");
     onProposalPrefill.mockClear();
     await user.click(screen.getByRole("button", { name: "Load proposal into current plan form" }));
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    expect((await screen.findByRole("alert")).textContent).toContain("The bounded design packet operation failed.");
     expect(onProposalPrefill).not.toHaveBeenCalled();
 
     // 2. QA unavailable (no qualified profile is advertised)
@@ -548,7 +550,7 @@ describe("complete design-exchange controls", () => {
     const prefillButtons = screen.getAllByRole("button", { name: "Load proposal into current plan form" });
     onProposalPrefill.mockClear();
     await user.click(prefillButtons[1]!);
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    expect((await screen.findByRole("alert")).textContent).toContain("The bounded design packet operation failed.");
     expect(onProposalPrefill).not.toHaveBeenCalled();
 
     // 3. Source mismatch
@@ -563,7 +565,7 @@ describe("complete design-exchange controls", () => {
     const prefillButtons3 = screen.getAllByRole("button", { name: "Load proposal into current plan form" });
     onProposalPrefill.mockClear();
     await user.click(prefillButtons3[2]!);
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    expect((await screen.findByRole("alert")).textContent).toContain("The bounded design packet operation failed.");
     expect(onProposalPrefill).not.toHaveBeenCalled();
 
     // 4. Output mismatch
@@ -580,7 +582,7 @@ describe("complete design-exchange controls", () => {
     const outputCard = screen.getByText(outputMismatchCand.title).closest("article");
     expect(outputCard).not.toBeNull();
     await user.click(within(outputCard as HTMLElement).getByRole("button", { name: "Load proposal into current plan form" }));
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    expect((await screen.findByRole("alert")).textContent).toContain("The bounded design packet operation failed.");
     expect(listExportStatus).toHaveBeenCalledWith("proj-1", 128);
     expect(listExportStatus).toHaveBeenCalledTimes(1);
     expect(onProposalPrefill).not.toHaveBeenCalled();
