@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -319,7 +319,7 @@ describe("complete design-exchange controls", () => {
     // Load proposal into plan form (prefill)
     const prefillButton = screen.getAllByRole("button", { name: "Load proposal into current plan form" })[0]!;
     await user.click(prefillButton);
-    expect(onProposalPrefill).toHaveBeenCalledWith(candidateA.proposal);
+    await waitFor(() => expect(onProposalPrefill).toHaveBeenCalledWith(candidateA.proposal));
 
     // Build and export an exact ambiguous needs-revision choice.
     await user.click(screen.getAllByLabelText("needs-revision")[0]!); await user.click(screen.getAllByLabelText("needs-revision")[1]!);
@@ -329,14 +329,14 @@ describe("complete design-exchange controls", () => {
     await user.selectOptions(screen.getByLabelText("Overall candidate"), candidateB.candidateDigest);
     await user.type(screen.getByLabelText("Human summary"), "Candidate A is preferred.");
     await user.click(screen.getByRole("button", { name: "Export review packet" }));
-    expect(exportedPackets).toHaveLength(1);
+    await waitFor(() => expect(exportedPackets).toHaveLength(1));
     expect((exportedPackets[0] as ReviewPacket).overallDisposition).toEqual({ kind: "needs-revision", candidateDigest: candidateB.candidateDigest });
 
     // Multiple deferred candidates still produce a candidate-free no-decision.
     await user.click(screen.getAllByLabelText("deferred")[0]!); await user.click(screen.getAllByLabelText("deferred")[1]!);
     await user.selectOptions(screen.getByLabelText("Overall disposition"), "no-decision");
     await user.click(screen.getByRole("button", { name: "Export review packet" }));
-    expect((exportedPackets.at(-1) as ReviewPacket).overallDisposition).toEqual({ kind: "no-decision" });
+    await waitFor(() => expect((exportedPackets.at(-1) as ReviewPacket).overallDisposition).toEqual({ kind: "no-decision" }));
 
     // Import prior review
     mockPacketClient.importQueue.push(review);
@@ -346,7 +346,7 @@ describe("complete design-exchange controls", () => {
     expect((screen.getByLabelText("Overall candidate") as HTMLSelectElement).value).toBe(candidateB.candidateDigest);
     expect((screen.getByLabelText("Human summary") as HTMLTextAreaElement).value).toBe(review.summary);
     await user.click(screen.getByRole("button", { name: "Export review packet" }));
-    expect(exportedPackets.at(-1)).toEqual(review);
+    await waitFor(() => expect(exportedPackets.at(-1)).toEqual(review));
 
     // Stale project transition clears prefill and revokes URLs
     rerender(
@@ -358,7 +358,7 @@ describe("complete design-exchange controls", () => {
         onProposalPrefill={onProposalPrefill}
       />
     );
-    expect(onProposalPrefill).toHaveBeenCalledWith(undefined);
+    await waitFor(() => expect(onProposalPrefill).toHaveBeenCalledWith(undefined));
   });
 
   it("validates valid revisionOf chains and rejects invalid missing parent and non-increasing revision", async () => {
@@ -391,7 +391,7 @@ describe("complete design-exchange controls", () => {
     });
     mockPacketClient.importQueue.push(missingParentCand);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed."));
     expect(screen.queryByText(missingParentCand.title)).toBeNull();
 
     // Invalid non-increasing revision (revision 1 <= parent revision 1)
@@ -402,7 +402,7 @@ describe("complete design-exchange controls", () => {
     });
     mockPacketClient.importQueue.push(nonIncreasingCand);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
-    expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed.");
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("The bounded design packet operation failed."));
     expect(screen.queryByText(nonIncreasingCand.title)).toBeNull();
 
     // Valid revision chain (revision 2 > parent revision 1)
