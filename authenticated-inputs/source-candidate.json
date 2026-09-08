@@ -1,0 +1,10 @@
+{
+  "schema": "tfsb.source-candidate-v1",
+  "lineageCommit": "b59e1b68e82a12ab7b9573fac3497d6b49c48803",
+  "identity": {
+    "commit": "b59e1b68e82a12ab7b9573fac3497d6b49c48803",
+    "tree": "48966b6b4e9ac05249031b42cbda3c25f87f5313",
+    "commitRole": "lineage-only",
+    "treeRole": "exact-composition-input"
+  }
+}

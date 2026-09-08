@@ -1,0 +1,14 @@
+{
+  "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
+  "version": "0.1.0",
+  "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
+  "sha256": "3b3c53f49a1401b6884462d7c2e7822502704a5a346f2c1a14166f4be4c331f8",
+  "size": 108509,
+  "publicSource": {
+    "status": "public-ci-qualified",
+    "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+    "commit": "cbbbd5f26aeb45eabd81a942347738271b39848e",
+    "contentTree": "ff86c436b925402e4b41b8047642061c332bab06",
+    "producerRole": "merge-candidate"
+  }
+}

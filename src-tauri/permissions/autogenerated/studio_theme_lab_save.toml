@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-theme-lab-save"
+description = "Enables the studio_theme_lab_save command without any pre-configured scope."
+commands.allow = ["studio_theme_lab_save"]
+
+[[permission]]
+identifier = "deny-studio-theme-lab-save"
+description = "Denies the studio_theme_lab_save command without any pre-configured scope."
+commands.deny = ["studio_theme_lab_save"]

@@ -1,6 +1,6 @@
 {
   "productName": "Theme Forge Nebular Fusion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -12,6 +12,7 @@
       {
         "label": "main",
         "title": "Theme Forge Nebular Fusion",
+        "create": false,
         "width": 1180,
         "height": 820,
         "minWidth": 760,
@@ -28,7 +29,7 @@
   "bundle": {
     "active": true,
     "externalBin": ["binaries/tfsb-studio-service"],
-    "resources": ["sidecar-payload/**/*"],
+    "resources": ["sidecar-payload/**/*", "loom-payload/**/*"],
     "targets": ["app"],
     "category": "DeveloperTool",
     "shortDescription": "Evidence-bound Theme Forge integration workbench",

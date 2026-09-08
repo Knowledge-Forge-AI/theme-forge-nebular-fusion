@@ -6,9 +6,21 @@ import type { Proposal } from "../design-evidence/types";
 import { DesignExchange } from "../features/design-exchange/DesignExchange";
 import { BrandWorkbench } from "../features/brand-workbench/BrandWorkbench";
 import { Diagnostics } from "../features/diagnostics/Diagnostics";
+import { ThemeLab } from "../features/theme-lab/ThemeLab";
+import { TauriThemeLabBridge } from "../features/theme-lab/theme-lab-bridge";
+import type { ThemeLabBridge } from "../features/theme-lab/types";
 import type { StudioHostBridge, StudioHostStateEvent, StudioHostStatus, StudioProjectOpen, StudioSourceOpen } from "../protocol/contracts";
 
-export function App({ hostBridge, brandReadClient }: { readonly hostBridge: StudioHostBridge; readonly brandReadClient?: StudioBrandReadClient }) {
+export function App({
+  hostBridge,
+  brandReadClient,
+  themeLabBridge,
+}: {
+  readonly hostBridge: StudioHostBridge;
+  readonly brandReadClient?: StudioBrandReadClient;
+  readonly themeLabBridge?: ThemeLabBridge;
+}) {
+  const [activeDestination, setActiveDestination] = useState<"workbench" | "theme-lab">("workbench");
   const [status, setStatus] = useState<StudioHostStatus>();
   const [event, setEvent] = useState<StudioHostStateEvent>();
   const [proposalDraft, setProposalDraft] = useState<Proposal>();
@@ -18,6 +30,7 @@ export function App({ hostBridge, brandReadClient }: { readonly hostBridge: Stud
   const [source, setSource] = useState<StudioSourceOpen>();
   const [sources, setSources] = useState<readonly StudioSourceOpen[]>([]);
   const readClient = useMemo(() => brandReadClient ?? new TauriStudioBrandReadClient(), [brandReadClient]);
+  const effectiveThemeLabBridge = useMemo(() => themeLabBridge ?? new TauriThemeLabBridge(), [themeLabBridge]);
   const planClient = useMemo<StudioBrandPlanClient | undefined>(() => hostBridge.startPlanOperation && hostBridge.cancelPlanOperation ? { startPlanOperation: hostBridge.startPlanOperation.bind(hostBridge), cancelPlanOperation: hostBridge.cancelPlanOperation.bind(hostBridge) } : undefined, [hostBridge]);
 
   useEffect(() => {
@@ -66,14 +79,38 @@ export function App({ hostBridge, brandReadClient }: { readonly hostBridge: Stud
         <p className="eyebrow">Human-first · evidence-bound · typed plan workbench</p>
         <h1>Theme Forge Nebular Fusion</h1>
         <p>Supervise the verified local TFSB service while TFSB remains the semantic authority.</p>
+        <nav className="destination-nav" aria-label="Workbench destinations">
+          <button
+            type="button"
+            className={activeDestination === "workbench" ? "destination-tab active" : "destination-tab"}
+            onClick={() => setActiveDestination("workbench")}
+            aria-pressed={activeDestination === "workbench"}
+          >
+            Brand Workbench
+          </button>
+          <button
+            type="button"
+            className={activeDestination === "theme-lab" ? "destination-tab active" : "destination-tab"}
+            onClick={() => setActiveDestination("theme-lab")}
+            aria-pressed={activeDestination === "theme-lab"}
+          >
+            Theme Lab
+          </button>
+        </nav>
       </header>
       <main id="main-content">
-        {hostError ? <section className="panel bootstrap-error" role="alert" aria-live="assertive"><h2>Studio host unavailable</h2><p>{hostError}</p></section> : null}
-        {status ? <Diagnostics source={hostBridge.source} status={status} event={event} selectionStatus={selectionStatus} onStart={start} onProject={selectProject} onSource={selectSource} onStop={stop} /> : <p role="status">Loading Studio host status…</p>}
-        {status ? <BrandWorkbench client={readClient} planClient={planClient} host={status} project={project} source={source} sources={sources} proposalDraft={proposalDraft} /> : null}
-        {status ? <DesignExchange host={status} project={project} sources={sources} readClient={readClient} onProposalPrefill={setProposalDraft} /> : null}
+        {activeDestination === "theme-lab" ? (
+          <ThemeLab bridge={effectiveThemeLabBridge} />
+        ) : (
+          <>
+            {hostError ? <section className="panel bootstrap-error" role="alert" aria-live="assertive"><h2>Studio host unavailable</h2><p>{hostError}</p></section> : null}
+            {status ? <Diagnostics source={hostBridge.source} status={status} event={event} selectionStatus={selectionStatus} onStart={start} onProject={selectProject} onSource={selectSource} onStop={stop} /> : <p role="status">Loading Studio host status…</p>}
+            {status ? <BrandWorkbench client={readClient} planClient={planClient} host={status} project={project} source={source} sources={sources} proposalDraft={proposalDraft} /> : null}
+            {status ? <DesignExchange host={status} project={project} sources={sources} readClient={readClient} onProposalPrefill={setProposalDraft} /> : null}
+          </>
+        )}
       </main>
-      <footer>Nebular Fusion 0.1.0 · Studio protocol 1.2 live reads and typed plans · explicit human confirmation · no embedded model</footer>
+      <footer>Nebular Fusion 0.2.0 · Studio protocol 1.2 live reads and typed plans · explicit human confirmation · no embedded model</footer>
     </div>
   );
 }

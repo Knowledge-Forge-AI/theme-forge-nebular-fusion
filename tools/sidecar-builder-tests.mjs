@@ -6,6 +6,8 @@ import { chmod, lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile 
 import { resolve } from "node:path";
 import {
   canonicalJson,
+  gitIdentity,
+  validateStellarBinding,
   repositoryRootForStudio,
   preparationOptions,
   replaceGeneratedPair,
@@ -408,4 +410,28 @@ test("standalone root selection ignores unrelated ancestor packages", async () =
   assert.equal(repositoryRootForStudio(privateApp), ancestor);
   await writeFile(resolve(privateApp, "authenticated-inputs/stellar-binding.json"), '{}');
   assert.equal(repositoryRootForStudio(privateApp), privateApp);
+});
+
+
+test("standalone candidate accepts published input and rejects malformed identity", async () => {
+  const digest = "a".repeat(64);
+  const binding = {
+    schema: "tfsb.nebular-stellar-input-binding-v1", schemaVersion: 1,
+    product: "theme-forge-nebular-fusion", canonicalEpochMs: 0,
+    input: {product:"theme-forge-stellar-burst", sourceTree:"b".repeat(40),
+      composedTreeDigest:digest, packageJsonSha256:digest, packageLockSha256:digest,
+      publicMergeCommit:"c".repeat(40), provenance:"accepted-published-npm-package; retained-locked-support-inputs"},
+    package:{filename:"core.tgz",sha256:digest},
+    raster:{filename:"raster.tgz",sha256:digest,packageSha256:digest,packageLockSha256:digest},
+  };
+  assert.equal(validateStellarBinding(binding).input.publicMergeCommit, "c".repeat(40));
+  assert.throws(() => validateStellarBinding({...binding,input:{...binding.input,publicMergeCommit:null}}));
+  const candidate = resolve(root, "source-candidate");
+  await mkdir(resolve(candidate,"authenticated-inputs"),{recursive:true});
+  const receipt = resolve(candidate,"authenticated-inputs/source-candidate.json");
+  await writeFile(receipt,JSON.stringify({schema:"tfsb.source-candidate-v1",lineageCommit:"b".repeat(40),identity:{commit:"b".repeat(40)}}));
+  assert.equal(await gitIdentity(candidate), "b".repeat(40));
+  await writeFile(receipt,JSON.stringify({schema:"tfsb.source-candidate-v1",lineageCommit:"b".repeat(40),identity:{commit:"c".repeat(40)}}));
+  await assert.rejects(gitIdentity(candidate), /lineage/);
+  await rm(candidate,{recursive:true});
 });

@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-forge-ai/theme-forge-nebular-fusion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Theme Forge Nebular Fusion application",
   "license": "AGPL-3.0-or-later",
@@ -12,7 +12,9 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "vite build",
+    "build": "node tools/loom-prepare.mjs && vite build",
+    "loom:prepare": "node tools/loom-prepare.mjs",
+    "loom:clean": "node tools/loom-clean.mjs",
     "sidecar:prepare": "node tools/sidecar-prepare.mjs",
     "sidecar:verify": "node tools/sidecar-verify.mjs",
     "sidecar:clean": "node tools/sidecar-clean.mjs",
@@ -20,7 +22,8 @@
     "sidecar:transcript": "node tools/sidecar-transcript.mjs",
     "tauri": "tauri",
     "tauri:build": "tauri build --bundles app --target aarch64-apple-darwin",
-    "tauri:build:sidecar": "npm run sidecar:prepare && npm run tauri:build"
+    "tauri:build:sidecar": "npm run sidecar:prepare && npm run tauri:build",
+    "tauri:build:loom": "npm run sidecar:prepare && npm run loom:prepare && npm run tauri:build"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
