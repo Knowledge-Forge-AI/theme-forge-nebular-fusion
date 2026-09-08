@@ -3,7 +3,9 @@
   "identifier": "main",
   "description": "Main Studio window with only fixed application commands",
   "local": true,
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "allow-studio-brand-read",
     "allow-studio-brand-plan-start",
@@ -14,6 +16,19 @@
     "allow-studio-select-source",
     "allow-studio-host-shutdown",
     "allow-studio-design-packet-import",
-    "allow-studio-design-packet-export"
+    "allow-studio-design-packet-export",
+    "allow-studio-theme-lab-status",
+    "allow-studio-theme-lab-compile",
+    "allow-studio-theme-lab-example",
+    "allow-studio-theme-lab-open",
+    "allow-studio-theme-lab-save",
+    "allow-studio-theme-lab-dispose",
+    "allow-studio-theme-brief-create",
+    "allow-studio-theme-packet-import",
+    "allow-studio-theme-packet-export",
+    "allow-studio-theme-review-create",
+    "allow-studio-theme-candidate-adopt",
+    "allow-studio-theme-candidate-verify",
+    "allow-studio-theme-review-validate"
   ]
 }

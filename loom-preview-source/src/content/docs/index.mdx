@@ -1,0 +1,110 @@
+---
+title: Stellar Loom Kitchen Sink
+description: Real Starlight fixture exercising Theme Forge Stellar Loom generated custom properties.
+---
+
+import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Architectural Overview
+
+Theme Forge Stellar Loom (**TFSL**) provides a deterministic compiler and CLI that transforms typed, versioned theme specifications into canonical CSS custom properties for [Astro Starlight](https://starlight.astro.build).
+
+### Typography and Inline Formatting
+
+This paragraph demonstrates standard body prose rendered with our configured font stack. It includes **strong text emphasis**, *italicized phrasing*, an [internal reference link](#token-verification-table), and `inline code samples` for inline symbols.
+
+#### Structured Lists
+
+Architectural principles (unordered list):
+- **Strict Data Model**: Zero inline executable code or CSS escape hatches in specifications.
+- **Reproducible Determinism**: Canonicalized key sorting ensuring byte-identical digests.
+- **Starlight Purity**: Mapped directly to public `--sl-*` tokens without runtime side effects.
+
+Compilation pipeline execution sequence (ordered list):
+1. Schema validation against `tfsl.theme-v1` specifications.
+2. Canonical key sorting and normalized input digest computation.
+3. CSS emission for Starlight custom property bindings.
+4. Deterministic theme descriptor creation with provenance tracking.
+
+#### Subheading Level 4
+
+Sub-headings provide hierarchical sectioning to test sidebar navigation and table of contents generation.
+
+### Starlight Asides
+
+:::note
+This is a standard informational aside testing low-luminance background surfaces and hairline borders.
+:::
+
+:::tip
+This is a helpful guidance callout testing accent border highlights and inline text readability.
+:::
+
+:::caution
+This is an alert callout testing contrast against the underlying background canvas.
+:::
+
+### Code Blocks
+
+```typescript
+// Deterministic theme compilation sample
+import { compileTheme } from "@knowledge-forge-ai/theme-forge-stellar-loom";
+
+export function buildTheme(spec: unknown) {
+  const result = compileTheme(spec);
+  console.log(`Compiled: ${result.specification.name} (SHA-256: ${result.outputDigest})`);
+  return result.css;
+}
+```
+
+### Component Demonstrations
+
+<CardGrid>
+  <Card title="Compiler Core" icon="pencil">
+    Zero-dependency theme model validator, canonicalizer, and CSS emitter.
+  </Card>
+  <Card title="Deterministic Outputs" icon="setting">
+    Bit-for-bit identical CSS and SHA-256 descriptors across separate execution contexts.
+  </Card>
+  <Card title="Starlight Adapter" icon="star">
+    Direct mapping to documented Starlight CSS custom properties.
+  </Card>
+  <Card title="Browser Qualification" icon="approve-check">
+    Playwright validation of computed element styles in light and dark modes.
+  </Card>
+</CardGrid>
+
+### Tabs Demonstration
+
+<Tabs>
+  <TabItem label="JSON Spec">
+    ```json
+    {
+      "name": "stellar-cyan",
+      "schemaVersion": "tfsl.theme-v1",
+      "adapter": "starlight-v0.42"
+    }
+    ```
+  </TabItem>
+  <TabItem label="Generated CSS">
+    ```css
+    :root, ::backdrop {
+      --sl-color-accent: #00d2ff;
+      --sl-color-bg: #090e17;
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+### Token Verification Table
+
+The table below exercises table layout, header backgrounds, row striping, and cell border hairlines:
+
+| Token Category | Dark Mode Value | Light Mode Value | Purpose |
+| :--- | :--- | :--- | :--- |
+| Accent Base | `#00d2ff` | `#0077aa` | Primary brand accent and links |
+| Background Canvas | `#090e17` | `#f5f9fc` | Main viewport canvas background |
+| Primary Text | `#e6f1ff` | `#0d1522` | High-contrast readable body text |
+| Hairline Border | `#1c2b42` | `#d2dfed` | Structural dividing borders and separators |
+| Card Surface (Gray-6) | `#162438` | `#dce7f3` | Elevated card and container background |
+

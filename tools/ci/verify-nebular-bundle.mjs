@@ -3,11 +3,10 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { STUDIO_ACL_TEN_COMMANDS } from "./ci-contract.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
 
@@ -37,7 +36,7 @@ async function launchAndTerminate(executable) {
   return result;
 }
 
-/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, outputPath: string, launch?: boolean}} options */
+/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, outputPath: string, launch?: boolean}} options */
 export async function verifyNebularBundle(options) {
   const appPath = resolve(options.appPath), contents = join(appPath, "Contents"), macos = join(contents, "MacOS"), resources = join(contents, "Resources");
   const identifier = execFileSync("plutil", ["-extract", "CFBundleIdentifier", "raw", join(contents, "Info.plist")], { encoding: "utf8" }).trim();
@@ -49,12 +48,36 @@ export async function verifyNebularBundle(options) {
   if (sha256Hex(sourceNode) !== sha256Hex(packedNode)) throw new Error("Packed sidecar runtime differs from the authenticated Node executable.");
   const [sourcePayload, packedPayload] = await Promise.all([inventory(resolve(options.sourcePayloadPath), resolve(options.sourcePayloadPath)), inventory(payloadPath, payloadPath)]);
   if (JSON.stringify(sourcePayload) !== JSON.stringify(packedPayload)) throw new Error("Packed sidecar payload differs from the prepared payload.");
+  const loomPayloadPath = join(resources, "loom-payload");
+  const candidateLoomSource = options.sourceLoomPayloadPath ? resolve(options.sourceLoomPayloadPath) : join(STUDIO_ROOT, "src-tauri/loom-payload");
+  let loomInventory = null;
+  if (!existsSync(loomPayloadPath) || !existsSync(candidateLoomSource)) throw new Error("Exact prepared and bundled Loom payloads are required.");
+  if (existsSync(loomPayloadPath)) {
+    const batchScript = join(loomPayloadPath, "bin/tfsl-batch.js");
+    if (!existsSync(batchScript)) throw new Error("Packaged loom-payload is missing bin/tfsl-batch.js.");
+    if (existsSync(candidateLoomSource)) {
+      const [sourceLoom, packedLoom] = await Promise.all([
+        inventory(candidateLoomSource, candidateLoomSource),
+        inventory(loomPayloadPath, loomPayloadPath),
+      ]);
+      if (JSON.stringify(sourceLoom) !== JSON.stringify(packedLoom)) throw new Error("Packed loom payload differs from the prepared loom payload.");
+      loomInventory = packedLoom;
+    } else {
+      loomInventory = await inventory(loomPayloadPath, loomPayloadPath);
+    }
+  }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
   const capability = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/capabilities/main.json"), "utf8"));
   if (typeof tauri.app?.security?.csp !== "string" || !tauri.app.security.csp.includes("object-src 'none'") || !tauri.app.security.csp.includes("frame-ancestors 'none'")) throw new Error("Strict CSP is missing from the bundle source configuration.");
   if (!Array.isArray(capability.permissions) || !capability.permissions.every((/** @type {unknown} */ value) => typeof value === "string")) throw new Error("Bundle capability permissions are invalid.");
   const permissions = capability.permissions.map((/** @type {string} */ value) => value.replace(/^allow-/u, "").replace(/-/gu, "_"));
-  if (JSON.stringify(permissions) !== JSON.stringify(STUDIO_ACL_TEN_COMMANDS)) throw new Error("Bundle capability ACL is not the exact ten-command contract.");
+  const inventorySource = await readFile(join(STUDIO_ROOT, "src-tauri/src/command_inventory.rs"), "utf8");
+  const declaration = /^pub\(crate\) static STUDIO_COMMAND_NAMES: &\[&str\] = &\[([\s\S]*?)\];\s*$/u.exec(inventorySource);
+  if (!declaration || !/^(?:\s*"studio_[a-z_]+",)*\s*$/u.test(declaration[1] ?? "")) throw new Error("Owning command inventory syntax is unsupported.");
+  const expectedAcl = [...(declaration[1] ?? "").matchAll(/"(studio_[a-z_]+)"/gu)].map((match) => match[1]);
+  if (expectedAcl.length === 0 || new Set(expectedAcl).size !== expectedAcl.length || JSON.stringify(permissions) !== JSON.stringify(expectedAcl)) throw new Error("Bundle capability ACL differs from the owning command inventory.");
+  const bundleVersion = execFileSync("plutil", ["-extract", "CFBundleShortVersionString", "raw", join(contents, "Info.plist")], {encoding:"utf8"}).trim();
+  if (bundleVersion !== tauri.version) throw new Error("Bundle version differs from the owning application version.");
   const signingInspection = spawnSync("codesign", ["-dv", "--verbose=4", appPath], { encoding: "utf8" });
   const signingOutput = `${signingInspection.stdout ?? ""}\n${signingInspection.stderr ?? ""}`;
   if (signingInspection.status !== 0) throw new Error("Bundle signing identity could not be inspected.");
@@ -64,7 +87,23 @@ export async function verifyNebularBundle(options) {
   const launches = options.launch ? [await launchAndTerminate(executablePath), await launchAndTerminate(executablePath)] : [];
   const lingering = options.launch && spawnSync("pgrep", ["-f", sidecarPath], { encoding: "utf8" }).status === 0;
   if (lingering) throw new Error("Packed sidecar remained after the app launch/exit cycles.");
-  const receipt = { schema: "tfsb.nebular-bundle-identity", schemaVersion: 1, status: "pass", app: basename(appPath), identifier, executable: { name: executableName, architecture: "arm64", size: (await stat(executablePath)).size, sha256: sha256Hex(await readFile(executablePath)) }, sidecar: { filename: basename(sidecarPath), size: packedNode.byteLength, sha256: sha256Hex(packedNode), payloadFiles: packedPayload.length, payloadEqual: true, reapedAfterLaunches: options.launch ? true : null }, csp: tauri.app.security.csp, acl: STUDIO_ACL_TEN_COMMANDS, signing: { kind: signingOutput.includes("Authority=Apple Development") || signingOutput.includes("Authority=Developer ID") ? "credentialed" : signingOutput.includes("Signature=adhoc") ? "ad-hoc" : "local-unsigned-identity", verified: true }, launches };
+  const executableBytes = await readFile(executablePath);
+  const receipt = {
+    schema: "tfsb.nebular-bundle-identity",
+    schemaVersion: 1,
+    status: "pass",
+    app: basename(appPath),
+    identifier,
+    version: bundleVersion,
+    commandInventorySha256: sha256Hex(Buffer.from(inventorySource)),
+    executable: { name: executableName, architecture: "arm64", size: executableBytes.byteLength, sha256: sha256Hex(executableBytes) },
+    sidecar: { filename: basename(sidecarPath), size: packedNode.byteLength, sha256: sha256Hex(packedNode), payloadFiles: packedPayload.length, payloadEqual: true, reapedAfterLaunches: options.launch ? true : null },
+    loomPayload: loomInventory ? { payloadFiles: loomInventory.length, batchExecutable: true, payloadEqual: true } : null,
+    csp: tauri.app.security.csp,
+    acl: expectedAcl,
+    signing: { kind: signingOutput.includes("Authority=Apple Development") || signingOutput.includes("Authority=Developer ID") ? "credentialed" : signingOutput.includes("Signature=adhoc") ? "ad-hoc" : "local-unsigned-identity", verified: true },
+    launches
+  };
   await writeFile(resolve(options.outputPath), `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
   return receipt;
 }
@@ -73,9 +112,15 @@ const invokedDirectly = process.argv[1] !== undefined && resolve(fileURLToPath(i
 if (invokedDirectly) {
   const args = process.argv.slice(2);
   /** @type {Record<string, string | boolean>} */ const parsed = {};
-  for (let index = 0; index < args.length; index += 1) { const flag = args[index], value = args[index + 1]; if (flag === "--launch") parsed.launch = true; else if (flag?.startsWith("--") && value) { parsed[flag.slice(2)] = value; index += 1; } else throw new Error(`Unsupported bundle verification argument: ${flag}`); }
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index], value = args[index + 1];
+    if (flag === "--launch") parsed.launch = true;
+    else if (flag?.startsWith("--") && value) { parsed[flag.slice(2)] = value; index += 1; }
+    else throw new Error(`Unsupported bundle verification argument: ${flag}`);
+  }
   if (typeof parsed.app !== "string" || typeof parsed.node !== "string" || typeof parsed.payload !== "string" || typeof parsed.output !== "string") throw new Error("--app, --node, --payload, and --output are required.");
-  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, outputPath: parsed.output, launch: parsed.launch === true })
+  const sourceLoomPayloadPath = typeof parsed["loom-payload"] === "string" ? parsed["loom-payload"] : (typeof parsed.loomPayload === "string" ? parsed.loomPayload : undefined);
+  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, sourceLoomPayloadPath, outputPath: parsed.output, launch: parsed.launch === true })
     .then((receipt) => process.stdout.write(`${JSON.stringify(receipt)}\n`))
     .catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }

@@ -1,0 +1,158 @@
+import type { ThemeSpecification } from "./types";
+
+export const SAMPLE_CYAN_THEME: ThemeSpecification = {
+  $schema: "https://schemas.knowledgeforge.ai/tfsl/theme-schema-v1.json",
+  name: "stellar-cyan",
+  version: "0.1.0",
+  schemaVersion: "tfsl.theme-v1",
+  adapter: "starlight-v0.42",
+  colors: {
+    dark: {
+      accent: {
+        base: "#00d2ff",
+        low: "#082b40",
+        high: "#b8f2ff",
+      },
+      neutrals: {
+        bg: "#090e17",
+        bgNav: "#0d1522",
+        bgSidebar: "#090e17",
+        bgInlineCode: "#131d2e",
+        bgAccent: "#00d2ff",
+        text: "#e6f1ff",
+        textAccent: "#00d2ff",
+        textInvert: "#090e17",
+        hairline: "#1c2b42",
+        hairlineLight: "#2c4263",
+        hairlineShade: "#0a101b",
+      },
+      grays: {
+        gray1: "#e6f1ff",
+        gray2: "#c4d7ed",
+        gray3: "#8ea5c4",
+        gray4: "#546b8a",
+        gray5: "#2c4263",
+        gray6: "#162438",
+        gray7: "#0d1522",
+      },
+    },
+    light: {
+      accent: {
+        base: "#0077aa",
+        low: "#e0f6ff",
+        high: "#004d70",
+      },
+      neutrals: {
+        bg: "#f5f9fc",
+        bgNav: "#ffffff",
+        bgSidebar: "#f5f9fc",
+        bgInlineCode: "#e8f1f8",
+        bgAccent: "#0077aa",
+        text: "#0d1522",
+        textAccent: "#0077aa",
+        textInvert: "#ffffff",
+        hairline: "#d2dfed",
+        hairlineLight: "#e6f0fa",
+        hairlineShade: "#b8ccdf",
+      },
+      grays: {
+        gray1: "#0d1522",
+        gray2: "#24354d",
+        gray3: "#4b6280",
+        gray4: "#7b94b2",
+        gray5: "#b0c5dd",
+        gray6: "#dce7f3",
+        gray7: "#f0f5fa",
+      },
+    },
+  },
+  typography: {
+    bodyFont: "system-sans",
+    codeFont: "system-mono",
+    baseFontSize: "16px",
+    lineHeight: 1.75,
+  },
+  layout: {
+    contentWidth: "48rem",
+    sidebarWidth: "19rem",
+  },
+};
+
+export const SAMPLE_AMBER_THEME: ThemeSpecification = {
+  $schema: "https://schemas.knowledgeforge.ai/tfsl/theme-schema-v1.json",
+  name: "amber-forge",
+  version: "0.1.0",
+  schemaVersion: "tfsl.theme-v1",
+  adapter: "starlight-v0.42",
+  colors: {
+    dark: {
+      accent: {
+        base: "#f59e0b",
+        low: "#3d2306",
+        high: "#fde68a",
+      },
+      neutrals: {
+        bg: "#181512",
+        bgNav: "#221d18",
+        bgSidebar: "#181512",
+        bgInlineCode: "#2a241e",
+        bgAccent: "#f59e0b",
+        text: "#fef3c7",
+        textAccent: "#f59e0b",
+        textInvert: "#181512",
+        hairline: "#42362a",
+        hairlineLight: "#5c4b3a",
+        hairlineShade: "#100d0a",
+      },
+      grays: {
+        gray1: "#fef3c7",
+        gray2: "#e2d5b5",
+        gray3: "#b3a483",
+        gray4: "#7a6d53",
+        gray5: "#4d4332",
+        gray6: "#28231c",
+        gray7: "#1c1813",
+      },
+    },
+    light: {
+      accent: {
+        base: "#b45309",
+        low: "#fef3c7",
+        high: "#78350f",
+      },
+      neutrals: {
+        bg: "#fffbf5",
+        bgNav: "#ffffff",
+        bgSidebar: "#fffbf5",
+        bgInlineCode: "#f5eee1",
+        bgAccent: "#b45309",
+        text: "#261c14",
+        textAccent: "#b45309",
+        textInvert: "#ffffff",
+        hairline: "#e8ded1",
+        hairlineLight: "#f5ede1",
+        hairlineShade: "#d4c5b2",
+      },
+      grays: {
+        gray1: "#261c14",
+        gray2: "#3d2f23",
+        gray3: "#6e5946",
+        gray4: "#9c836d",
+        gray5: "#ccbba8",
+        gray6: "#ebe3d8",
+        gray7: "#f7f2eb",
+      },
+    },
+  },
+  typography: {
+    bodyFont: "system-serif",
+    codeFont: "system-mono",
+    baseFontSize: "16px",
+    lineHeight: 1.7,
+  },
+  layout: {
+    contentWidth: "50rem",
+    sidebarWidth: "20rem",
+  },
+};
+

@@ -2,7 +2,7 @@
 
 Theme Forge Nebular Fusion is a local, evidence-bound desktop workbench for reviewing, inspecting, and managing Theme Forge brand systems and artifacts.
 
-- Package version: `0.1.0`
+- Package version: `0.2.0`
 - Public repository: `Knowledge-Forge-AI/theme-forge-nebular-fusion`
 - Target platform: macOS (Apple Silicon `aarch64-apple-darwin`)
 - Architecture: Tauri v2 desktop host with strict CSP and isolated sidecar execution
@@ -11,13 +11,11 @@ Theme Forge Nebular Fusion is a local, evidence-bound desktop workbench for revi
 
 ## Application distribution
 
-The [v0.1.0 release](https://github.com/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/tag/v0.1.0)
-provides the macOS-arm64 application archive and its checksums, notices and SBOMs
-once distribution qualification is complete. Follow that release's signature
-and notarization requirements, verify the downloaded archive against its
-checksum file, then extract the app and copy it to Applications using Finder.
-The release record binds the exact Node runtime, Stellar package and sidecar
-included in the app.
+This is a local 0.2.0 candidate, not a published release. The macOS-arm64
+application is an ad-hoc-signed, unnotarized developer distribution. Verify
+its supplied checksum before opening it. No hosted package provenance or
+Developer ID identity is claimed. The input manifests bind the exact Node,
+Stellar Burst 0.4.0 and Stellar Loom 0.1.0 packages included in the app.
 
 The optional raster capability is bundled from the authenticated companion
 archive and lock under `authenticated-inputs/`. The companion remains
@@ -32,8 +30,10 @@ Prerequisites:
 - Rust 1.98.0 (edition 2024)
 
 ```sh
-# Install frontend dependencies
-npm ci
+# Install each owning lock without dependency lifecycle scripts
+npm ci --ignore-scripts
+npm ci --prefix loom-preview-source --ignore-scripts
+node tools/loom-prepare.mjs
 
 # Verify and extract the exact locked Node type inputs used by retained
 # Studio test sources before typechecking. The archive contains only
@@ -68,10 +68,28 @@ npm test
 # Build frontend
 npm run build
 
-# Run Rust tests
+# Authenticate the pinned Node release, then prepare the exact paired core.
+# Choose fresh paths outside this source copy for the downloaded archive/receipt.
+node tools/ci/verify-node-authenticity.mjs --download-dir /path/to/node-download --output-node /path/to/node-authenticated --output /path/to/node-receipt.json
+node tools/sidecar-prepare.mjs --node /path/to/node-authenticated --root-tarball authenticated-inputs/core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz
+node tools/sidecar-verify.mjs
+
+# Build the normal application with its ordinary configuration.
+npm run tauri:build
+
+# Run host tests after the frontend and paired resources exist.
 cd src-tauri
-cargo test --locked --all-targets --all-features
+cargo test --locked --all-targets --all-features -- --test-threads=1
 ```
+
+## Public CI input handoff
+
+Local builds use the exact package bindings without requiring an unpublished
+Loom commit. Before the separately authorized public campaign, supply
+`authenticated-inputs/publication-manifest.json` with schema
+`tfsb.public-paired-inputs-v1` and `stellar` / `loom` records containing the
+actual full `commit`, `contentTree` and `packageSha256`. The source-policy
+job rejects missing or inconsistent records. No future SHA is invented here.
 
 ## License
 

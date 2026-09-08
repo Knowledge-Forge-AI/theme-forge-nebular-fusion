@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../app/App";
 import { FixtureStudioHostBridge } from "../host/studio-host-bridge";
 import type { StudioHostBridge } from "../protocol/contracts";
@@ -42,5 +42,21 @@ describe("TFSB47I sidecar host workbench", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Studio host unavailable");
     expect(screen.queryByText(/raw host detail/)).toBeNull();
     expect(screen.queryAllByRole("article")).toHaveLength(0);
+  });
+
+  it("switches destination view between Brand Workbench and Theme Lab", async () => {
+    render(<App hostBridge={fixtureHostBridge} />);
+
+    expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeTruthy();
+    const themeLabBtn = screen.getByRole("button", { name: "Theme Lab" });
+    fireEvent.click(themeLabBtn);
+
+    expect(await screen.findByRole("heading", { name: "Theme Lab" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
+
+    const workbenchBtn = screen.getByRole("button", { name: "Brand Workbench" });
+    fireEvent.click(workbenchBtn);
+
+    expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeTruthy();
   });
 });
