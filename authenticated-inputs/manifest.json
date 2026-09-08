@@ -1,7 +1,7 @@
 {
   "fileCount": 13,
-  "totalBytes": 5692363,
-  "treeDigest": "34f9847b6cea1da38fde47434a3ef8ae56507be99b9dabfd7d335ec226997afe",
+  "totalBytes": 5692769,
+  "treeDigest": "207a870ce8a38ac87bd80b9ca22c182cadd38132057ca8e7bb0038d2cb888d97",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
@@ -23,21 +23,21 @@
     },
     {
       "path": "loom-binding.json",
-      "size": 538,
+      "size": 551,
       "mode": 420,
-      "sha256": "b1d7d1ce8dbe38096884a35b85c03c8959c47e6f8eae7d096236170567170ced"
+      "sha256": "0430418d6e95698fdc37bec3bf8d4c26a852163588787c8143085cc1a2b76706"
     },
     {
       "path": "loom-tarball/knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
-      "size": 108634,
+      "size": 109014,
       "mode": 420,
-      "sha256": "b050696c6bfca881c584f8f2076a37c512060d4a73e40fccca222921710c46e1"
+      "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8"
     },
     {
       "path": "publication-manifest.json",
       "size": 1558,
       "mode": 420,
-      "sha256": "b6234e872413b21e3a238ec25f44a3c7f0f9da99da1f1e82f95e07e22cd82fb2"
+      "sha256": "fdad03e24f4569ae2059e16cc5816d7c08222e11c83e3b3e3d3a322d337b91f2"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -55,13 +55,13 @@
       "path": "source-candidate.json",
       "size": 317,
       "mode": 420,
-      "sha256": "3c2998aa6a8bb2be23799270c694a2e7d9bf899ad9ee58a287a006ca4aaced7f"
+      "sha256": "ce132f94b6fd291157988c5d91059a6299123f9516a908dd09eece7d4f75ccd1"
     },
     {
       "path": "stellar-binding.json",
-      "size": 4030,
+      "size": 4043,
       "mode": 420,
-      "sha256": "8fd1bc076056a322d4b2b72dcf314f41e24a46c4c2c2535bd6bdf7947fb523f7"
+      "sha256": "8f4826c521b61368c3f13b457cb87e7aa611325318c93788344fce0b6f7193d7"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",

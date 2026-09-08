@@ -76,13 +76,13 @@
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
     "version": "0.1.0",
     "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
-    "sha256": "b050696c6bfca881c584f8f2076a37c512060d4a73e40fccca222921710c46e1",
-    "size": 108634,
+    "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+    "size": 109014,
     "publicSource": {
-      "status": "public-ci-qualified",
+      "status": "public-ci-artifact-authenticated",
       "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
-      "commit": "5f597c55e0ed61391e6450e5802164d9757745f3",
-      "contentTree": "1e9d2ad0d87203ae540970f5c0c35bd9b465a42a",
+      "commit": "58ee2de48fd77c6a0d47cdb8c85e5e79bc78a299",
+      "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
       "producerRole": "merge-candidate"
     }
   },
