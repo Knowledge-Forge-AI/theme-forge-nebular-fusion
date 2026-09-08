@@ -3,7 +3,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -87,6 +87,7 @@ export async function verifyNebularBundle(options) {
   const launches = options.launch ? [await launchAndTerminate(executablePath), await launchAndTerminate(executablePath)] : [];
   const lingering = options.launch && spawnSync("pgrep", ["-f", sidecarPath], { encoding: "utf8" }).status === 0;
   if (lingering) throw new Error("Packed sidecar remained after the app launch/exit cycles.");
+  const executableBytes = await readFile(executablePath);
   const receipt = {
     schema: "tfsb.nebular-bundle-identity",
     schemaVersion: 1,
@@ -95,7 +96,7 @@ export async function verifyNebularBundle(options) {
     identifier,
     version: bundleVersion,
     commandInventorySha256: sha256Hex(Buffer.from(inventorySource)),
-    executable: { name: executableName, architecture: "arm64", size: (await stat(executablePath)).size, sha256: sha256Hex(await readFile(executablePath)) },
+    executable: { name: executableName, architecture: "arm64", size: executableBytes.byteLength, sha256: sha256Hex(executableBytes) },
     sidecar: { filename: basename(sidecarPath), size: packedNode.byteLength, sha256: sha256Hex(packedNode), payloadFiles: packedPayload.length, payloadEqual: true, reapedAfterLaunches: options.launch ? true : null },
     loomPayload: loomInventory ? { payloadFiles: loomInventory.length, batchExecutable: true, payloadEqual: true } : null,
     csp: tauri.app.security.csp,
