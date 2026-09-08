@@ -333,7 +333,7 @@ jobs:
           cp package.json package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/frontend/"
           cp src-tauri/Cargo.toml src-tauri/Cargo.lock "$RUNNER_TEMP/tfsb-nebular-inventory/rust/"
           cp authenticated-inputs/core/package.json authenticated-inputs/core/package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/core/"
-          cp authenticated-inputs/loom/package.json authenticated-inputs/loom/package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/loom/"
+          cp loom-preview-source/package.json loom-preview-source/package-lock.json "$RUNNER_TEMP/tfsb-nebular-inventory/loom/"
       - name: Run Syft SBOM generation and Grype vulnerability scan
         run: |
           TFSB_RELEASE_DIR="$RUNNER_TEMP/tfsb-nebular-release"
