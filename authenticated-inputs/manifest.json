@@ -1,13 +1,13 @@
 {
-  "fileCount": 9,
-  "totalBytes": 5578911,
-  "treeDigest": "d9385daeb020526c2604a3d5c511ffbbe946443f3df94492f57cd2f685993885",
+  "fileCount": 12,
+  "totalBytes": 5695715,
+  "treeDigest": "502c7fb7e5a12332f5ebc136f6412ba71e621ceb6e03bee7e27ec7e0cd0f9685",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
-      "size": 546682,
-      "mode": 384,
-      "sha256": "263250937f1a1995f1cf33a9e516752faf263e1a67ef8fa240aa0205ea299179"
+      "size": 548758,
+      "mode": 420,
+      "sha256": "baac6608c91bf52fbdd5b84a41a9af3a074866d0e29700a03410b87575925263"
     },
     {
       "path": "core/package-lock.json",
@@ -22,9 +22,27 @@
       "sha256": "d86e68fb96e5b5fca7da8b875b37ed61218c02e6b14db04cf61f3b48b6ddd380"
     },
     {
+      "path": "loom-binding.json",
+      "size": 1872,
+      "mode": 420,
+      "sha256": "10d46caf87277fd3ee6f8c46a8bfdfc4b5f3d26300223b442b4ff9721f7e712d"
+    },
+    {
+      "path": "loom-tarball/knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
+      "size": 109014,
+      "mode": 420,
+      "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8"
+    },
+    {
+      "path": "publication-manifest.json",
+      "size": 2111,
+      "mode": 420,
+      "sha256": "a93888acc69a485aa8824950ec2c3b01c131ef3448fb70ddca48fca7607c0229"
+    },
+    {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
       "size": 20503,
-      "mode": 384,
+      "mode": 420,
       "sha256": "860a3162df7558326e18965503154feab99983130d2775c0d846d8548eab43e3"
     },
     {
@@ -35,26 +53,26 @@
     },
     {
       "path": "stellar-binding.json",
-      "size": 3701,
-      "mode": 384,
-      "sha256": "49a2f7846ecc3b2b600cf010f77e6a4eda20ae1ffe2ad5ca8b6efcf63bdfdeb3"
+      "size": 5432,
+      "mode": 420,
+      "sha256": "52fdace64fd00f03f1dad7ffbf9ec4baf5f85ed593b26ad1d6109e0e751d1055"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",
       "size": 458836,
-      "mode": 384,
+      "mode": 420,
       "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6"
     },
     {
       "path": "tooling-tarball/openpgp-6.3.1.tgz",
       "size": 4486359,
-      "mode": 384,
+      "mode": 420,
       "sha256": "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b"
     },
     {
       "path": "tooling/binding.json",
       "size": 2078,
-      "mode": 384,
+      "mode": 420,
       "sha256": "7556406b3025cc809a125341dae333fb6e6d04d9c06937a955f9ed1d5d139f19"
     }
   ]

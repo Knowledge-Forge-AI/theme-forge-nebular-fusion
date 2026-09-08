@@ -1,0 +1,48 @@
+{
+  "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
+  "version": "0.1.0",
+  "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
+  "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+  "size": 109014,
+  "publicSource": {
+    "status": "published",
+    "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+    "commit": "0bd72d6be18c6c1e0e23e6cb29f1e6c738c575dc",
+    "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+    "producerRole": "durable-main"
+  },
+  "testedProducer": {
+    "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+    "commit": "58ee2de48fd77c6a0d47cdb8c85e5e79bc78a299",
+    "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+    "packageSha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+    "producerRole": "merge-candidate",
+    "stagingHead": {
+      "ref": "staging",
+      "commit": "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc",
+      "tree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+      "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+    },
+    "base": {
+      "ref": "main",
+      "commit": "ff31d83517c7f826acabd465a121e68eb498ced9",
+      "tree": null,
+      "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+    },
+    "parents": [
+      "ff31d83517c7f826acabd465a121e68eb498ced9",
+      "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc"
+    ],
+    "stagingAndMergeTreesEqual": true,
+    "runId": 34247384527,
+    "runAttempt": 1,
+    "jobId": 102132812631,
+    "artifactId": 10064563215,
+    "artifactDigest": "sha256:4cfbf7eeecc97e919b35846636c157ac9f4788e988819c27eaef26d0831d4010",
+    "artifactManifestSha256": "365f2b800bbbeb423913244115e17fee2cc5e5bbd368d36e2252b06bbd71a37c"
+  },
+  "equality": {
+    "durableMainAndTestedProducerTreesEqual": true,
+    "registryAndTestedPackageSha256Equal": true
+  }
+}

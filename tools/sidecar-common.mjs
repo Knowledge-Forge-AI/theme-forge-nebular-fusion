@@ -222,7 +222,16 @@ function probeRuntime(nodePath) {
   return identity;
 }
 
-async function gitIdentity(repositoryRoot) {
+export async function gitIdentity(repositoryRoot) {
+  const candidatePath = resolve(repositoryRoot, "authenticated-inputs/source-candidate.json");
+  if (existsSync(candidatePath)) {
+    const candidate = JSON.parse((await readRegular(candidatePath, MAX_MANIFEST_BYTES)).bytes.toString("utf8"));
+    if (candidate.schema !== "tfsb.source-candidate-v1" || candidate.identity?.commit !== candidate.lineageCommit) {
+      throw new Error("source candidate lineage is invalid");
+    }
+    // baseCommit records Git lineage; actualInputDigest below binds prepared bytes.
+    return declaredDigest(candidate.lineageCommit, "source candidate lineage", 40);
+  }
   const run = (args) => {
     const result = spawnSync("git", args, { cwd: repositoryRoot, encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error("source Git identity is unavailable");
@@ -333,7 +342,7 @@ function validatePendingPublication(value) {
   }
 }
 
-function validateStellarBinding(binding) {
+export function validateStellarBinding(binding) {
   if (!isRecord(binding) || binding.schema !== STELLAR_BINDING_SCHEMA || binding.schemaVersion !== 1 || binding.product !== NEBULAR_PRODUCT) {
     throw new Error("standalone sidecar Stellar input binding is invalid");
   }
@@ -342,13 +351,18 @@ function validateStellarBinding(binding) {
       || typeof input.composedTreeDigest !== "string" || !/^[0-9a-f]{64}$/u.test(input.composedTreeDigest)) {
     throw new Error("standalone sidecar Stellar composition identity is invalid");
   }
-  declaredDigest(input.compositionManifestSha256, "composition manifest digest");
+  if (input.provenance === "accepted-published-npm-package; retained-locked-support-inputs") {
+    declaredDigest(input.publicMergeCommit, "published merge commit", 40);
+  } else {
+    declaredDigest(input.compositionManifestSha256, "composition manifest digest");
+    if (!isRecord(input.compositionTarball)) throw new Error("standalone sidecar Stellar composition archive identity is invalid");
+    declaredCompositionArchiveFilename(input.compositionTarball.filename, "Stellar composition archive");
+    declaredDigest(input.compositionTarball.sha256, "Stellar composition archive digest");
+    validatePendingPublication(input.publicStagingCommit);
+  }
   declaredDigest(input.packageJsonSha256, "core package digest");
   declaredDigest(input.packageLockSha256, "core lock digest");
-  if (!isRecord(input.compositionTarball)) throw new Error("standalone sidecar Stellar composition archive identity is invalid");
-  declaredCompositionArchiveFilename(input.compositionTarball.filename, "Stellar composition archive");
-  declaredDigest(input.compositionTarball.sha256, "Stellar composition archive digest");
-  validatePendingPublication(input.publicStagingCommit);
+
 
   if (!isRecord(binding.package)) throw new Error("standalone sidecar core package binding is missing");
   declaredArchiveFilename(binding.package.filename, "core package archive");

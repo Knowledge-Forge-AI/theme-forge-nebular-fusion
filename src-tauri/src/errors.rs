@@ -2,7 +2,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(crate) enum StudioReasonCode {
+pub enum StudioReasonCode {
     CapabilityUnavailable,
     CursorStale,
     DomainFailed,
@@ -33,14 +33,14 @@ pub(crate) enum StudioReasonCode {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct StudioCommandError {
+pub struct StudioCommandError {
     schema_version: u8,
     reason_code: StudioReasonCode,
     message: &'static str,
 }
 
 impl StudioCommandError {
-    pub(crate) fn new(reason_code: StudioReasonCode) -> Self {
+    pub fn new(reason_code: StudioReasonCode) -> Self {
         Self {
             schema_version: 1,
             reason_code,
@@ -48,9 +48,17 @@ impl StudioCommandError {
         }
     }
 
-    pub(crate) const fn reason_code(&self) -> StudioReasonCode {
+    pub const fn reason_code(&self) -> StudioReasonCode {
         self.reason_code
     }
 }
 
-pub(crate) type StudioResult<T> = Result<T, StudioCommandError>;
+impl std::fmt::Display for StudioCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {:?}", self.message, self.reason_code)
+    }
+}
+
+impl std::error::Error for StudioCommandError {}
+
+pub type StudioResult<T> = Result<T, StudioCommandError>;

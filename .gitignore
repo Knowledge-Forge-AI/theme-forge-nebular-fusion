@@ -1,6 +1,8 @@
 node_modules/
 dist/
+public/preview/
 src-tauri/gen/
 src-tauri/target/
+src-tauri/loom-payload/
 .downloaded-artifacts/
 .test-reports/
