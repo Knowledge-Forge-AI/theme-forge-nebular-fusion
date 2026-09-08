@@ -10,6 +10,8 @@ const EXPECTED_PRODUCTION_FILES: &[&str] = &[
     "src/commands/host.rs",
     "src/commands/mod.rs",
     "src/commands/selection.rs",
+    "src/commands/theme_lab.rs",
+    "src/commands/theme_packet.rs",
     "src/errors.rs",
     "src/design_evidence/io.rs",
     "src/design_evidence/mod.rs",
@@ -47,6 +49,11 @@ const EXPECTED_PRODUCTION_FILES: &[&str] = &[
     "src/state/mod.rs",
     "src/state/plan_coordinator.rs",
     "src/state/plan_coordinator_tests.rs",
+    "src/state/theme_lab.rs",
+    "src/theme_lab/mod.rs",
+    "src/theme_lab/runner.rs",
+    "src/theme_lab/smoke_selection.rs",
+    "src/theme_lab/types.rs",
 ];
 const EXCLUDED_DIRECTORIES: &[&str] = &["generated", "target", "tests", "vendor", "vendored"];
 const FORBIDDEN_PRODUCTION_TOKENS: &[&str] = &[
@@ -179,19 +186,28 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 relative.display()
             )));
         }
-        if production.contains("Command::new") && relative != Path::new("src/sidecar/process.rs") {
+        if production.contains("Command::new")
+            && relative != Path::new("src/sidecar/process.rs")
+            && relative != Path::new("src/theme_lab/runner.rs")
+        {
             return Err(io::Error::other(
                 "process spawn outside sidecar process owner",
             ));
         }
         if production.contains("std::fs")
+            && !(relative == Path::new("src/theme_lab/smoke_selection.rs")
+                && fs::read_to_string(root.join("src/theme_lab/mod.rs"))?.contains(
+                    "#[cfg(feature = \"native-smoke\")]\npub(crate) mod smoke_selection;",
+                ))
             && ![
                 Path::new("src/commands/design_packet.rs"),
+                Path::new("src/commands/theme_packet.rs"),
                 Path::new("src/design_evidence/io.rs"),
                 Path::new("src/sidecar/artifact.rs"),
                 Path::new("src/sidecar/process.rs"),
                 Path::new("src/sidecar/supervisor.rs"),
                 Path::new("src/sidecar/supervisor/tests.rs"),
+                Path::new("src/state/theme_lab.rs"),
             ]
             .contains(&relative)
         {
@@ -200,6 +216,24 @@ fn scan_production(root: &Path) -> io::Result<()> {
             ));
         }
     }
+    Ok(())
+}
+
+#[test]
+fn smoke_selector_requires_explicit_feature_gate() -> io::Result<()> {
+    let root = fixture_root("ungated-smoke");
+    write_fixture(&root, None, false)?;
+    fs::write(
+        root.join("src/theme_lab/smoke_selection.rs"),
+        "use std::fs;\n",
+    )?;
+    assert!(scan_production(&root).is_err());
+    fs::write(
+        root.join("src/theme_lab/mod.rs"),
+        "#[cfg(feature = \"native-smoke\")]\npub(crate) mod smoke_selection;\n",
+    )?;
+    assert!(scan_production(&root).is_ok());
+    fs::remove_dir_all(root)?;
     Ok(())
 }
 

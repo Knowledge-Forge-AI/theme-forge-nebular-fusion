@@ -14,6 +14,8 @@ import briefExample from "../protocol/tfsb-design-evidence-v1/examples/brief.jso
 import candidateAExample from "../protocol/tfsb-design-evidence-v1/examples/candidate-a.json";
 import candidateBExample from "../protocol/tfsb-design-evidence-v1/examples/candidate-b.json";
 import reviewExample from "../protocol/tfsb-design-evidence-v1/examples/review.json";
+import { ThemeLab } from "./features/theme-lab/ThemeLab";
+import { MockThemeLabBridge } from "./features/theme-lab/test/mock-bridge";
 import "./styles/studio.css";
 
 const sha = (digit: string): Sha256Digest => `sha256:${digit.repeat(64)}` as Sha256Digest;
@@ -83,4 +85,9 @@ const planClient: StudioBrandPlanClient = {
   },
   async cancelPlanOperation() { return { accepted: true }; },
 };
-const root = document.getElementById("root"); if (!root) throw new Error("fixture root missing"); createRoot(root).render(<><BrandWorkbench client={client} planClient={planClient} host={host} project={project} source={source} sources={[source]}/>{scenario.startsWith("exchange") ? <DesignExchange host={host} project={packetProject} sources={[source]} readClient={client} packetClient={packetClient} onProposalPrefill={() => undefined} /> : null}</>);
+const root = document.getElementById("root"); if (!root) throw new Error("fixture root missing");
+if (scenario === "themelab") {
+  createRoot(root).render(<ThemeLab bridge={new MockThemeLabBridge()} />);
+} else {
+  createRoot(root).render(<><BrandWorkbench client={client} planClient={planClient} host={host} project={project} source={source} sources={[source]}/>{scenario.startsWith("exchange") ? <DesignExchange host={host} project={packetProject} sources={[source]} readClient={client} packetClient={packetClient} onProposalPrefill={() => undefined} /> : null}</>);
+}

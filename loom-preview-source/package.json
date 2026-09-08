@@ -1,0 +1,35 @@
+{
+  "name": "@knowledge-forge-ai/tfsl-fixture",
+  "version": "0.0.0-tfsb53b",
+
+  "description": "Real Starlight kitchen-sink fixture for Theme Forge Stellar Loom viability qualification",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "compile:cyan": "node ../bin/tfsl.js compile ../examples/stellar-cyan.theme.json --out src/styles/cyan --overwrite",
+    "compile:amber": "node ../bin/tfsl.js compile ../examples/amber-forge.theme.json --out src/styles/amber --overwrite",
+    "compile:themes": "npm run compile:cyan && npm run compile:amber",
+    "prebuild": "npm run compile:themes",
+    "build:cyan": "TFSL_THEME_CSS=./src/styles/cyan/theme.css ASTRO_OUT_DIR=./dist/cyan astro build",
+    "build:amber": "TFSL_THEME_CSS=./src/styles/amber/theme.css ASTRO_OUT_DIR=./dist/amber astro build",
+    "build:neutral": "ASTRO_BASE=/preview TFSL_THEME_CSS=./src/styles/neutral.css ASTRO_OUT_DIR=./dist/neutral astro build",
+    "build": "npm run compile:themes && npm run build:cyan && npm run build:amber && npm run build:neutral",
+    "preview:cyan": "ASTRO_OUT_DIR=./dist/cyan astro preview --host 127.0.0.1 --port 4321 --ignore-lock",
+    "preview:amber": "ASTRO_OUT_DIR=./dist/amber astro preview --host 127.0.0.1 --port 4322 --ignore-lock",
+    "preview:neutral": "ASTRO_BASE=/preview ASTRO_OUT_DIR=./dist/neutral astro preview --host 127.0.0.1 --port 4323 --ignore-lock",
+    "preview": "npm run preview:cyan",
+    "test:e2e": "playwright test",
+    "test": "npm run test:e2e"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.0",
+    "astro": "7.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "typescript": "7.0.2"
+  }
+}

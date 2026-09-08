@@ -111,12 +111,20 @@ pub(crate) fn import_packet(
     path: &Path,
     expected: ExpectedPacketKind,
 ) -> StudioResult<ImportedPacket> {
+    let mut bytes = read_selected_bytes(path, MAX_PACKET_BYTES)?;
+    let byte_count = bytes.len();
+    let packet = parse_packet_bytes(&bytes)?;
+    bytes.fill(0);
+    if !expected.accepts(packet.kind()) {
+        return protocol_invalid();
+    }
+    Ok(ImportedPacket { packet, byte_count })
+}
+
+pub(crate) fn read_selected_bytes(path: &Path, max_bytes: usize) -> StudioResult<Vec<u8>> {
     let before = fs::symlink_metadata(path)
         .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
-    if before.file_type().is_symlink()
-        || !before.is_file()
-        || before.len() > MAX_PACKET_BYTES as u64
-    {
+    if before.file_type().is_symlink() || !before.is_file() || before.len() > max_bytes as u64 {
         return rejected();
     }
     let canonical = fs::canonicalize(path)
@@ -148,10 +156,10 @@ pub(crate) fn import_packet(
         return rejected();
     }
     Read::by_ref(&mut file)
-        .take((MAX_PACKET_BYTES + 1) as u64)
+        .take((max_bytes + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
-    if bytes.len() > MAX_PACKET_BYTES {
+    if bytes.len() > max_bytes {
         return rejected();
     }
     if injected(IoFault::Revalidate) {
@@ -171,13 +179,7 @@ pub(crate) fn import_packet(
     {
         return rejected();
     }
-    let byte_count = bytes.len();
-    let packet = parse_packet_bytes(&bytes)?;
-    bytes.fill(0);
-    if !expected.accepts(packet.kind()) {
-        return protocol_invalid();
-    }
-    Ok(ImportedPacket { packet, byte_count })
+    Ok(bytes)
 }
 
 fn stage_path(parent: &Path, attempt: u8) -> PathBuf {
@@ -188,6 +190,10 @@ fn stage_path(parent: &Path, attempt: u8) -> PathBuf {
 }
 
 pub(crate) fn export_packet(path: &Path, packet: &DesignEvidencePacket) -> StudioResult<usize> {
+    publish_selected_bytes(path, &canonical_packet_bytes(packet)?)
+}
+
+pub(crate) fn publish_selected_bytes(path: &Path, bytes: &[u8]) -> StudioResult<usize> {
     let parent = path
         .parent()
         .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
@@ -226,7 +232,6 @@ pub(crate) fn export_packet(path: &Path, packet: &DesignEvidencePacket) -> Studi
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => return rejected(),
     }
-    let bytes = canonical_packet_bytes(packet)?;
     let mut stage = None;
     for attempt in 0..16 {
         if injected(IoFault::Stage) {
@@ -254,7 +259,7 @@ pub(crate) fn export_packet(path: &Path, packet: &DesignEvidencePacket) -> Studi
             return rejected();
         }
         stage_file
-            .write_all(&bytes)
+            .write_all(bytes)
             .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
         if injected(IoFault::Sync) {
             return rejected();

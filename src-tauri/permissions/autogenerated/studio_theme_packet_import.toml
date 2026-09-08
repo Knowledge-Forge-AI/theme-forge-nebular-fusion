@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-theme-packet-import"
+description = "Enables the studio_theme_packet_import command without any pre-configured scope."
+commands.allow = ["studio_theme_packet_import"]
+
+[[permission]]
+identifier = "deny-studio-theme-packet-import"
+description = "Denies the studio_theme_packet_import command without any pre-configured scope."
+commands.deny = ["studio_theme_packet_import"]

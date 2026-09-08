@@ -608,7 +608,7 @@ fn validate_parameters(values: &[ConsumerParameterSelection]) -> StudioResult<()
         prior = Some(entry.profile_id.clone());
         let mut prior_parameter = None;
         for selected in &entry.values {
-            if !public_id(&selected.parameter).is_ok()
+            if public_id(&selected.parameter).is_err()
                 || !bounded_text(&selected.value, 1, 256)
                 || prior_parameter
                     .as_ref()
