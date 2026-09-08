@@ -1,7 +1,7 @@
 {
   "fileCount": 13,
   "totalBytes": 5692769,
-  "treeDigest": "207a870ce8a38ac87bd80b9ca22c182cadd38132057ca8e7bb0038d2cb888d97",
+  "treeDigest": "f179d6cf2b0e63515492fadaa36b01383704b1ee88ab3fb9b2abd769e08b59de",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
@@ -55,7 +55,7 @@
       "path": "source-candidate.json",
       "size": 317,
       "mode": 420,
-      "sha256": "ce132f94b6fd291157988c5d91059a6299123f9516a908dd09eece7d4f75ccd1"
+      "sha256": "f0b0e5030d263ae4c1a9043777903859c589ad5b85f9828acd00d51a751f5a81"
     },
     {
       "path": "stellar-binding.json",
