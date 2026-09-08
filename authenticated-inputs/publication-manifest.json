@@ -8,14 +8,14 @@
   },
   "loom": {
     "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
-    "commit": "cbbbd5f26aeb45eabd81a942347738271b39848e",
-    "contentTree": "ff86c436b925402e4b41b8047642061c332bab06",
-    "packageSha256": "3b3c53f49a1401b6884462d7c2e7822502704a5a346f2c1a14166f4be4c331f8",
+    "commit": "5f597c55e0ed61391e6450e5802164d9757745f3",
+    "contentTree": "1e9d2ad0d87203ae540970f5c0c35bd9b465a42a",
+    "packageSha256": "b050696c6bfca881c584f8f2076a37c512060d4a73e40fccca222921710c46e1",
     "producerRole": "merge-candidate",
     "stagingHead": {
       "ref": "staging",
-      "commit": "863788aa2f147ffa7bb565227f1510a099dbce40",
-      "tree": "ff86c436b925402e4b41b8047642061c332bab06",
+      "commit": "8bc70f4f7f83e26ee9cd3d81f6a445a4390ed716",
+      "tree": "1e9d2ad0d87203ae540970f5c0c35bd9b465a42a",
       "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
     },
     "base": {
@@ -26,14 +26,14 @@
     },
     "parents": [
       "ff31d83517c7f826acabd465a121e68eb498ced9",
-      "863788aa2f147ffa7bb565227f1510a099dbce40"
+      "8bc70f4f7f83e26ee9cd3d81f6a445a4390ed716"
     ],
     "stagingAndMergeTreesEqual": true,
-    "runId": 34240609845,
+    "runId": 34242334848,
     "runAttempt": 1,
-    "jobId": 102109565299,
-    "artifactId": 10061792901,
-    "artifactDigest": "sha256:a653fa0a69831ea0444f09d368220923232aa9ecc0d352341d42fad29e17883e",
-    "artifactManifestSha256": "3623d68daf2aa184558ecd6c9eccdb52f6254c3207dac3b6d2f50173587710b0"
+    "jobId": 102115467873,
+    "artifactId": 10062506514,
+    "artifactDigest": "sha256:cada15ff4500cf39a3f4e154915233293c54277162f3c0897d817bdc2cc831f2",
+    "artifactManifestSha256": "08c265a895fee12c05aaaf5381bcd2dc0fd10add2131506eddc64bf6bf3ff542"
   }
 }
