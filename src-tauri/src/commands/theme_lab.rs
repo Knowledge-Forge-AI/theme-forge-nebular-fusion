@@ -5,8 +5,9 @@ use tauri_plugin_dialog::DialogExt;
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 use crate::state::theme_lab::ThemeLabState;
 use crate::theme_lab::types::{
-    ThemeLabCompileRequest, ThemeLabCompileResponse, ThemeLabExampleResponse, ThemeLabOpenResponse,
-    ThemeLabSaveRequest, ThemeLabSaveResponse, ThemeLabStatus, ThemeSpecification,
+    ThemeDocument, ThemeDraftUpdateRequest, ThemeDraftUpdateResponse, ThemeLabCompileRequest,
+    ThemeLabCompileResponse, ThemeLabExampleResponse, ThemeLabOpenRequest, ThemeLabOpenResponse,
+    ThemeLabSaveRequest, ThemeLabSaveResponse, ThemeLabStatus,
 };
 
 #[tauri::command(async)]
@@ -45,6 +46,7 @@ pub fn open_selected_path(
             display_name: None,
             compiled_css: None,
             descriptor: None,
+            styles: None,
             diagnostics: vec![],
             error: None,
         });
@@ -55,12 +57,28 @@ pub fn open_selected_path(
 
 #[tauri::command(async)]
 pub(crate) fn studio_theme_lab_open(
+    request: Option<ThemeLabOpenRequest>,
     app: AppHandle,
     state: tauri::State<'_, ThemeLabState>,
 ) -> StudioResult<ThemeLabOpenResponse> {
+    let session_id = request.as_ref().and_then(|r| r.session_id.clone());
+    let ui_revision = request.as_ref().and_then(|r| r.ui_revision);
+
     #[cfg(feature = "native-smoke")]
     if let Some(selected) = crate::theme_lab::smoke_selection::select("open") {
-        return open_selected_path(selected?, &state);
+        let Some(path) = selected? else {
+            return Ok(ThemeLabOpenResponse {
+                cancelled: true,
+                specification: None,
+                display_name: None,
+                compiled_css: None,
+                descriptor: None,
+                styles: None,
+                diagnostics: vec![],
+                error: None,
+            });
+        };
+        return state.open_file_with_binding(path, session_id, ui_revision);
     }
     let selected = app
         .dialog()
@@ -76,12 +94,25 @@ pub(crate) fn studio_theme_lab_open(
         })
         .transpose()?;
 
-    open_selected_path(selected, &state)
+    let Some(path) = selected else {
+        return Ok(ThemeLabOpenResponse {
+            cancelled: true,
+            specification: None,
+            display_name: None,
+            compiled_css: None,
+            descriptor: None,
+            styles: None,
+            diagnostics: vec![],
+            error: None,
+        });
+    };
+
+    state.open_file_with_binding(path, session_id, ui_revision)
 }
 
 pub fn save_to_selected_path(
     selected: Option<PathBuf>,
-    spec: ThemeSpecification,
+    spec: impl Into<ThemeDocument>,
     state: &ThemeLabState,
 ) -> StudioResult<ThemeLabSaveResponse> {
     let Some(dest) = selected else {
@@ -91,7 +122,7 @@ pub fn save_to_selected_path(
         });
     };
 
-    let display_name = state.save_file(spec, &dest)?;
+    let display_name = state.save_file(spec.into(), &dest)?;
     Ok(ThemeLabSaveResponse {
         cancelled: false,
         display_name: Some(display_name),
@@ -106,11 +137,26 @@ pub(crate) fn studio_theme_lab_save(
 ) -> StudioResult<ThemeLabSaveResponse> {
     #[cfg(feature = "native-smoke")]
     if let Some(selected) = crate::theme_lab::smoke_selection::select("save") {
-        return save_to_selected_path(selected?, request.specification, &state);
+        let Some(dest) = selected? else {
+            return Ok(ThemeLabSaveResponse {
+                cancelled: true,
+                display_name: None,
+            });
+        };
+        let display_name = state.save_file_with_binding(
+            request.specification,
+            &dest,
+            request.session_id,
+            request.ui_revision,
+        )?;
+        return Ok(ThemeLabSaveResponse {
+            cancelled: false,
+            display_name: Some(display_name),
+        });
     }
     let active_path = state.active_file_path()?;
     let target_path = if request.save_as || active_path.is_none() {
-        let default_name = format!("{}.theme.json", request.specification.name);
+        let default_name = format!("{}.theme.json", request.specification.name());
         app.dialog()
             .file()
             .set_title("Save Theme Specification")
@@ -126,11 +172,35 @@ pub(crate) fn studio_theme_lab_save(
         active_path
     };
 
-    save_to_selected_path(target_path, request.specification, &state)
+    let Some(dest) = target_path else {
+        return Ok(ThemeLabSaveResponse {
+            cancelled: true,
+            display_name: None,
+        });
+    };
+
+    let display_name = state.save_file_with_binding(
+        request.specification,
+        &dest,
+        request.session_id,
+        request.ui_revision,
+    )?;
+    Ok(ThemeLabSaveResponse {
+        cancelled: false,
+        display_name: Some(display_name),
+    })
 }
 
 #[tauri::command(async)]
 pub(crate) fn studio_theme_lab_dispose(state: tauri::State<'_, ThemeLabState>) -> StudioResult<()> {
     state.cancel_active();
     Ok(())
+}
+
+#[tauri::command(async)]
+pub(crate) fn studio_theme_lab_draft_update(
+    request: ThemeDraftUpdateRequest,
+    state: tauri::State<'_, ThemeLabState>,
+) -> StudioResult<ThemeDraftUpdateResponse> {
+    state.draft_update(request)
 }

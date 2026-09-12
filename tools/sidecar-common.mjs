@@ -347,13 +347,20 @@ export function validateStellarBinding(binding) {
     throw new Error("standalone sidecar Stellar input binding is invalid");
   }
   const input = binding.input;
-  if (!isRecord(input) || input.product !== STELLAR_PRODUCT || typeof input.sourceTree !== "string" || !/^[0-9a-f]{40}$/u.test(input.sourceTree)
-      || typeof input.composedTreeDigest !== "string" || !/^[0-9a-f]{64}$/u.test(input.composedTreeDigest)) {
+  if (!isRecord(input) || input.product !== STELLAR_PRODUCT || typeof input.sourceTree !== "string" || !/^[0-9a-f]{40}$/u.test(input.sourceTree)) {
     throw new Error("standalone sidecar Stellar composition identity is invalid");
   }
   if (input.provenance === "accepted-published-npm-package; retained-locked-support-inputs") {
+    if (typeof input.composedTreeDigest !== "string" || !/^[0-9a-f]{64}$/u.test(input.composedTreeDigest)) {
+      throw new Error("standalone sidecar Stellar composition identity is invalid");
+    }
     declaredDigest(input.publicMergeCommit, "published merge commit", 40);
+  } else if (input.provenance === "exact-private-burst-rc-artifact; standalone-source-qualified") {
+    // RC candidate mode
   } else {
+    if (typeof input.composedTreeDigest !== "string" || !/^[0-9a-f]{64}$/u.test(input.composedTreeDigest)) {
+      throw new Error("standalone sidecar Stellar composition identity is invalid");
+    }
     declaredDigest(input.compositionManifestSha256, "composition manifest digest");
     if (!isRecord(input.compositionTarball)) throw new Error("standalone sidecar Stellar composition archive identity is invalid");
     declaredCompositionArchiveFilename(input.compositionTarball.filename, "Stellar composition archive");
@@ -361,7 +368,9 @@ export function validateStellarBinding(binding) {
     validatePendingPublication(input.publicStagingCommit);
   }
   declaredDigest(input.packageJsonSha256, "core package digest");
-  declaredDigest(input.packageLockSha256, "core lock digest");
+  if (input.packageLockSha256) {
+    declaredDigest(input.packageLockSha256, "core lock digest");
+  }
 
 
   if (!isRecord(binding.package)) throw new Error("standalone sidecar core package binding is missing");
@@ -406,7 +415,7 @@ async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   } catch {
     throw new Error("standalone sidecar Stellar package inputs are not valid JSON");
   }
-  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || corePackage.version !== "0.4.0"
+  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0")
       || !isRecord(corePackage.dependencies) || !isRecord(coreLock) || coreLock.name !== corePackage.name || coreLock.version !== corePackage.version) {
     throw new Error("standalone sidecar Stellar package identity is invalid");
   }
@@ -662,7 +671,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
       || manifest.native.target !== TARGET) {
     throw new Error("manifest fixed identity is invalid");
   }
-  if (!testOnlyAllowNonProductionIdentity && (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || manifest.core.version !== "0.4.0"
+  if (!testOnlyAllowNonProductionIdentity && (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0")
       || manifest.runtime.sha256 !== "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572"
       || manifest.runtime.size !== 112_937_728
       || manifest.native.sha256 !== "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8" || manifest.native.size !== 53_344
@@ -709,7 +718,7 @@ export async function prepareSidecar({ repositoryRoot, nodePath, rootTarball }) 
     const rootPackage = await readPackage(resolve(coreRoot, "package.json"));
     const rasterPackage = await readPackage(resolve(rasterRoot, "package.json"));
     const resvgPackage = await readPackage(resolve(rasterRoot, "node_modules/@resvg/resvg-wasm/package.json"));
-    if (rootPackage.version !== "0.4.0" || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
+    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
       throw new Error("sidecar package identity does not match the closed release input");
     }
 

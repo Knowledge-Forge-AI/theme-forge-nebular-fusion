@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-scene-edit"
+description = "Enables the studio_scene_edit command without any pre-configured scope."
+commands.allow = ["studio_scene_edit"]
+
+[[permission]]
+identifier = "deny-studio-scene-edit"
+description = "Denies the studio_scene_edit command without any pre-configured scope."
+commands.deny = ["studio_scene_edit"]

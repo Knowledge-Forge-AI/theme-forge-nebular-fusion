@@ -2,59 +2,26 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const EXPECTED_PRODUCTION_FILES: &[&str] = &[
-    "src/command_inventory.rs",
-    "src/commands/brand_plan.rs",
-    "src/commands/brand_read.rs",
-    "src/commands/design_packet.rs",
-    "src/commands/host.rs",
-    "src/commands/mod.rs",
-    "src/commands/selection.rs",
-    "src/commands/theme_lab.rs",
-    "src/commands/theme_packet.rs",
-    "src/errors.rs",
-    "src/design_evidence/io.rs",
-    "src/design_evidence/mod.rs",
-    "src/design_evidence/types.rs",
-    "src/design_evidence/validate.rs",
-    "src/lib.rs",
-    "src/main.rs",
-    "src/sidecar/artifact.rs",
-    "src/sidecar/brand_protocol.rs",
-    "src/sidecar/brand_types/common.rs",
-    "src/sidecar/brand_types/consumer_export.rs",
-    "src/sidecar/brand_types/diff.rs",
-    "src/sidecar/brand_types/family.rs",
-    "src/sidecar/brand_types/mod.rs",
-    "src/sidecar/brand_types/plan_summaries.rs",
-    "src/sidecar/brand_types/qa.rs",
-    "src/sidecar/brand_types/raster_plan_descriptor.rs",
-    "src/sidecar/brand_types/status.rs",
-    "src/sidecar/brand_types/token_recipe.rs",
-    "src/sidecar/coordinator.rs",
-    "src/sidecar/error_registry.rs",
-    "src/sidecar/framing.rs",
-    "src/sidecar/mod.rs",
-    "src/sidecar/plan_protocol.rs",
-    "src/sidecar/plan_transport.rs",
-    "src/sidecar/process.rs",
-    "src/sidecar/protocol.rs",
-    "src/sidecar/supervisor.rs",
-    "src/sidecar/supervisor/plan.rs",
-    "src/sidecar/supervisor/plan_tests.rs",
-    "src/sidecar/supervisor/tests.rs",
-    "src/sidecar/visual_evidence.rs",
-    "src/sidecar/json_decoder.rs",
-    "src/state/host.rs",
-    "src/state/mod.rs",
-    "src/state/plan_coordinator.rs",
-    "src/state/plan_coordinator_tests.rs",
-    "src/state/theme_lab.rs",
-    "src/theme_lab/mod.rs",
-    "src/theme_lab/runner.rs",
-    "src/theme_lab/smoke_selection.rs",
-    "src/theme_lab/types.rs",
-];
+#[derive(serde::Deserialize)]
+struct NativeSourceInventory {
+    files: Vec<String>,
+}
+
+fn load_maintained_source_inventory(root: &Path) -> io::Result<Vec<String>> {
+    let inventory_path = root.join("../native-source-inventory.json");
+    let candidate = if inventory_path.is_file() {
+        inventory_path
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../native-source-inventory.json")
+    };
+    let content = fs::read_to_string(&candidate).map_err(|e| {
+        io::Error::other(format!("failed to read native-source-inventory.json: {e}"))
+    })?;
+    let inv: NativeSourceInventory = serde_json::from_str(&content).map_err(|e| {
+        io::Error::other(format!("failed to parse native-source-inventory.json: {e}"))
+    })?;
+    Ok(inv.files)
+}
 const EXCLUDED_DIRECTORIES: &[&str] = &["generated", "target", "tests", "vendor", "vendored"];
 const FORBIDDEN_PRODUCTION_TOKENS: &[&str] = &[
     "unsafe ",
@@ -120,11 +87,12 @@ fn maintained_rust_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     visit_rust_files(&source_root, &mut files)?;
     files.sort();
-    for expected in EXPECTED_PRODUCTION_FILES {
-        let expected_path = root.join(expected);
+    let expected_files = load_maintained_source_inventory(root)?;
+    for expected in &expected_files {
+        let expected_path = source_root.join(expected);
         if !files.contains(&expected_path) {
             return Err(io::Error::other(format!(
-                "missing expected source: {expected}"
+                "missing expected source: src/{expected}"
             )));
         }
     }
@@ -159,6 +127,11 @@ fn scan_production(root: &Path) -> io::Result<()> {
             .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"));
         let production = if test_file {
             ""
+        } else if relative.starts_with("src/scene") || relative == Path::new("src/state/scene.rs") {
+            source
+                .split("\n#[cfg(test)]\nmod ")
+                .next()
+                .unwrap_or(&source)
         } else {
             source.split("#[cfg(test)]").next().unwrap_or(&source)
         };
@@ -189,6 +162,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
         if production.contains("Command::new")
             && relative != Path::new("src/sidecar/process.rs")
             && relative != Path::new("src/theme_lab/runner.rs")
+            && relative != Path::new("src/scene/runner.rs")
         {
             return Err(io::Error::other(
                 "process spawn outside sidecar process owner",
@@ -203,6 +177,8 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 Path::new("src/commands/design_packet.rs"),
                 Path::new("src/commands/theme_packet.rs"),
                 Path::new("src/design_evidence/io.rs"),
+                Path::new("src/scene/io.rs"),
+                Path::new("src/sidecar/scene_artifact.rs"),
                 Path::new("src/sidecar/artifact.rs"),
                 Path::new("src/sidecar/process.rs"),
                 Path::new("src/sidecar/supervisor.rs"),
@@ -253,11 +229,13 @@ fn write_fixture(root: &Path, omitted: Option<&str>, forbidden_extra: bool) -> i
     if root.exists() {
         fs::remove_dir_all(root)?;
     }
-    for relative in EXPECTED_PRODUCTION_FILES {
-        if omitted == Some(*relative) {
+    let expected_files = load_maintained_source_inventory(root)?;
+    for relative in &expected_files {
+        let prefixed = format!("src/{relative}");
+        if omitted == Some(relative.as_str()) || omitted == Some(prefixed.as_str()) {
             continue;
         }
-        let path = root.join(relative);
+        let path = root.join("src").join(relative);
         let parent = path
             .parent()
             .ok_or_else(|| io::Error::other("fixture path has no parent"))?;
@@ -311,5 +289,35 @@ fn launcher_remains_trivial() -> io::Result<()> {
     let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"))?;
     assert_eq!(source.lines().count(), 3);
     assert!(source.contains("tfsb_studio_lib::run();"));
+    Ok(())
+}
+
+#[test]
+fn scene_runner_test_fields_do_not_truncate_production_scan() -> io::Result<()> {
+    let root = fixture_root("scene-cfg-field");
+    write_fixture(&root, None, false)?;
+    fs::write(
+        root.join("src/scene/runner.rs"),
+        "#[cfg(test)]\nconst TEST_ONLY: u8 = 0;\nfn production() { panic!(\"forbidden\"); }\n",
+    )?;
+    let result = scan_production(&root);
+    fs::remove_dir_all(&root)?;
+    assert!(result.is_err());
+    Ok(())
+}
+
+#[test]
+fn single_maintained_native_source_inventory_is_exact_and_complete() -> io::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let inventory_files = load_maintained_source_inventory(root)?;
+    assert_eq!(inventory_files.len(), 66);
+    let files = maintained_rust_files(root)?;
+    for expected in &inventory_files {
+        let expected_path = root.join("src").join(expected);
+        assert!(
+            files.contains(&expected_path),
+            "expected source missing from scan: src/{expected}"
+        );
+    }
     Ok(())
 }

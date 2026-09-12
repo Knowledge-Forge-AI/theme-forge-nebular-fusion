@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
@@ -18,6 +19,7 @@ pub(crate) struct HostState {
 }
 
 struct HostShared {
+    scene_generation: AtomicU64,
     supervisor: Mutex<SidecarSupervisor>,
 }
 
@@ -26,6 +28,7 @@ impl HostState {
         Ok(Self {
             shared: Arc::new(HostShared {
                 supervisor: Mutex::new(supervisor),
+                scene_generation: AtomicU64::new(0),
             }),
             plans: Arc::new(PlanCoordinator::new()?),
         })
@@ -54,6 +57,7 @@ impl HostState {
         &self,
         events: Channel<StudioHostStateEvent>,
     ) -> StudioResult<StudioHostStatus> {
+        self.advance_scene_generation()?;
         self.invalidate_plans();
         self.lock_for_teardown()?.start(events)
     }
@@ -67,6 +71,7 @@ impl HostState {
     }
 
     pub(crate) fn shutdown_host(&self) -> StudioResult<()> {
+        self.advance_scene_generation()?;
         self.invalidate_plans();
         self.lock_for_teardown()?.shutdown()
     }
@@ -80,6 +85,9 @@ impl HostState {
         let operation = self.plans.begin(request, &context)?;
         let operation_handle = operation.control.handle.clone();
         let apply = matches!(operation.action, PlanOperationAction::Apply { .. });
+        if apply {
+            self.advance_scene_generation()?;
+        }
         let mut events = PlanEventEmitter::new(progress, operation_handle.clone(), apply);
         let result = (|| -> StudioResult<StudioBrandPlanStartResult> {
             if events.started().is_err() {
@@ -172,6 +180,18 @@ impl HostState {
     }
 
     pub(crate) fn begin_identity_change(&self) -> StudioResult<IdentityChangeGuard> {
+        self.advance_scene_generation()?;
         self.plans.begin_identity_change()
+    }
+    pub(crate) fn scene_generation(&self) -> u64 {
+        self.shared.scene_generation.load(Ordering::SeqCst)
+    }
+
+    fn advance_scene_generation(&self) -> StudioResult<()> {
+        self.shared
+            .scene_generation
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .map(|_| ())
+            .map_err(|_| StudioCommandError::new(StudioReasonCode::ContextStale))
     }
 }

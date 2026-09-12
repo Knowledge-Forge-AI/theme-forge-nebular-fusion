@@ -28,7 +28,29 @@ import type {
   ThemeReviewValidateResponse,
   ThemeReviewValidationResult,
   ThemeSpecification,
+  ThemeCandidateVerifyRequestV2,
+  ThemeCandidateVerifyResponseV2,
+  ThemeCandidateAdoptRequestV2,
+  ThemeCandidateAdoptResponseV2,
+  ThemeCandidateVerificationResultV2,
 } from "./types";
+import {
+  validateDraftUpdateResponse,
+  validateHexDigest,
+  validateSafeRevision,
+  validateThemeDescriptorV2,
+  validateThemeDocumentOpenResponse,
+  validateThemeSpecificationV2,
+  validateThemeV2CompileResponse,
+  validateThemeV2Styles,
+  verifyThemeV2CompiledCssAndInventory,
+  type ThemeSpecificationV2,
+  type ThemeV2CompileResponse,
+  type ThemeDocumentOpenResponse,
+  type ThemeDraftUpdateResponse,
+  type ThemeDescriptorV2,
+  type ThemeV2StyleFile,
+} from "./v2-bridge";
 
 export const THEME_LAB_COMMANDS = {
   status: "studio_theme_lab_status",
@@ -37,6 +59,7 @@ export const THEME_LAB_COMMANDS = {
   open: "studio_theme_lab_open",
   save: "studio_theme_lab_save",
   dispose: "studio_theme_lab_dispose",
+  draftUpdate: "studio_theme_lab_draft_update",
   briefCreate: "studio_theme_brief_create",
   packetImport: "studio_theme_packet_import",
   packetExport: "studio_theme_packet_export",
@@ -53,35 +76,35 @@ export class ThemeLabValidationError extends Error {
   }
 }
 
-function expectObject(value: unknown): Record<string, unknown> {
+export function expectObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ThemeLabValidationError("Expected object");
   }
   return value as Record<string, unknown>;
 }
 
-function expectString(value: unknown, name: string): string {
+export function expectString(value: unknown, name: string): string {
   if (typeof value !== "string") {
     throw new ThemeLabValidationError(`Expected string for ${name}`);
   }
   return value;
 }
 
-function expectNumber(value: unknown, name: string): number {
+export function expectNumber(value: unknown, name: string): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     throw new ThemeLabValidationError(`Expected number for ${name}`);
   }
   return value;
 }
 
-function expectBoolean(value: unknown, name: string): boolean {
+export function expectBoolean(value: unknown, name: string): boolean {
   if (typeof value !== "boolean") {
     throw new ThemeLabValidationError(`Expected boolean for ${name}`);
   }
   return value;
 }
 
-function validateDiagnostics(value: unknown): ContrastDiagnostic[] {
+export function validateDiagnostics(value: unknown): ContrastDiagnostic[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -105,7 +128,7 @@ function validateDiagnostics(value: unknown): ContrastDiagnostic[] {
   });
 }
 
-function validateDescriptor(value: unknown): ThemeDescriptor | undefined {
+export function validateDescriptor(value: unknown): ThemeDescriptor | undefined {
   if (value === null || value === undefined) return undefined;
   const obj = expectObject(value);
   const provObj = expectObject(obj.provenance);
@@ -127,7 +150,7 @@ function validateDescriptor(value: unknown): ThemeDescriptor | undefined {
   };
 }
 
-function validateError(value: unknown): ThemeLabError | undefined {
+export function validateError(value: unknown): ThemeLabError | undefined {
   if (value === null || value === undefined) return undefined;
   if (typeof value === "string") return { code: "ERROR", message: value };
   if (typeof value === "object") {
@@ -297,6 +320,156 @@ export function validateReviewValidateResponse(value: unknown): ThemeReviewValid
   return result;
 }
 
+export async function validateCandidateVerifyResponseV2(value: unknown): Promise<ThemeCandidateVerifyResponseV2> {
+  const obj = expectObject(value);
+  const valid = expectBoolean(obj.valid, "verify valid");
+  const diagnostics = validateDiagnostics(obj.diagnostics);
+  const error = validateError(obj.error);
+  const uiRevision = typeof obj.uiRevision === "number" ? validateSafeRevision(obj.uiRevision, "uiRevision") : undefined;
+
+  if (!valid) {
+    let candidateVerification: ThemeCandidateVerificationResultV2 | undefined;
+    if (obj.candidateVerification) {
+      const cvObj = expectObject(obj.candidateVerification);
+      candidateVerification = {
+        schema: "tfsb.theme-candidate-verification-v2",
+        schemaVersion: 2,
+        valid: false,
+        candidateId: typeof cvObj.candidateId === "string" ? cvObj.candidateId : "",
+        candidateDigest: typeof cvObj.candidateDigest === "string" ? cvObj.candidateDigest.replace(/^sha256:/, "") : "",
+        inputDigest: typeof cvObj.inputDigest === "string" ? cvObj.inputDigest.replace(/^sha256:/, "") : "",
+        outputDigest: typeof cvObj.outputDigest === "string" ? cvObj.outputDigest.replace(/^sha256:/, "") : "",
+        diagnostics,
+        errors: Array.isArray(cvObj.errors) ? cvObj.errors.map(String) : (error ? [error.message] : ["Candidate verification failed"]),
+        warnings: Array.isArray(cvObj.warnings) ? cvObj.warnings.map(String) : [],
+      };
+    }
+    return {
+      valid: false,
+      diagnostics,
+      error,
+      candidateVerification,
+      uiRevision,
+    };
+  }
+
+  if (!obj.descriptor) {
+    throw new ThemeLabValidationError("Valid v2 candidate verification requires descriptor");
+  }
+  if (!obj.styles) {
+    throw new ThemeLabValidationError("Valid v2 candidate verification requires styles");
+  }
+
+  const descriptor = validateThemeDescriptorV2(obj.descriptor);
+  const styles = validateThemeV2Styles(obj.styles, descriptor);
+  const compiledCss = typeof obj.compiledCss === "string" ? obj.compiledCss : (styles.map((s) => s.css).join("\n\n") + "\n");
+  await verifyThemeV2CompiledCssAndInventory(styles, descriptor, compiledCss);
+
+  const cvObj = obj.candidateVerification ? expectObject(obj.candidateVerification) : {};
+  const candidateId = typeof cvObj.candidateId === "string" && cvObj.candidateId
+    ? cvObj.candidateId
+    : (typeof (obj as any).candidateId === "string" ? (obj as any).candidateId : descriptor.themeName);
+  const rawCandidateDigest = typeof cvObj.candidateDigest === "string"
+    ? cvObj.candidateDigest
+    : (typeof (obj as any).candidateDigest === "string" ? (obj as any).candidateDigest : descriptor.inputDigest);
+  const candidateDigest = validateHexDigest(rawCandidateDigest.replace(/^sha256:/, ""), "candidateDigest");
+
+  const inputDigest = validateHexDigest(
+    typeof cvObj.inputDigest === "string" && cvObj.inputDigest
+      ? cvObj.inputDigest.replace(/^sha256:/, "")
+      : descriptor.inputDigest,
+    "inputDigest"
+  );
+  const outputDigest = validateHexDigest(
+    typeof cvObj.outputDigest === "string" && cvObj.outputDigest
+      ? cvObj.outputDigest.replace(/^sha256:/, "")
+      : descriptor.outputDigest,
+    "outputDigest"
+  );
+
+  if (inputDigest !== descriptor.inputDigest) {
+    throw new ThemeLabValidationError(`Verification inputDigest '${inputDigest}' does not match descriptor inputDigest '${descriptor.inputDigest}'`);
+  }
+  if (outputDigest !== descriptor.outputDigest) {
+    throw new ThemeLabValidationError(`Verification outputDigest '${outputDigest}' does not match descriptor outputDigest '${descriptor.outputDigest}'`);
+  }
+
+  const candidateVerification: ThemeCandidateVerificationResultV2 = {
+    schema: "tfsb.theme-candidate-verification-v2",
+    schemaVersion: 2,
+    valid: true,
+    candidateId,
+    candidateDigest,
+    inputDigest,
+    outputDigest,
+    descriptor,
+    styles,
+    compiledCss,
+    diagnostics,
+    errors: Array.isArray(cvObj.errors) ? cvObj.errors.map(String) : [],
+    warnings: Array.isArray(cvObj.warnings) ? cvObj.warnings.map(String) : [],
+  };
+
+  return {
+    valid: true,
+    candidateVerification,
+    compiledCss,
+    descriptor,
+    styles,
+    diagnostics,
+    uiRevision,
+  };
+}
+
+export async function validateCandidateAdoptResponseV2(value: unknown): Promise<ThemeCandidateAdoptResponseV2> {
+  const obj = expectObject(value);
+  const adopted = expectBoolean(obj.adopted, "adopted");
+  const requiresConfirmation = typeof obj.requiresConfirmation === "boolean" ? obj.requiresConfirmation : undefined;
+  const diagnostics = validateDiagnostics(obj.diagnostics);
+  const error = validateError(obj.error);
+
+  if (!adopted) {
+    return {
+      adopted: false,
+      requiresConfirmation,
+      diagnostics,
+      error,
+    };
+  }
+
+  const rawSpec = obj.specification ?? (obj as any).specificationV2 ?? (obj as any).specificationv2;
+  if (!rawSpec) {
+    throw new ThemeLabValidationError("Adopt response missing specification");
+  }
+  const specification = validateThemeSpecificationV2(rawSpec);
+
+  if (!obj.descriptor) {
+    throw new ThemeLabValidationError("Adopt response missing descriptor");
+  }
+  const descriptor = validateThemeDescriptorV2(obj.descriptor);
+
+  if (!obj.styles) {
+    throw new ThemeLabValidationError("Adopt response missing styles");
+  }
+  const styles = validateThemeV2Styles(obj.styles, descriptor);
+
+  let compiledCss = typeof obj.compiledCss === "string" ? obj.compiledCss : (typeof (obj as any).css === "string" ? (obj as any).css : undefined);
+  await verifyThemeV2CompiledCssAndInventory(styles, descriptor, compiledCss);
+  compiledCss = compiledCss ?? styles.map((s) => s.css).join("\n\n") + "\n";
+
+  return {
+    adopted: true,
+    requiresConfirmation,
+    specification,
+    specificationV2: specification,
+    descriptor,
+    styles,
+    compiledCss,
+    css: compiledCss,
+    diagnostics,
+  };
+}
+
 function boundExchangeRequest(request: unknown): void {
   if (new TextEncoder().encode(JSON.stringify(request)).byteLength > 32 * 1024 * 1024 - 1024) {
     throw new ThemeLabValidationError("Complete exchange context exceeds the 32 MiB transport limit; reduce included images or candidates.");
@@ -360,10 +533,89 @@ export class TauriThemeLabBridge implements ThemeLabBridge {
     return validateCandidateVerifyResponse(raw);
   }
 
+  async verifyCandidateV2(request: ThemeCandidateVerifyRequestV2): Promise<ThemeCandidateVerifyResponseV2> {
+    boundExchangeRequest(request);
+    const raw = await invoke(THEME_LAB_COMMANDS.candidateVerify, { request: {
+      candidate: request.candidate, brief: request.brief, options: request.options,
+    } });
+    return validateCandidateVerifyResponseV2(raw);
+  }
+
+  async adoptCandidateV2(request: ThemeCandidateAdoptRequestV2): Promise<ThemeCandidateAdoptResponseV2> {
+    boundExchangeRequest(request);
+    validateSafeRevision(request.uiRevision, "adoption revision");
+    const raw = await invoke(THEME_LAB_COMMANDS.candidateAdopt, { request });
+    return validateCandidateAdoptResponseV2(raw);
+  }
+
   async validateThemeReview(request: ThemeReviewValidateRequest): Promise<ThemeReviewValidateResponse> {
     boundExchangeRequest(request);
     const raw = await invoke(THEME_LAB_COMMANDS.reviewValidate, { request });
     return validateReviewValidateResponse(raw);
+  }
+
+  async compileV2(request: {
+    specification: ThemeSpecificationV2;
+    uiRevision: number;
+    sessionId?: string | undefined;
+    options?: {
+      accent?: string | undefined;
+      strictContrast?: boolean | undefined;
+    } | undefined;
+  }): Promise<ThemeV2CompileResponse> {
+    validateSafeRevision(request.uiRevision, "compileV2 request uiRevision");
+    if (request.sessionId !== undefined && typeof request.sessionId !== "string") {
+      throw new ThemeLabValidationError("Expected string for compileV2 sessionId");
+    }
+    validateThemeSpecificationV2(request.specification);
+    const raw = await invoke(THEME_LAB_COMMANDS.compile, { request });
+    return await validateThemeV2CompileResponse(raw);
+  }
+
+  async openDocument(request?: {
+    uiRevision?: number | undefined;
+    sessionId?: string | undefined;
+  } | undefined): Promise<ThemeDocumentOpenResponse> {
+    if (request?.uiRevision !== undefined) {
+      validateSafeRevision(request.uiRevision, "openDocument request uiRevision");
+    }
+    if (request?.sessionId !== undefined && typeof request.sessionId !== "string") {
+      throw new ThemeLabValidationError("Expected string for openDocument sessionId");
+    }
+    const raw = await invoke(THEME_LAB_COMMANDS.open, request ? { request } : {});
+    return await validateThemeDocumentOpenResponse(raw);
+  }
+
+  async saveDocument(request: {
+    saveAs: boolean;
+    specification: ThemeSpecification | ThemeSpecificationV2;
+    uiRevision: number;
+    sessionId?: string | undefined;
+  }): Promise<ThemeLabSaveResponse> {
+    validateSafeRevision(request.uiRevision, "saveDocument request uiRevision");
+    if (typeof request.saveAs !== "boolean") {
+      throw new ThemeLabValidationError("Expected boolean for saveDocument saveAs");
+    }
+    if (!request.specification || typeof request.specification !== "object") {
+      throw new ThemeLabValidationError("Expected specification object for saveDocument");
+    }
+    if (request.sessionId !== undefined && typeof request.sessionId !== "string") {
+      throw new ThemeLabValidationError("Expected string for saveDocument sessionId");
+    }
+    const raw = await invoke(THEME_LAB_COMMANDS.save, { request });
+    return validateSaveResponse(raw);
+  }
+
+  async updateDraft(request: {
+    sessionId: string;
+    uiRevision: number;
+  }): Promise<{ uiRevision: number }> {
+    validateSafeRevision(request.uiRevision, "updateDraft request uiRevision");
+    if (typeof request.sessionId !== "string" || !request.sessionId) {
+      throw new ThemeLabValidationError("Expected non-empty string for updateDraft sessionId");
+    }
+    const raw = await invoke(THEME_LAB_COMMANDS.draftUpdate, { request });
+    return validateDraftUpdateResponse(raw);
   }
 
   async dispose(): Promise<void> {
