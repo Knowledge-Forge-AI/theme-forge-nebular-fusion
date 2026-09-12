@@ -1,6 +1,6 @@
 {
   "productName": "Theme Forge Nebular Fusion",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -23,14 +23,26 @@
     ],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
-      "capabilities": ["main"]
+      "capabilities": [
+        "main"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/tfsb-studio-service"],
-    "resources": ["sidecar-payload/**/*", "loom-payload/**/*"],
-    "targets": ["app"],
+    "externalBin": [
+      "binaries/tfsb-studio-service"
+    ],
+    "resources": [
+      "sidecar-payload/**/*",
+      "loom-payload/**/*",
+      "loom-adapter/**/*",
+      "scene-payload/**/*",
+      "release-notices/**/*"
+    ],
+    "targets": [
+      "app"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Evidence-bound Theme Forge integration workbench",
     "longDescription": "Theme Forge Nebular Fusion is a local human-first workbench for reviewing deterministic Theme Forge candidate evidence.",

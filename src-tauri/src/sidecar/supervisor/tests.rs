@@ -345,6 +345,51 @@ fn real_host_command_lane_creates_reviews_discards_applies_and_reads_after_apply
             supervisor.open_project(canonical.to_str().unwrap_or_default(), "existing")
         })
         .map_err(|_| "project open failed".to_owned())?;
+    let snapshot = crate::state::scene_tokens::read(&host, &opened.project_handle)
+        .map_err(|_| "scene token snapshot failed".to_owned())?;
+    if snapshot.bindings.len() != 1
+        || !snapshot
+            .bindings
+            .get("brand-blue")
+            .is_some_and(|v| v.eq_ignore_ascii_case("#0066cc"))
+    {
+        return Err("scene token snapshot did not preserve opaque color".to_owned());
+    }
+    let scene_state = crate::state::scene::SceneState::new(crate::scene::runner::SceneRunner::new(
+        manifest.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
+        manifest.join("scene-payload/bin/scene-batch.js"),
+    ));
+    let draft = scene_state
+        .new_draft(crate::scene::protocol_dto::SceneNewRequest {
+            expected: None,
+            replacement_intent_id: None,
+            profile: None,
+            preset: None,
+            artboard: None,
+            title: None,
+        })
+        .map_err(|_| "scene new failed".to_owned())?;
+    let bound = scene_state
+        .bind_tokens(
+            crate::scene::protocol_dto::SceneTokenBindRequest {
+                expected: crate::scene::protocol_dto::SceneExpected {
+                    session_id: draft.session_id,
+                    revision: draft.revision,
+                    draft_input_digest: Some(draft.draft_input_digest),
+                    source_id: None,
+                    token_snapshot_id: None,
+                    engine_identity: None,
+                },
+                project_handle: opened.project_handle.clone(),
+            },
+            &host,
+        )
+        .map_err(|_| "scene bind failed".to_owned())?;
+    if bound.scene.token_bindings.as_ref() != Some(&snapshot.bindings)
+        || bound.token_snapshot_id.is_none()
+    {
+        return Err("scene token binding mismatch".to_owned());
+    }
     let create = || StudioBrandPlanStartRequest::CreateDerive {
         project_handle: opened.project_handle.clone(),
         selection: DeriveSelection::All,
@@ -400,6 +445,28 @@ fn real_host_command_lane_creates_reviews_discards_applies_and_reads_after_apply
     if !matches!(applied, StudioBrandPlanStartResult::Applied { .. }) {
         return Err("apply result was not exact".to_owned());
     }
+    let scene_status = scene_state
+        .status_with_host(
+            crate::scene::protocol_dto::SceneStatusRequest { expected: None },
+            host.scene_generation(),
+        )
+        .map_err(|_| "scene status failed".to_owned())?;
+    if !scene_status
+        .diagnostics
+        .iter()
+        .any(|d| d.code == "TOKEN_SOURCE_CHANGED")
+        || scene_status
+            .scene
+            .as_ref()
+            .and_then(|s| s.token_bindings.as_ref())
+            != Some(&snapshot.bindings)
+    {
+        return Err(
+            "host change silently altered scene snapshot or omitted freshness diagnostic"
+                .to_owned(),
+        );
+    }
+    scene_state.shutdown();
     let read = host
         .lock()
         .and_then(|mut supervisor| {

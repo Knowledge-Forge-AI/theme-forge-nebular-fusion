@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
-use crate::theme_lab::types::ThemeCandidateAdoptRequest;
 use sha2::{Digest, Sha256};
 
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 use crate::theme_lab::runner::{COMPILER_VERSION, ThemeLabRunner};
 use crate::theme_lab::types::{
-    ThemeCandidateAdoptResponse, ThemeLabCompileRequest, ThemeLabCompileResponse, ThemeLabError,
-    ThemeLabExampleResponse, ThemeLabOpenResponse, ThemeLabStatus, ThemeSpecification,
+    ThemeCandidateAdoptRequest, ThemeCandidateAdoptResponse, ThemeCandidateVerificationResult,
+    ThemeDescriptor, ThemeDocument, ThemeDraftUpdateRequest, ThemeDraftUpdateResponse,
+    ThemeLabCompileRequest, ThemeLabCompileResponse, ThemeLabError, ThemeLabExampleResponse,
+    ThemeLabOpenResponse, ThemeLabStatus,
 };
 
 #[derive(Clone)]
@@ -112,7 +113,6 @@ impl ThemeLabState {
             )
         };
 
-        // Try reading version from declared package.json if present
         let mut version = COMPILER_VERSION.to_owned();
         let adapter_path = session.runner.batch_adapter_path();
         if let Some(parent) = adapter_path.parent() {
@@ -149,20 +149,23 @@ impl ThemeLabState {
         &self,
         request: ThemeLabCompileRequest,
     ) -> StudioResult<ThemeLabCompileResponse> {
-        let req_rev = request.ui_revision.unwrap_or(0);
-        let runner = {
+        let (runner, start_session_id) = {
             let mut session = self.lock()?;
             if request
                 .session_id
                 .as_ref()
                 .is_some_and(|id| id != &session.session_id)
-                || req_rev < session.latest_revision
             {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            let req_rev = request.ui_revision.unwrap_or(0);
+            if req_rev < session.latest_revision {
                 return Ok(ThemeLabCompileResponse {
                     ui_revision: req_rev,
                     valid: false,
                     compiled_css: None,
                     descriptor: None,
+                    styles: None,
                     diagnostics: vec![],
                     error: Some(ThemeLabError {
                         code: "STALE_REVISION".to_owned(),
@@ -171,12 +174,44 @@ impl ThemeLabState {
                     }),
                 });
             }
-            session.latest_revision = session.latest_revision.max(req_rev);
-            session.dirty = true;
-            session.runner.clone()
+            if req_rev > session.latest_revision {
+                session.latest_revision = req_rev;
+            }
+            (session.runner.clone(), session.session_id.clone())
         };
 
-        runner.compile(request)
+        let req_rev = request.ui_revision.unwrap_or(0);
+        let result = runner.compile(request.clone());
+
+        {
+            let mut session = self.lock()?;
+            let is_stale = session.session_id != start_session_id
+                || request
+                    .session_id
+                    .as_ref()
+                    .is_some_and(|id| id != &session.session_id)
+                || req_rev < session.latest_revision;
+
+            if is_stale {
+                return Ok(ThemeLabCompileResponse {
+                    ui_revision: req_rev,
+                    valid: false,
+                    compiled_css: None,
+                    descriptor: None,
+                    styles: None,
+                    diagnostics: vec![],
+                    error: Some(ThemeLabError {
+                        code: "STALE_REVISION".to_owned(),
+                        message: "Stale compilation revision superseded".to_owned(),
+                        field_path: None,
+                    }),
+                });
+            }
+
+            let resp = result?;
+            session.dirty = true;
+            Ok(resp)
+        }
     }
 
     pub fn example(
@@ -186,20 +221,23 @@ impl ThemeLabState {
         session_id: Option<String>,
     ) -> StudioResult<ThemeLabExampleResponse> {
         let req_rev = ui_revision.unwrap_or(0);
-        let runner = {
+        let (runner, start_session_id) = {
             let mut session = self.lock()?;
             if session_id
                 .as_ref()
                 .is_some_and(|id| id != &session.session_id)
-                || req_rev < session.latest_revision
             {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            if req_rev < session.latest_revision {
                 return Ok(ThemeLabExampleResponse {
                     ui_revision: req_rev,
                     valid: false,
-                    example_name: example_name.clone(),
+                    example_name,
                     specification: None,
                     compiled_css: None,
                     descriptor: None,
+                    styles: None,
                     diagnostics: vec![],
                     error: Some(ThemeLabError {
                         code: "STALE_REVISION".to_owned(),
@@ -208,19 +246,62 @@ impl ThemeLabState {
                     }),
                 });
             }
-            session.latest_revision = session.latest_revision.max(req_rev);
-            session.active_file_path = None;
-            session.active_display_name = Some(format!("{example_name}.theme.json"));
-            session.active_file_mtime = None;
-            session.dirty = false;
-            session.adopted_theme_digest = None;
-            session.runner.clone()
+            if req_rev > session.latest_revision {
+                session.latest_revision = req_rev;
+            }
+            (session.runner.clone(), session.session_id.clone())
         };
 
-        runner.example(example_name, ui_revision)
+        let result = runner.example(example_name.clone(), ui_revision);
+
+        {
+            let mut session = self.lock()?;
+            let is_stale = session.session_id != start_session_id
+                || session_id
+                    .as_ref()
+                    .is_some_and(|id| id != &session.session_id)
+                || req_rev < session.latest_revision;
+
+            if is_stale {
+                return Ok(ThemeLabExampleResponse {
+                    ui_revision: req_rev,
+                    valid: false,
+                    example_name,
+                    specification: None,
+                    compiled_css: None,
+                    descriptor: None,
+                    styles: None,
+                    diagnostics: vec![],
+                    error: Some(ThemeLabError {
+                        code: "STALE_REVISION".to_owned(),
+                        message: "Stale example revision superseded".to_owned(),
+                        field_path: None,
+                    }),
+                });
+            }
+
+            let resp = result?;
+            if resp.valid {
+                session.active_file_path = None;
+                session.active_display_name = Some(format!("{example_name}.theme.json"));
+                session.active_file_mtime = None;
+                session.dirty = false;
+                session.adopted_theme_digest = None;
+            }
+            Ok(resp)
+        }
     }
 
     pub fn open_file(&self, path: PathBuf) -> StudioResult<ThemeLabOpenResponse> {
+        self.open_file_with_binding(path, None, None)
+    }
+
+    pub fn open_file_with_binding(
+        &self,
+        path: PathBuf,
+        session_id: Option<String>,
+        ui_revision: Option<u64>,
+    ) -> StudioResult<ThemeLabOpenResponse> {
         if !path.is_file() {
             return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
         }
@@ -238,8 +319,8 @@ impl ThemeLabState {
 
         let bytes = fs::read(&path)
             .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
-        let spec: ThemeSpecification = match serde_json::from_slice(&bytes) {
-            Ok(s) => s,
+        let doc: ThemeDocument = match serde_json::from_slice(&bytes) {
+            Ok(d) => d,
             Err(e) => {
                 return Ok(ThemeLabOpenResponse {
                     cancelled: false,
@@ -247,6 +328,7 @@ impl ThemeLabState {
                     display_name: Some(display_name),
                     compiled_css: None,
                     descriptor: None,
+                    styles: None,
                     diagnostics: vec![],
                     error: Some(ThemeLabError {
                         code: "INVALID_JSON".to_owned(),
@@ -257,12 +339,23 @@ impl ThemeLabState {
             }
         };
 
-        let runner = {
+        let (runner, start_session_id) = {
             let session = self.lock()?;
-            session.runner.clone()
+            if session_id
+                .as_ref()
+                .is_some_and(|id| id != &session.session_id)
+            {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            if let Some(rev) = ui_revision
+                && rev < session.latest_revision
+            {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            (session.runner.clone(), session.session_id.clone())
         };
 
-        let batch_res = runner.compile_spec(spec.clone())?;
+        let batch_res = runner.compile_spec(doc.clone())?;
         if !batch_res.valid {
             return Ok(ThemeLabOpenResponse {
                 cancelled: false,
@@ -270,6 +363,7 @@ impl ThemeLabState {
                 display_name: Some(display_name),
                 compiled_css: None,
                 descriptor: None,
+                styles: None,
                 diagnostics: batch_res.diagnostics,
                 error: batch_res.error,
             });
@@ -278,6 +372,16 @@ impl ThemeLabState {
         let mtime = metadata.modified().ok();
         {
             let mut session = self.lock()?;
+            let is_stale = session.session_id != start_session_id
+                || session_id
+                    .as_ref()
+                    .is_some_and(|id| id != &session.session_id)
+                || ui_revision.is_some_and(|rev| rev < session.latest_revision);
+
+            if is_stale {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+
             session.active_file_path = Some(path);
             session.active_display_name = Some(display_name.clone());
             session.active_file_mtime = mtime;
@@ -287,10 +391,11 @@ impl ThemeLabState {
 
         Ok(ThemeLabOpenResponse {
             cancelled: false,
-            specification: batch_res.specification.or(Some(spec)),
+            specification: batch_res.specification.or(Some(doc)),
             display_name: Some(display_name),
             compiled_css: batch_res.compiled_css,
             descriptor: batch_res.descriptor,
+            styles: batch_res.styles,
             diagnostics: batch_res.diagnostics,
             error: None,
         })
@@ -301,7 +406,26 @@ impl ThemeLabState {
         Ok(session.active_file_path.clone())
     }
 
-    pub fn save_file(&self, spec: ThemeSpecification, destination: &Path) -> StudioResult<String> {
+    pub fn active_display_name(&self) -> StudioResult<Option<String>> {
+        let session = self.lock()?;
+        Ok(session.active_display_name.clone())
+    }
+
+    pub fn save_file(
+        &self,
+        doc: impl Into<ThemeDocument>,
+        destination: &Path,
+    ) -> StudioResult<String> {
+        self.save_file_with_binding(doc.into(), destination, None, None)
+    }
+
+    pub fn save_file_with_binding(
+        &self,
+        doc: ThemeDocument,
+        destination: &Path,
+        session_id: Option<String>,
+        ui_revision: Option<u64>,
+    ) -> StudioResult<String> {
         let parent = match destination.parent() {
             Some(p) => p,
             None => return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected)),
@@ -311,17 +435,27 @@ impl ThemeLabState {
             return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
         }
 
-        // Validate specification through TFSL before saving
-        let runner = {
+        let (runner, start_session_id) = {
             let session = self.lock()?;
-            session.runner.clone()
+            if session_id
+                .as_ref()
+                .is_some_and(|id| id != &session.session_id)
+            {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            if let Some(rev) = ui_revision
+                && rev < session.latest_revision
+            {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            (session.runner.clone(), session.session_id.clone())
         };
-        let val_res = runner.validate_spec(spec.clone());
+
+        let val_res = runner.validate_spec(doc.clone());
         if val_res.is_err() {
             return Err(StudioCommandError::new(StudioReasonCode::PlanInvalid));
         }
 
-        // Check for collision / manual edit if destination already exists and matches active_file_path
         if destination.is_file() {
             let session = self.lock()?;
             let is_active_file = session.active_file_path.as_deref() == Some(destination);
@@ -334,12 +468,11 @@ impl ThemeLabState {
                     _ => false,
                 };
             if modified {
-                // File on disk was modified externally since it was loaded/saved
                 return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
             }
         }
 
-        let json_bytes = serde_json::to_vec_pretty(&spec)
+        let json_bytes = serde_json::to_vec_pretty(&doc)
             .map_err(|_| StudioCommandError::new(StudioReasonCode::PlanInvalid))?;
 
         let nanos = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
@@ -366,6 +499,16 @@ impl ThemeLabState {
         let new_mtime = fs::metadata(destination).and_then(|m| m.modified()).ok();
         {
             let mut session = self.lock()?;
+            let is_stale = session.session_id != start_session_id
+                || session_id
+                    .as_ref()
+                    .is_some_and(|id| id != &session.session_id)
+                || ui_revision.is_some_and(|rev| rev < session.latest_revision);
+
+            if is_stale {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+
             session.active_file_path = Some(destination.to_path_buf());
             session.active_display_name = Some(display_name.clone());
             session.active_file_mtime = new_mtime;
@@ -398,6 +541,7 @@ impl ThemeLabState {
                     specification: None,
                     compiled_css: None,
                     descriptor: None,
+                    styles: None,
                     diagnostics: vec![],
                     error: None,
                 });
@@ -405,8 +549,7 @@ impl ThemeLabState {
             session.latest_revision = request.ui_revision;
             session.runner.clone()
         };
-        // TFSL parses canonical packets, checks context and compiles once. No lock
-        // is held over the bounded subprocess. Recheck the lifetime before commit.
+
         let result = runner.verify_candidate(request.candidate, request.brief, request.options)?;
         if !result.valid {
             return Ok(ThemeCandidateAdoptResponse {
@@ -415,6 +558,7 @@ impl ThemeLabState {
                 specification: None,
                 compiled_css: None,
                 descriptor: None,
+                styles: None,
                 diagnostics: result.diagnostics,
                 error: result.error,
             });
@@ -425,18 +569,48 @@ impl ThemeLabState {
         let css = result.compiled_css.as_ref().ok_or_else(invalid)?;
         let specification = result.specification.as_ref().ok_or_else(invalid)?;
         let css_digest = format!("{:x}", Sha256::digest(css.as_bytes()));
-        if !verification.valid
-            || verification.theme_digest != format!("sha256:{}", descriptor.input_digest)
-            || verification
-                .computed_css_digest
-                .as_deref()
-                .map(|digest| digest.trim_start_matches("sha256:"))
-                != Some(css_digest.as_str())
-            || descriptor.output_digest != css_digest
-            || descriptor.theme_name != specification.name
-        {
-            return Err(invalid());
-        }
+
+        let adopted_theme_digest = match (verification, descriptor, specification) {
+            (
+                ThemeCandidateVerificationResult::V1(v1),
+                ThemeDescriptor::V1(d1),
+                ThemeDocument::V1(s1),
+            ) => {
+                if !v1.valid
+                    || v1.theme_digest != format!("sha256:{}", d1.input_digest)
+                    || v1
+                        .computed_css_digest
+                        .as_deref()
+                        .map(|digest| digest.trim_start_matches("sha256:"))
+                        != Some(css_digest.as_str())
+                    || d1.output_digest != css_digest
+                    || d1.theme_name != s1.name
+                {
+                    return Err(invalid());
+                }
+                v1.theme_digest.clone()
+            }
+            (
+                ThemeCandidateVerificationResult::V2(v2),
+                ThemeDescriptor::V2(d2),
+                ThemeDocument::V2(s2),
+            ) => {
+                if !v2.valid
+                    || (v2.schema != "tfsb.theme-candidate-verification-v2"
+                        && v2.schema != "tfsl.theme-candidate-verification-v2")
+                    || v2.schema_version != 2
+                    || v2.input_digest != d2.input_digest
+                    || v2.output_digest != d2.output_digest
+                    || d2.output_digest != css_digest
+                    || d2.theme_name != s2.name
+                {
+                    return Err(invalid());
+                }
+                format!("sha256:{}", v2.input_digest)
+            }
+            _ => return Err(invalid()),
+        };
+
         {
             let mut session = self.lock()?;
             if session.session_id != request.session_id
@@ -448,7 +622,7 @@ impl ThemeLabState {
             session.active_display_name = None;
             session.active_file_mtime = None;
             session.dirty = true;
-            session.adopted_theme_digest = Some(verification.theme_digest.clone());
+            session.adopted_theme_digest = Some(adopted_theme_digest);
         }
         Ok(ThemeCandidateAdoptResponse {
             adopted: true,
@@ -456,8 +630,27 @@ impl ThemeLabState {
             specification: result.specification,
             compiled_css: result.compiled_css,
             descriptor: result.descriptor,
+            styles: result.styles,
             diagnostics: result.diagnostics,
             error: None,
+        })
+    }
+
+    pub fn draft_update(
+        &self,
+        request: ThemeDraftUpdateRequest,
+    ) -> StudioResult<ThemeDraftUpdateResponse> {
+        let mut session = self.lock()?;
+        if request.session_id != session.session_id
+            || request.ui_revision <= session.latest_revision
+        {
+            return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+        }
+        session.latest_revision = request.ui_revision;
+        session.adopted_theme_digest = None;
+        session.dirty = true;
+        Ok(ThemeDraftUpdateResponse {
+            ui_revision: request.ui_revision,
         })
     }
 }

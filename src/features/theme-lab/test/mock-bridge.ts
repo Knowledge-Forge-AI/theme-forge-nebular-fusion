@@ -143,7 +143,7 @@ export const SAMPLE_CANDIDATE_A_PACKET = {
   rationale: "Improves WCAG 2.2 AA contrast on dark mode background while keeping vibrant cyan identity.",
   packageMetadata: {
     name: "@knowledge-forge-ai/starlight-theme-cyan-accessible",
-    version: "0.1.1",
+    version: "0.2.0",
     template: "default",
     license: "AGPL-3.0-or-later",
   },

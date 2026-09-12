@@ -1,0 +1,32 @@
+---
+import Default from "@astrojs/starlight/components/PageTitle.astro";
+---
+
+<div class="catalog-consumer-page-title-root" data-catalog-consumer-page-title="true" data-testid="catalog-consumer-page-title">
+  <Default {...Astro.props} />
+  <div class="catalog-consumer-badge">
+    Consumer Catalog PageTitle Precedence
+  </div>
+</div>
+
+<style>
+  .catalog-consumer-page-title-root {
+    position: relative;
+    border-left: 4px solid var(--sl-color-accent, #3b82f6);
+    padding-left: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .catalog-consumer-badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--sl-color-accent, #3b82f6);
+    background-color: var(--sl-color-accent-low, rgba(59, 130, 246, 0.1));
+    border: 1px solid var(--sl-color-accent, #3b82f6);
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    margin-top: 0.5rem;
+  }
+</style>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-scene-candidate-adopt"
+description = "Enables the studio_scene_candidate_adopt command without any pre-configured scope."
+commands.allow = ["studio_scene_candidate_adopt"]
+
+[[permission]]
+identifier = "deny-studio-scene-candidate-adopt"
+description = "Denies the studio_scene_candidate_adopt command without any pre-configured scope."
+commands.deny = ["studio_scene_candidate_adopt"]

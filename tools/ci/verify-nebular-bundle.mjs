@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
@@ -36,7 +36,7 @@ async function launchAndTerminate(executable) {
   return result;
 }
 
-/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, outputPath: string, launch?: boolean}} options */
+/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, sourceScenePayloadPath?: string, outputPath: string, launch?: boolean}} options */
 export async function verifyNebularBundle(options) {
   const appPath = resolve(options.appPath), contents = join(appPath, "Contents"), macos = join(contents, "MacOS"), resources = join(contents, "Resources");
   const identifier = execFileSync("plutil", ["-extract", "CFBundleIdentifier", "raw", join(contents, "Info.plist")], { encoding: "utf8" }).trim();
@@ -67,6 +67,33 @@ export async function verifyNebularBundle(options) {
     }
   }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
+  const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.some((/** @type {unknown} */ r) => typeof r === "string" && (r === "scene-payload/**/*" || r.includes("scene-payload")));
+  const scenePayloadPath = join(resources, "scene-payload");
+  const candidateSceneSource = options.sourceScenePayloadPath ? resolve(options.sourceScenePayloadPath) : join(STUDIO_ROOT, "src-tauri/scene-payload");
+  let sceneInventory = null;
+  let sceneReceipt = null;
+  if (configuredSceneResource) {
+    if (!existsSync(scenePayloadPath) || !existsSync(candidateSceneSource)) {
+      throw new Error("Exact prepared and bundled Scene payloads are required when scene resource is configured.");
+    }
+    const sceneBatchScript = join(scenePayloadPath, "bin/scene-batch.js");
+    if (!existsSync(sceneBatchScript)) {
+      throw new Error("Packaged scene-payload is missing bin/scene-batch.js.");
+    }
+    const [sourceScene, packedScene] = await Promise.all([
+      inventory(candidateSceneSource, candidateSceneSource),
+      inventory(scenePayloadPath, scenePayloadPath),
+    ]);
+    if (JSON.stringify(sourceScene) !== JSON.stringify(packedScene)) {
+      throw new Error("Packed scene payload differs from the prepared scene payload.");
+    }
+    sceneInventory = packedScene;
+    const prepareScript = join(STUDIO_ROOT, "tools/scene-prepare.mjs");
+    if (existsSync(prepareScript)) {
+      const { verifyScenePayload } = await import(pathToFileURL(prepareScript).href);
+      sceneReceipt = await verifyScenePayload(scenePayloadPath, resolve(options.sourceNodePath));
+    }
+  }
   const capability = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/capabilities/main.json"), "utf8"));
   if (typeof tauri.app?.security?.csp !== "string" || !tauri.app.security.csp.includes("object-src 'none'") || !tauri.app.security.csp.includes("frame-ancestors 'none'")) throw new Error("Strict CSP is missing from the bundle source configuration.");
   if (!Array.isArray(capability.permissions) || !capability.permissions.every((/** @type {unknown} */ value) => typeof value === "string")) throw new Error("Bundle capability permissions are invalid.");
@@ -99,6 +126,8 @@ export async function verifyNebularBundle(options) {
     executable: { name: executableName, architecture: "arm64", size: executableBytes.byteLength, sha256: sha256Hex(executableBytes) },
     sidecar: { filename: basename(sidecarPath), size: packedNode.byteLength, sha256: sha256Hex(packedNode), payloadFiles: packedPayload.length, payloadEqual: true, reapedAfterLaunches: options.launch ? true : null },
     loomPayload: loomInventory ? { payloadFiles: loomInventory.length, batchExecutable: true, payloadEqual: true } : null,
+    scenePayload: sceneInventory ? { payloadFiles: sceneInventory.length, batchExecutable: true, payloadEqual: true, receipt: sceneReceipt } : null,
+    sceneReceipt: sceneReceipt ?? null,
     csp: tauri.app.security.csp,
     acl: expectedAcl,
     signing: { kind: signingOutput.includes("Authority=Apple Development") || signingOutput.includes("Authority=Developer ID") ? "credentialed" : signingOutput.includes("Signature=adhoc") ? "ad-hoc" : "local-unsigned-identity", verified: true },
@@ -120,7 +149,8 @@ if (invokedDirectly) {
   }
   if (typeof parsed.app !== "string" || typeof parsed.node !== "string" || typeof parsed.payload !== "string" || typeof parsed.output !== "string") throw new Error("--app, --node, --payload, and --output are required.");
   const sourceLoomPayloadPath = typeof parsed["loom-payload"] === "string" ? parsed["loom-payload"] : (typeof parsed.loomPayload === "string" ? parsed.loomPayload : undefined);
-  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, sourceLoomPayloadPath, outputPath: parsed.output, launch: parsed.launch === true })
+  const sourceScenePayloadPath = typeof parsed["scene-payload"] === "string" ? parsed["scene-payload"] : (typeof parsed.scenePayload === "string" ? parsed.scenePayload : undefined);
+  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, sourceLoomPayloadPath, sourceScenePayloadPath, outputPath: parsed.output, launch: parsed.launch === true })
     .then((receipt) => process.stdout.write(`${JSON.stringify(receipt)}\n`))
     .catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }

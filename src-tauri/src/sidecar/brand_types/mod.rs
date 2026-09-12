@@ -19,7 +19,7 @@ pub(crate) use plan_summaries::{BrandPlanMethod, StudioPlanSummary};
 pub(crate) use qa::{QaProfile, QaProfilePage, QaResult};
 pub(crate) use raster_plan_descriptor::{FrozenRasterPlanDescriptor, QUALIFIED_RASTER_PLAN};
 pub(crate) use status::BrandStatus;
-pub(crate) use token_recipe::{RecipeGraph, TokenPage};
+pub(crate) use token_recipe::{BrandToken, RecipeGraph, TokenPage};
 
 use crate::errors::StudioResult;
 use common::decode;

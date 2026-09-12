@@ -1,0 +1,35 @@
+{
+  "schema": "tfsl.font-fixture-provenance-v1",
+  "family": "Source Code Pro",
+  "id": "source-code-pro",
+  "format": "woff2",
+  "weight": 400,
+  "style": "normal",
+  "license": "OFL-1.1",
+  "notice": "source-code-pro-ofl",
+  "sourcePackage": {
+    "name": "rust-lang/rust",
+    "version": "1.90.0",
+    "upstream": "https://github.com/rust-lang/rust",
+    "members": [
+      "src/librustdoc/html/static/fonts/SourceCodePro-Regular.ttf.woff2",
+      "src/librustdoc/html/static/fonts/SourceCodePro-LICENSE.txt"
+    ],
+    "revision": "1159e78c4747b02ef996e55082b704c09b970588"
+  },
+  "acquisition": "Unmodified local rustdoc asset; independently byte-compared to both Rust 1.90.0 and observed rustdoc revision 88d9e12ae upstream members. No provider executed.",
+  "resources": [
+    {
+      "path": "source-code-pro.woff2",
+      "bytes": 52228,
+      "sha256": "8badfe75c98da1e8315a52619f177def4618350f7b3e496baf5b8894da2c2ac0",
+      "upstreamUrl": "https://raw.githubusercontent.com/rust-lang/rust/1159e78c4747b02ef996e55082b704c09b970588/src/librustdoc/html/static/fonts/SourceCodePro-Regular.ttf.woff2"
+    },
+    {
+      "path": "LICENSE.txt",
+      "bytes": 4570,
+      "sha256": "67f54ca75bed5827c712f2d87a168c6e97d56fbd2312eea5de510adda74aaedd",
+      "upstreamUrl": "https://raw.githubusercontent.com/rust-lang/rust/1159e78c4747b02ef996e55082b704c09b970588/src/librustdoc/html/static/fonts/SourceCodePro-LICENSE.txt"
+    }
+  ]
+}

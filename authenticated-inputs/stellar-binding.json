@@ -4,17 +4,19 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "a5deea96cfec03b565e205fcd6d9bbc1e6a752d1",
-    "publicMergeCommit": "4f6d7720204c895517b544ce706624776cefb6a0",
-    "composedTreeDigest": "2743d0ba09ee22e33c3d0ffd55cad9607745ce055ab55844aba043c6f08c5521",
-    "packageJsonSha256": "d86e68fb96e5b5fca7da8b875b37ed61218c02e6b14db04cf61f3b48b6ddd380",
-    "packageLockSha256": "56902b5fc63263a683d7faabf34c34017d5cfda5465bf7019f16cbfedf1a2c55",
-    "provenance": "accepted-published-npm-package; retained-locked-support-inputs"
+    "sourceTree": "b61db2596f99d93c30713c805d0089d15d45827f",
+    "sourceRole": "lineage-only",
+    "sourceMaterializationSha256": "51011b11073a14b2e8325b2b91a59d88758745fe03c3ab337e32e8e6a633d56f",
+    "publicMergeCommit": null,
+    "composedTreeDigest": null,
+    "packageJsonSha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980",
+    "packageLockSha256": "046eb46aed69b6457d38e598ffba04276a28e045abed2098ac3b57e26e8d80b3",
+    "provenance": "exact-private-burst-rc-artifact; standalone-source-qualified"
   },
   "package": {
-    "filename": "knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz",
-    "size": 548758,
-    "sha256": "baac6608c91bf52fbdd5b84a41a9af3a074866d0e29700a03410b87575925263"
+    "filename": "knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz",
+    "sha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e",
+    "size": 634077
   },
   "raster": {
     "filename": "knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -74,51 +76,71 @@
   },
   "loom": {
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
-    "version": "0.1.0",
-    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
-    "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
-    "size": 109014,
-    "publicSource": {
-      "status": "published",
-      "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
-      "commit": "0bd72d6be18c6c1e0e23e6cb29f1e6c738c575dc",
-      "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
-      "producerRole": "durable-main"
+    "version": "0.2.0",
+    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.2.0.tgz",
+    "sha256": "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f",
+    "size": 251782,
+    "catalogBuildEvidence": {
+      "schema": "tfsl.catalog-build-evidence-v1",
+      "sha256": "e7393727c2038181a2e46a6a45b09b730b208006aaa9e95519e25038166004c1",
+      "memberCount": 97
     },
-    "testedProducer": {
-      "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
-      "commit": "58ee2de48fd77c6a0d47cdb8c85e5e79bc78a299",
-      "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
-      "packageSha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
-      "producerRole": "merge-candidate",
-      "stagingHead": {
-        "ref": "staging",
-        "commit": "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc",
-        "tree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
-        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+    "history": {
+      "schema": "tfsb.released-loom-input-v1",
+      "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
+      "version": "0.1.0",
+      "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
+      "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+      "size": 109014,
+      "publicSource": {
+        "status": "published",
+        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+        "commit": "0bd72d6be18c6c1e0e23e6cb29f1e6c738c575dc",
+        "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+        "producerRole": "durable-main"
       },
-      "base": {
-        "ref": "main",
-        "commit": "ff31d83517c7f826acabd465a121e68eb498ced9",
-        "tree": null,
-        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+      "testedProducer": {
+        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+        "commit": "58ee2de48fd77c6a0d47cdb8c85e5e79bc78a299",
+        "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+        "packageSha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+        "producerRole": "merge-candidate",
+        "stagingHead": {
+          "ref": "staging",
+          "commit": "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc",
+          "tree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+          "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+        },
+        "base": {
+          "ref": "main",
+          "commit": "ff31d83517c7f826acabd465a121e68eb498ced9",
+          "tree": null,
+          "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+        },
+        "parents": [
+          "ff31d83517c7f826acabd465a121e68eb498ced9",
+          "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc"
+        ],
+        "stagingAndMergeTreesEqual": true,
+        "runId": 34247384527,
+        "runAttempt": 1,
+        "jobId": 102132812631,
+        "artifactId": 10064563215,
+        "artifactDigest": "sha256:4cfbf7eeecc97e919b35846636c157ac9f4788e988819c27eaef26d0831d4010",
+        "artifactManifestSha256": "365f2b800bbbeb423913244115e17fee2cc5e5bbd368d36e2252b06bbd71a37c"
       },
-      "parents": [
-        "ff31d83517c7f826acabd465a121e68eb498ced9",
-        "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc"
-      ],
-      "stagingAndMergeTreesEqual": true,
-      "runId": 34247384527,
-      "runAttempt": 1,
-      "jobId": 102132812631,
-      "artifactId": 10064563215,
-      "artifactDigest": "sha256:4cfbf7eeecc97e919b35846636c157ac9f4788e988819c27eaef26d0831d4010",
-      "artifactManifestSha256": "365f2b800bbbeb423913244115e17fee2cc5e5bbd368d36e2252b06bbd71a37c"
+      "equality": {
+        "durableMainAndTestedProducerTreesEqual": true,
+        "registryAndTestedPackageSha256Equal": true
+      }
     },
-    "equality": {
-      "durableMainAndTestedProducerTreesEqual": true,
-      "registryAndTestedPackageSha256Equal": true
-    }
+    "status": "release-candidate"
   },
-  "canonicalEpochMs": 1704067200000
+  "canonicalEpochMs": 1704067200000,
+  "scene": {
+    "filename": "scene-input.tgz",
+    "sha256": "013dc18c13b0e6d3abc82bb9f2c22af091b4af1a6321a0cf425c0a3978ab5709",
+    "bytes": 211242,
+    "sourceTreeDigest": "964775fc674636e296d8a343272b0984f4f18c185f4434880b53bff5ce85ef48"
+  }
 }
