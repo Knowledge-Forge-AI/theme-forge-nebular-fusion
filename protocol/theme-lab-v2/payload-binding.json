@@ -1,6 +1,6 @@
 {
   "schema": "tfsb.theme-lab-payload-binding-v1",
-  "packageArchiveSha256": "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f",
+  "packageArchiveSha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34",
   "node": {
     "version": "22.23.2",
     "target": "aarch64-apple-darwin",
@@ -341,7 +341,7 @@
     {
       "path": "dist/catalog-build-evidence.json",
       "bytes": 31637,
-      "sha256": "e7393727c2038181a2e46a6a45b09b730b208006aaa9e95519e25038166004c1"
+      "sha256": "9f4a3ca081d2fdf6c66c9eac2e8996583fe338e223eab5504b986456d925ea48"
     },
     {
       "path": "dist/cli-catalog.d.ts",
@@ -370,8 +370,8 @@
     },
     {
       "path": "dist/cli-v2.js",
-      "bytes": 6738,
-      "sha256": "8642ac637c9738f951582021a79d2e6ca0feb01452f2f2eee3702008d4f55493"
+      "bytes": 6751,
+      "sha256": "4976a08c0ad2280a2e4293469ab40a2ad7fc8d3daff8d83ec3cd053018cb0473"
     },
     {
       "path": "dist/cli.d.ts",
@@ -765,18 +765,18 @@
     },
     {
       "path": "dist/design-exchange-catalog/executable.d.ts",
-      "bytes": 356,
-      "sha256": "9c45f6dcd873ebabd74006aa613af2edd20a6df1f25f46ee21b0decd04db156d"
+      "bytes": 428,
+      "sha256": "49602ffd5c6d0bbdc6d0b8ef615db5491febd76bcd19f13f78b5c6947a305f17"
     },
     {
       "path": "dist/design-exchange-catalog/executable.d.ts.map",
-      "bytes": 364,
-      "sha256": "fc49422b5947c378e2c7f98516cdbbffcda77c929d3543bf7874100f7a9126ac"
+      "bytes": 437,
+      "sha256": "0d0b5c9d5a599b99e625c13dcc672d2926da41eddcf4b78797a90cf106d25bed"
     },
     {
       "path": "dist/design-exchange-catalog/executable.js",
-      "bytes": 5398,
-      "sha256": "fcebe48107adc800882abc0d34b1aae8121d5f8dc7725479ef2b19fc9caed2a0"
+      "bytes": 7657,
+      "sha256": "6e50bae10ec3a5fac4f6c894e5617ddf4c5bc6c016223dc70203b655ffcb4c60"
     },
     {
       "path": "dist/design-exchange-catalog/index.d.ts",
@@ -1116,12 +1116,12 @@
     {
       "path": "dist/font-resources.d.ts.map",
       "bytes": 814,
-      "sha256": "e2fa475086fbc5a252b3d25f9f07a205a9da769a954668c0396e6d6cb8cfed8a"
+      "sha256": "b5387d949f5dea6a57b27a09aace3687e7a05fe695e533e425381ce784844350"
     },
     {
       "path": "dist/font-resources.js",
-      "bytes": 16389,
-      "sha256": "3811a7b49a143ce09eca9298056f82806d352639361f8f6e19e47ddc9f3d8615"
+      "bytes": 15122,
+      "sha256": "6c7a2690acdf7ff4cb0cecadefe95c2104947f21414f212c0ac02051c228d07b"
     },
     {
       "path": "dist/generator/code-emitter.d.ts",
@@ -1535,8 +1535,8 @@
     },
     {
       "path": "protocol/catalog-source-qualification.json",
-      "bytes": 14279,
-      "sha256": "e2b0f0f406e0475e8d7791b39412cff9a9c3c3d7e0debafdf85df32b1e5c9cc9"
+      "bytes": 15199,
+      "sha256": "5948fa78302432cedef7ebf1d387a771c1329867215144a3ea4a14c0cbef8603"
     },
     {
       "path": "protocol/tfsl-theme-evidence-v1/README.md",

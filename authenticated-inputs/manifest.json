@@ -1,12 +1,12 @@
 {
   "fileCount": 14,
-  "totalBytes": 6140020,
-  "treeDigest": "68fc3afe2fdc5138b8e566093c683146774db61ea40bbf387364b930e7893eb3",
+  "totalBytes": 6140767,
+  "treeDigest": "2257e30fec5a2ca57a85540c194619a85bceb18a47bf9c4c00ef49dfc47aeb0e",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz",
       "size": 634077,
-      "mode": 420,
+      "mode": 384,
       "sha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e"
     },
     {
@@ -25,25 +25,25 @@
       "path": "loom-binding.json",
       "size": 2495,
       "mode": 420,
-      "sha256": "9e49b9fd94ee1bb8021f8401cc24a38931c73de8b686a3db877c1b242e5a4c9f"
+      "sha256": "fcc536009c37b1373a93b0a478fcf46dd092ac6af790bd485217193704a83185"
     },
     {
       "path": "loom-tarball/knowledge-forge-ai-theme-forge-stellar-loom-0.2.0.tgz",
-      "size": 251782,
-      "mode": 420,
-      "sha256": "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f"
+      "size": 252529,
+      "mode": 384,
+      "sha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34"
     },
     {
       "path": "manifest.json",
       "size": 2410,
       "mode": 420,
-      "sha256": "67ba6513f6fa5870c90bbbaf0c740efb5bd96df807daad769eb27ef573fd3cfa"
+      "sha256": "9a6ba7bf26c939775c7274fe4a78a1a03e219bf95481f2d6d9d73956a0cac812"
     },
     {
       "path": "publication-manifest.json",
       "size": 2982,
       "mode": 420,
-      "sha256": "08167f32f6fa6d09124ec388c24256f78ccbe24d9147ba2968f5f3f81e476dcf"
+      "sha256": "ae0c1953815a0527a956bf456e64d702e571d00bc22610938a1c447ebefb0ff7"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -67,7 +67,7 @@
       "path": "stellar-binding.json",
       "size": 6365,
       "mode": 420,
-      "sha256": "fbba7363c1c02281ed4fc0fd78dc0487bfd35829d7a36874bda7c7f7bec671e1"
+      "sha256": "badd82e4df4b2830004e84bc94cd1033cb1a52584042b4aa0c643a7f3982db48"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",

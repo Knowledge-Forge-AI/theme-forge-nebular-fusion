@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import "../features/theme-lab/test/structural-inventory.test";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import { ThemeV2Controls } from "../features/theme-lab/ThemeV2Controls";
 import {
   SAMPLE_THEME_V2,
@@ -228,9 +228,10 @@ describe("ThemeV2Controls Component", () => {
   it("edits token sets: supports raw hex strings, value objects, and alias objects", () => {
     const onChangeSpy = vi.fn();
     render(<ControlledThemeV2Controls onChangeSpy={onChangeSpy} />);
+    const group = within(screen.getByTestId("group-token-sets"));
 
     // 1. Edit raw hex token
-    const tokenInput = screen.getByLabelText("Token space-page-dark Value");
+    const tokenInput = group.getByLabelText("Token space-page-dark Value");
     fireEvent.change(tokenInput, { target: { value: "#112233" } });
 
     expect(onChangeSpy).toHaveBeenCalled();
@@ -240,7 +241,7 @@ describe("ThemeV2Controls Component", () => {
     expect(tokens!["space-page-dark"]).toBe("#112233");
 
     // 2. Change kind to Value Object
-    const kindSelect = screen.getByLabelText("Token space-page-dark Kind");
+    const kindSelect = group.getByLabelText("Token space-page-dark Kind");
     fireEvent.change(kindSelect, { target: { value: "value" } });
 
     spec = getLastCall(onChangeSpy);
@@ -250,7 +251,7 @@ describe("ThemeV2Controls Component", () => {
 
     // 3. Change kind to Alias Object
     fireEvent.change(kindSelect, { target: { value: "alias" } });
-    const aliasInput = screen.getByLabelText("Token space-page-dark Value");
+    const aliasInput = group.getByLabelText("Token space-page-dark Value");
     fireEvent.change(aliasInput, { target: { value: "space-nav-dark" } });
 
     spec = getLastCall(onChangeSpy);
@@ -259,7 +260,7 @@ describe("ThemeV2Controls Component", () => {
     });
 
     // 4. Add token to set
-    const addTokenBtn = screen.getByLabelText("Add token to celestia-tokens");
+    const addTokenBtn = group.getByLabelText("Add token to celestia-tokens");
     fireEvent.click(addTokenBtn);
 
     spec = getLastCall(onChangeSpy);
@@ -269,7 +270,7 @@ describe("ThemeV2Controls Component", () => {
     expect(tokenKeys.length).toBeGreaterThan(Object.keys(sampleTokens).length);
 
     // 5. Remove a token
-    const removeBtn = screen.getByLabelText("Delete token space-card-dark");
+    const removeBtn = group.getByLabelText("Delete token space-card-dark");
     fireEvent.click(removeBtn);
 
     spec = getLastCall(onChangeSpy);
@@ -361,20 +362,21 @@ describe("ThemeV2Controls Component", () => {
   it("handles code presentation switching, frame, locked tabs, marks, and syntax rules", () => {
     const onChangeSpy = vi.fn();
     render(<ControlledThemeV2Controls onChangeSpy={onChangeSpy} />);
+    const group = within(screen.getByTestId("group-code-presentation"));
 
     expect(screen.getAllByRole("note").some(node => node.textContent?.includes("NOT live-previewed"))).toBe(true);
 
     // In SAMPLE_THEME_V2, expressive-code is configured
-    const modeSelect = screen.getByLabelText("Code Presentation Mode") as HTMLSelectElement;
+    const modeSelect = group.getByLabelText("Code Presentation Mode") as HTMLSelectElement;
     expect(modeSelect.value).toBe("expressive-code");
 
     // Tabs is locked to deferred
-    const tabsInput = screen.getByLabelText("Code Tabs") as HTMLInputElement;
+    const tabsInput = group.getByLabelText("Code Tabs") as HTMLInputElement;
     expect(tabsInput.disabled).toBe(true);
     expect(tabsInput.value).toBe("deferred");
 
     // Frame change
-    const frameSelect = screen.getByLabelText("Code Frame");
+    const frameSelect = group.getByLabelText("Code Frame");
     fireEvent.change(frameSelect, { target: { value: "terminal" } });
 
     let spec = getLastCall(onChangeSpy);
@@ -384,7 +386,7 @@ describe("ThemeV2Controls Component", () => {
     }
 
     // Copy change
-    const copySelect = screen.getByLabelText("Code Copy Button");
+    const copySelect = group.getByLabelText("Code Copy Button");
     fireEvent.change(copySelect, { target: { value: "standard" } });
 
     spec = getLastCall(onChangeSpy);
@@ -393,7 +395,7 @@ describe("ThemeV2Controls Component", () => {
     }
 
     // Marks color change
-    const markedColor = screen.getByLabelText("Marked Color");
+    const markedColor = group.getByLabelText("Marked Color");
     fireEvent.change(markedColor, { target: { value: "#10b981" } });
 
     spec = getLastCall(onChangeSpy);
@@ -402,7 +404,7 @@ describe("ThemeV2Controls Component", () => {
     }
 
     // Add syntax rule
-    const addRuleBtn = screen.getByLabelText("Add light syntax rule");
+    const addRuleBtn = group.getByLabelText("Add light syntax rule");
     fireEvent.click(addRuleBtn);
 
     spec = getLastCall(onChangeSpy);
@@ -421,9 +423,10 @@ describe("ThemeV2Controls Component", () => {
   it("handles catalog layout, title copy, pagination and sidebar groups", () => {
     const onChangeSpy = vi.fn();
     render(<ControlledThemeV2Controls onChangeSpy={onChangeSpy} />);
+    const group = within(screen.getByTestId("group-catalog"));
 
     // Enable catalog
-    const catalogToggle = screen.getByLabelText("Enable Catalog Envelope");
+    const catalogToggle = group.getByLabelText("Enable Catalog Envelope");
     fireEvent.click(catalogToggle);
 
     expect(onChangeSpy).toHaveBeenCalled();
@@ -432,57 +435,57 @@ describe("ThemeV2Controls Component", () => {
     expect(spec.catalog?.layout).toBe("standard");
 
     // Catalog Layout (2 options: standard, compact)
-    const layoutSelect = screen.getByLabelText("Catalog Layout");
+    const layoutSelect = group.getByLabelText("Catalog Layout");
     fireEvent.change(layoutSelect, { target: { value: "compact" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.layout).toBe("compact");
 
     // Page Title Copy (3 options: none, title, url)
-    const titleCopySelect = screen.getByLabelText("Page Title Copy Mode");
+    const titleCopySelect = group.getByLabelText("Page Title Copy Mode");
     fireEvent.change(titleCopySelect, { target: { value: "url" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.pageTitle.copy).toBe("url");
 
     // Pagination variant (3 options: plain, card, compact)
-    const pagSelect = screen.getByLabelText("Pagination Variant");
+    const pagSelect = group.getByLabelText("Pagination Variant");
     fireEvent.change(pagSelect, { target: { value: "card" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.pagination.variant).toBe("card");
 
     // Sidebar mode (4 options: nested, tabs, select, active-only)
-    const sidebarModeSelect = screen.getByLabelText("Sidebar Mode");
+    const sidebarModeSelect = group.getByLabelText("Sidebar Mode");
     fireEvent.change(sidebarModeSelect, { target: { value: "tabs" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.sidebar.mode).toBe("tabs");
 
     // Sidebar group IDs
-    const sidebarGroupsInput = screen.getByLabelText("Sidebar Group IDs");
+    const sidebarGroupsInput = group.getByLabelText("Sidebar Group IDs");
     fireEvent.change(sidebarGroupsInput, { target: { value: "core, heroes, width" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.sidebar.groupIds).toEqual(["core", "heroes", "width"]);
-
   });
 
   it("handles catalog Hero layout, media and font licenses", () => {
     const onChangeSpy = vi.fn();
     render(<ControlledThemeV2Controls onChangeSpy={onChangeSpy} />);
-    fireEvent.click(screen.getByLabelText("Enable Catalog Envelope"));
+    const group = within(screen.getByTestId("group-catalog"));
+    fireEvent.click(group.getByLabelText("Enable Catalog Envelope"));
     let spec = getLastCall(onChangeSpy);
 
     // Hero route layout (Hero5: centered, media-top, media-left, media-right, banner)
-    const heroLayoutSelect = screen.getByLabelText("Hero Layout");
+    const heroLayoutSelect = group.getByLabelText("Hero Layout");
     fireEvent.change(heroLayoutSelect, { target: { value: "media-right" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.hero.routes[0]!.layout).toBe("media-right");
 
     // Hero media (fixed loom-orbit)
-    const heroMediaSelect = screen.getByLabelText("Hero Media");
+    const heroMediaSelect = group.getByLabelText("Hero Media");
     fireEvent.change(heroMediaSelect, { target: { value: "loom-orbit" } });
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.hero.routes[0]!.media).toBe("loom-orbit");
 
     // Add font license
-    const addLicenseBtn = screen.getByLabelText("Add Font License");
+    const addLicenseBtn = group.getByLabelText("Add Font License");
     fireEvent.click(addLicenseBtn);
     spec = getLastCall(onChangeSpy);
     expect(spec.catalog?.fontLicenses.length).toBe(1);
@@ -491,17 +494,18 @@ describe("ThemeV2Controls Component", () => {
   it("displays unavailable font materialization notice, provides no picker command, preserves editable logical font declarations", () => {
     const onChangeSpy = vi.fn();
     render(<ControlledThemeV2Controls onChangeSpy={onChangeSpy} />);
+    const group = within(screen.getByTestId("group-fonts"));
 
     // Check notice banner
-    const notice = screen.getByLabelText("Font Materialization Notice");
+    const notice = group.getByLabelText("Font Materialization Notice");
     expect(notice.textContent).toContain("logical metadata only");
     expect(notice.textContent).toContain("file picker commands are unavailable");
 
     // Ensure NO picker button exists
-    expect(screen.queryByRole("button", { name: /pick|browse|upload/i })).toBeNull();
+    expect(group.queryByRole("button", { name: /pick|browse|upload/i })).toBeNull();
 
     // Add font declaration
-    const addFontBtn = screen.getByLabelText("Add Font Declaration");
+    const addFontBtn = group.getByLabelText("Add Font Declaration");
     fireEvent.click(addFontBtn);
 
     expect(onChangeSpy).toHaveBeenCalled();
@@ -510,14 +514,14 @@ describe("ThemeV2Controls Component", () => {
     expect(spec.fonts[0]!.family).toBe("Custom Font");
 
     // Edit font family
-    const familyInput = screen.getByLabelText("Font Family");
+    const familyInput = group.getByLabelText("Font Family");
     fireEvent.change(familyInput, { target: { value: "Geist Mono" } });
 
     spec = getLastCall(onChangeSpy);
     expect(spec.fonts[0]!.family).toBe("Geist Mono");
 
     // Remove font declaration
-    const removeBtn = screen.getByLabelText(`Remove font ${spec.fonts[0]!.id}`);
+    const removeBtn = group.getByLabelText(`Remove font ${spec.fonts[0]!.id}`);
     fireEvent.click(removeBtn);
 
     spec = getLastCall(onChangeSpy);

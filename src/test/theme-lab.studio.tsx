@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ThemeLab } from "../features/theme-lab/ThemeLab";
 import { MockThemeLabBridge, SAMPLE_BRIEF_PACKET, SAMPLE_CANDIDATE_A_PACKET, SAMPLE_CANDIDATE_B_PACKET, SAMPLE_REVIEW_PACKET } from "../features/theme-lab/test/mock-bridge";
 import { SenderEvidenceImage } from "../features/theme-lab/SenderEvidenceImage";
@@ -16,12 +16,13 @@ describe("Theme Lab Component", () => {
     fireEvent.click(screen.getByRole("button", { name: "New v2 Theme" }));
     await waitFor(() => expect(compileV2).toHaveBeenCalled());
     expect(screen.getByText(/\* Modified/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText("body Font Size"), { target: { value: "oops" } });
+    const typo = () => within(screen.getByTestId("group-typography"));
+    fireEvent.change(typo().getByLabelText("body Font Size"), { target: { value: "oops" } });
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("tab", { name: "CSS & Descriptor" }));
     fireEvent.click(screen.getByRole("tab", { name: "Theme controls" }));
-    expect((screen.getByLabelText("body Font Size") as HTMLInputElement).value).toBe("oops");
-    fireEvent.change(screen.getByLabelText("body Font Size"), { target: { value: "18" } });
+    expect((typo().getByLabelText("body Font Size") as HTMLInputElement).value).toBe("oops");
+    fireEvent.change(typo().getByLabelText("body Font Size"), { target: { value: "18" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(saveDocument).toHaveBeenCalled());
     expect(saveDocument.mock.calls[0]?.[0]).toMatchObject({ saveAs: true, specification: { schemaVersion: "tfsl.theme-v2", typography: { body: { size: 18 } } } });

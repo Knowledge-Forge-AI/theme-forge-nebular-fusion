@@ -1,14 +1,14 @@
 {
   "schema": "tfsb.source-candidate-v1",
-  "lineageCommit": "b61db2596f99d93c30713c805d0089d15d45827f",
+  "lineageCommit": "ce48907e930ea2f4581baf30d7bc2c88a7fec162",
   "identity": {
-    "commit": "b61db2596f99d93c30713c805d0089d15d45827f",
+    "commit": "ce48907e930ea2f4581baf30d7bc2c88a7fec162",
     "commitRole": "lineage-only",
     "kind": "selected-worktree-materialization",
     "materialization": {
-      "fileCount": 1285,
-      "totalBytes": 17033329,
-      "treeDigest": "51011b11073a14b2e8325b2b91a59d88758745fe03c3ab337e32e8e6a633d56f",
+      "fileCount": 1289,
+      "totalBytes": 17103625,
+      "treeDigest": "1e3a655472f317b35fef976f523d98a77b26258fcdd4284de2bd06aabdfd66a5",
       "files": [
         {
           "path": ".gitignore",
@@ -584,7 +584,7 @@
           "path": "apps/studio/protocol/theme-lab-v2/payload-binding.json",
           "size": 53771,
           "mode": 420,
-          "sha256": "d15f93edb6142bd7b55e08a69cd45fe2e8fc363760277bc04b99cc51dce1839f"
+          "sha256": "14528b13ae270cc6988e53bf2a071ad1f52809801ebfbf558895e8b228d1f38a"
         },
         {
           "path": "apps/studio/rust-toolchain.toml",
@@ -1628,7 +1628,7 @@
           "path": "apps/studio/src/features/theme-lab/gallery-contract.ts",
           "size": 44845,
           "mode": 420,
-          "sha256": "c2ce881acd44f696955dead3fe2fbe7452ab2c1921ed359c322ec1f58e5cf0cc"
+          "sha256": "4c860207dde6ceea253a5fed3367d2a6e5307dc32914808146bbb3b1b8f3383f"
         },
         {
           "path": "apps/studio/src/features/theme-lab/request-builders.ts",
@@ -1944,9 +1944,9 @@
         },
         {
           "path": "apps/studio/src/test/theme-lab.studio.tsx",
-          "size": 55039,
+          "size": 55118,
           "mode": 420,
-          "sha256": "78d132ad1a1d5c972990172bfe0b0925fc3a3545644fc7f37522ec69343b3502"
+          "sha256": "4a9d4a667a34487ac1d679298354884fe55767450e11903d6fec28afe677f48b"
         },
         {
           "path": "apps/studio/src/test/theme-v2-bridge.studio.ts",
@@ -1956,9 +1956,9 @@
         },
         {
           "path": "apps/studio/src/test/theme-v2-controls.studio.tsx",
-          "size": 20553,
+          "size": 20860,
           "mode": 420,
-          "sha256": "b54a3038e3bf50bde9c2513d885f49c8a50cf5dc929ea1b82e403d709a935c98"
+          "sha256": "242264fdaa40ec7bd2a2c3cfa93b1d38fcaa1bc7a29b9a73ad45c483443cc8a2"
         },
         {
           "path": "apps/studio/src/test/theme-v2-exchange.studio.tsx",
@@ -3030,9 +3030,9 @@
         },
         {
           "path": "packages/stellar-loom/protocol/catalog-source-qualification.json",
-          "size": 14279,
+          "size": 15199,
           "mode": 420,
-          "sha256": "e2b0f0f406e0475e8d7791b39412cff9a9c3c3d7e0debafdf85df32b1e5c9cc9"
+          "sha256": "5948fa78302432cedef7ebf1d387a771c1329867215144a3ea4a14c0cbef8603"
         },
         {
           "path": "packages/stellar-loom/protocol/tfsl-theme-evidence-v1/README.md",
@@ -3258,9 +3258,9 @@
         },
         {
           "path": "packages/stellar-loom/src/cli-v2.ts",
-          "size": 6622,
+          "size": 6635,
           "mode": 420,
-          "sha256": "b443b093c334e7e8106531846057d90f147d59cae052610a3d71b21444b8bf52"
+          "sha256": "ea5d2196659b5edeed4b9aea3503dfe9b3b6dac3a419bc95c52fe18c94174919"
         },
         {
           "path": "packages/stellar-loom/src/cli.ts",
@@ -3354,9 +3354,9 @@
         },
         {
           "path": "packages/stellar-loom/src/design-exchange-catalog/executable.ts",
-          "size": 5228,
+          "size": 7204,
           "mode": 420,
-          "sha256": "3128345b10e0de685e467ee52ebd997c66d06dfdb2bd76fca1a92f1fc6c10058"
+          "sha256": "64fa7caf7bb47d7ef4206b565c10b2a735eda1e0f01910540c80223cb09deb4c"
         },
         {
           "path": "packages/stellar-loom/src/design-exchange-catalog/index.ts",
@@ -3558,9 +3558,9 @@
         },
         {
           "path": "packages/stellar-loom/src/font-resources.ts",
-          "size": 16779,
+          "size": 15473,
           "mode": 420,
-          "sha256": "566312badf04fa48acb938de923ea61b0c7cf41385cf6bc1c37f6a861802d749"
+          "sha256": "09e1802028ae19298926ea089d7b384bb1ec4a7356bb78ca55993b94bd687ca3"
         },
         {
           "path": "packages/stellar-loom/src/generator/code-emitter.ts",
@@ -3774,15 +3774,15 @@
         },
         {
           "path": "packages/stellar-loom/test/code-domain.test.ts",
-          "size": 27880,
+          "size": 27986,
           "mode": 420,
-          "sha256": "103d7e9cf81c020d6c70e15ccec555a00344c418350676664797632a0ec004cb"
+          "sha256": "cac0f7aa95d7e93e4f2c71a45e60b79ab0cda1a300eb4254f2224ece307ebf53"
         },
         {
           "path": "packages/stellar-loom/test/code-evidence.test.ts",
-          "size": 1914,
+          "size": 2019,
           "mode": 420,
-          "sha256": "5e900a072dc50670fb4016ac24b7804ca8a908037774d45eb5f1b42e59947f96"
+          "sha256": "1ead958697ea95f4bb94ec1bdca54110c4ddd2ace0a9a45a704ac9ad0aac4b4f"
         },
         {
           "path": "packages/stellar-loom/test/code-exchange.test.ts",
@@ -4211,10 +4211,22 @@
           "sha256": "8633147f5ede978165b6b08e642844daa9010539b759d4441167d6f34ea276d6"
         },
         {
+          "path": "packages/stellar-loom/test/recovery-source-qualification.ts",
+          "size": 894,
+          "mode": 420,
+          "sha256": "11ccc3e30d66ed223d9eabc86fb92174488c637ddf0e1faffb2298c2563e8f8d"
+        },
+        {
           "path": "packages/stellar-loom/test/release-provenance.test.ts",
           "size": 2406,
           "mode": 420,
           "sha256": "5dcf3aacddc3f2f84100de4e2f2e6c6004511a02effdc845d43eb35dfe402a75"
+        },
+        {
+          "path": "packages/stellar-loom/test/tfsb66b-r7-security-hardening.test.ts",
+          "size": 12993,
+          "mode": 420,
+          "sha256": "abcac3e2a9e375586a0c6976416d45dfdbacdef0b56e39bf5d12b31e9a8b0e09"
         },
         {
           "path": "packages/stellar-loom/test/v1-regression.test.ts",
@@ -4224,9 +4236,9 @@
         },
         {
           "path": "packages/stellar-loom/test/v2-core.test.ts",
-          "size": 26244,
+          "size": 26349,
           "mode": 420,
-          "sha256": "afc32c423f28f52bb036a02c84b11b4af3fe35e19ce76533a818c5f76975c5c3"
+          "sha256": "a5f6e95a25ed0a0b1dccba3685fab9c3c35b558b8e842f74151885e5f71a9431"
         },
         {
           "path": "packages/stellar-loom/test/v2-package.test.ts",
@@ -5958,9 +5970,9 @@
         },
         {
           "path": "test/brand/raster-packed-consumer.test.ts",
-          "size": 2592,
+          "size": 2552,
           "mode": 420,
-          "sha256": "b5de987bda47641fc88b4620b17240642be2ac48cb50a13f6ddf36ad72b102a3"
+          "sha256": "478a901d0c7f7fd66418f813647148718182224de7fccf3e862c2ba5d60f02cd"
         },
         {
           "path": "test/brand/raster-qa-integration.test.ts",
@@ -6021,6 +6033,12 @@
           "size": 4086,
           "mode": 420,
           "sha256": "55dc58fcc13cb016faca409f35a52c11b9d634980471bd3a3b0287b9c2e83010"
+        },
+        {
+          "path": "test/ci/package-version-qualification.test.ts",
+          "size": 20069,
+          "mode": 420,
+          "sha256": "ba905ab5fcf06b0bbdcb09ed535b13762f39eeb1820da3be41fabc15207784eb"
         },
         {
           "path": "test/classifier.test.ts",
@@ -6084,9 +6102,9 @@
         },
         {
           "path": "test/directory-import.test.ts",
-          "size": 18838,
+          "size": 18864,
           "mode": 420,
-          "sha256": "60fd7a76130f8399dfbe36038e8fecc8bbc8ece157b45cdbb122c8a5b607cdc4"
+          "sha256": "cd3d4d8c3fb9e1f310ed5bb3683b3442b8176ffd753e647fe62baf35dd32537d"
         },
         {
           "path": "test/directory-snapshot-loader.test.ts",
@@ -6342,9 +6360,9 @@
         },
         {
           "path": "test/provenance3.test.ts",
-          "size": 12970,
+          "size": 12991,
           "mode": 420,
-          "sha256": "fc1618bbe8f7237c5441dd24a55feccc38676403f3cfb77267f731640352cf3c"
+          "sha256": "db6e291c02a2410edc87302fbf24b55d10618cc2ab9a651ad66f9e77380c9a20"
         },
         {
           "path": "test/reconcile-directory.test.ts",
@@ -6390,9 +6408,9 @@
         },
         {
           "path": "test/scene-files.test.ts",
-          "size": 20209,
+          "size": 20397,
           "mode": 420,
-          "sha256": "2de9db01f2c03d08ee3657a7f648c07c43388aab7702c226df6113fa37480b9e"
+          "sha256": "771fd9a618d0ed1f75f4aca0266f1d3991ab3964b41b1f23081510026c226f28"
         },
         {
           "path": "test/scene-hardening.test.ts",
@@ -6612,9 +6630,9 @@
         },
         {
           "path": "test/tfsb34-cross-feature.test.ts",
-          "size": 22595,
+          "size": 22533,
           "mode": 420,
-          "sha256": "f60465cafbfe6ed830480166657586faad7927dcfb7ac9785213d3fb9d01d382"
+          "sha256": "a7ab36f07cd9347ebbfed535701bf86ded6ef6e12286256bdd13558f863aa4d2"
         },
         {
           "path": "test/tfsb48-r2-core-matrix.test.ts",
@@ -7392,9 +7410,9 @@
         },
         {
           "path": "tools/ci/artifact-manifest.mjs",
-          "size": 9194,
+          "size": 9840,
           "mode": 420,
-          "sha256": "509dbe3994b8392518e8c32e47220fa8d487b49725bdc50cb19d506162e7106d"
+          "sha256": "a363fbd3c3628940e601542dc520f942016809d5d5da767fffd2adc6fb4e986c"
         },
         {
           "path": "tools/ci/ci-contract.mjs",
@@ -7446,9 +7464,9 @@
         },
         {
           "path": "tools/ci/qualify-native-reproducibility.mjs",
-          "size": 24887,
+          "size": 42598,
           "mode": 420,
-          "sha256": "99fc971c97ab334971b8e08954118aab94ebf69f14b18f21b24a15dc99325a6d"
+          "sha256": "858819719ca3df97ee2fb9104baeeeb6971504eeb8cfd64948723b70a33bf2bf"
         },
         {
           "path": "tools/ci/run-native-theme-lab-smoke.mjs",
@@ -7491,6 +7509,12 @@
           "size": 13046,
           "mode": 420,
           "sha256": "399fc8d854c12c71d4e26cec09638febbc49bdab06fd8ae489f2eeb87139f277"
+        },
+        {
+          "path": "tools/package-qualification-identity.mjs",
+          "size": 9846,
+          "mode": 420,
+          "sha256": "979870192fa70e2d8fcf56f8d8b8d709d1dd7bd8f5ce5fbe828eb15ba1d3bacf"
         },
         {
           "path": "tools/project-v0.3-compatibility.mjs",
@@ -7548,15 +7572,15 @@
         },
         {
           "path": "tools/public-composition/nebular-fusion-workflow.mjs",
-          "size": 26605,
+          "size": 26711,
           "mode": 420,
-          "sha256": "ff6aaf34fd824c7206e471f1b32393c7439c4a6ca68edfda5553ef4096483339"
+          "sha256": "64f9b87266f564ed2f0c33df0b21d7e9e571589aa1c634dabfc5bee9f02d07a1"
         },
         {
           "path": "tools/public-composition/product-membership.json",
-          "size": 257407,
+          "size": 258071,
           "mode": 420,
-          "sha256": "71dc3088d725652ba8437cdeb718e6a17ac3f475113903758fc1ebbf5a85e87c"
+          "sha256": "41bcf7a995e3730fd8c37a544807a5e7e4df65e61c5c67937c08d83e45bc1ac2"
         },
         {
           "path": "tools/public-composition/stellar-burst-workflow.mjs",
@@ -7608,15 +7632,15 @@
         },
         {
           "path": "tools/qualify-scene-package.mjs",
-          "size": 17913,
+          "size": 20049,
           "mode": 420,
-          "sha256": "2840af72d1596e0e2f03ba38e4d6238a3a7836b8794389f41916df32b4ce6baa"
+          "sha256": "01c5eb7d49977db7616dd298d0441ff890d34ad0f9fd195dbfd99836dc6bd4e1"
         },
         {
           "path": "tools/qualify-studio-service-package.mjs",
-          "size": 30024,
+          "size": 32817,
           "mode": 420,
-          "sha256": "fa7786d6874d79aca1710bd0c00a763b9ad961e2563dc2b5cf4c139e1488b1af"
+          "sha256": "0e2514803f81ca6454b9485efc07844447e15df7b707d07ddf26a49cbaef2b5e"
         },
         {
           "path": "tools/qualify-terminal-nova-brand.mjs",

@@ -4,9 +4,9 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "b61db2596f99d93c30713c805d0089d15d45827f",
+    "sourceTree": "ce48907e930ea2f4581baf30d7bc2c88a7fec162",
     "sourceRole": "lineage-only",
-    "sourceMaterializationSha256": "51011b11073a14b2e8325b2b91a59d88758745fe03c3ab337e32e8e6a633d56f",
+    "sourceMaterializationSha256": "1e3a655472f317b35fef976f523d98a77b26258fcdd4284de2bd06aabdfd66a5",
     "publicMergeCommit": null,
     "composedTreeDigest": null,
     "packageJsonSha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980",
@@ -78,11 +78,11 @@
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
     "version": "0.2.0",
     "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.2.0.tgz",
-    "sha256": "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f",
-    "size": 251782,
+    "sha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34",
+    "size": 252529,
     "catalogBuildEvidence": {
       "schema": "tfsl.catalog-build-evidence-v1",
-      "sha256": "e7393727c2038181a2e46a6a45b09b730b208006aaa9e95519e25038166004c1",
+      "sha256": "9f4a3ca081d2fdf6c66c9eac2e8996583fe338e223eab5504b986456d925ea48",
       "memberCount": 97
     },
     "history": {
