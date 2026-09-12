@@ -208,6 +208,8 @@ jobs:
       - name: Execute sidecar protocol transcripts
         run: |
           node tools/sidecar-transcript.mjs > .test-reports/nebular/sidecar-transcript.json
+      - name: Generate and validate mandatory release notices
+        run: node tools/release-notices.mjs
       - name: Rust qualification gates
         working-directory: src-tauri
         run: |

@@ -2,11 +2,11 @@
   "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
   "version": "0.2.0",
   "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.2.0.tgz",
-  "sha256": "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f",
-  "size": 251782,
+  "sha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34",
+  "size": 252529,
   "catalogBuildEvidence": {
     "schema": "tfsl.catalog-build-evidence-v1",
-    "sha256": "e7393727c2038181a2e46a6a45b09b730b208006aaa9e95519e25038166004c1",
+    "sha256": "9f4a3ca081d2fdf6c66c9eac2e8996583fe338e223eab5504b986456d925ea48",
     "memberCount": 97
   },
   "history": {
