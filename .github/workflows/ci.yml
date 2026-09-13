@@ -154,6 +154,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     needs: source-policy
+    env:
+      CARGO_HOME: ${{ runner.temp }}/cargo-home
     steps:
       - name: Checkout PR merge candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -173,8 +175,10 @@ jobs:
       - name: Select repository-pinned Rust 1.98.0 toolchain
         run: |
           test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          mkdir "$CARGO_HOME"
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
           echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
           RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
           RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
       - run: npm ci --ignore-scripts
@@ -208,6 +212,11 @@ jobs:
       - name: Execute sidecar protocol transcripts
         run: |
           node tools/sidecar-transcript.mjs > .test-reports/nebular/sidecar-transcript.json
+      - name: Fetch locked Rust dependencies for offline notices and qualification
+        working-directory: src-tauri
+        run: |
+          cargo --version | grep '^cargo 1.98.0 '
+          cargo fetch --locked --target aarch64-apple-darwin
       - name: Generate and validate mandatory release notices
         run: node tools/release-notices.mjs
       - name: Rust qualification gates
