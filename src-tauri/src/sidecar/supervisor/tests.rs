@@ -14,7 +14,7 @@ use crate::sidecar::plan_protocol::{
     DeriveSelection, StudioBrandPlanStartRequest, StudioBrandPlanStartResult,
 };
 use crate::sidecar::process::{
-    SessionInitFault, TerminationFault, TerminationOutcome, spawn_test_process,
+    ProcessSession, SessionInitFault, TerminationFault, TerminationOutcome, spawn_test_process,
     spawn_test_process_with_init_fault, terminate_process,
 };
 use crate::sidecar::protocol::{
@@ -681,36 +681,370 @@ fn continuous_progress_cannot_extend_the_absolute_deadline() -> Result<(), Strin
     Ok(())
 }
 
-#[test]
-fn queue_saturation_is_terminal_and_never_blocks_cleanup() -> Result<(), String> {
-    let (active, mut active_process) = fake_request("saturation", 1, Duration::from_secs(2))?;
-    if active != Err(StudioReasonCode::SidecarProtocolInvalid)
-        || !active_process.transport_overflowed()
-        || !terminate_process(&mut active_process).is_success()
-    {
-        return Err(format!(
-            "active queue saturation was not terminal: {active:?}"
+#[derive(Debug)]
+struct QueueCleanup {
+    outcome: TerminationOutcome,
+    elapsed: Duration,
+    reader_joined: bool,
+    stderr_joined: bool,
+    child: Result<bool, String>,
+}
+
+impl QueueCleanup {
+    fn successful(&self) -> bool {
+        self.outcome.is_success()
+            && self.elapsed < Duration::from_secs(2)
+            && self.reader_joined
+            && self.stderr_joined
+            && self.child == Ok(true)
+    }
+}
+
+struct QueueOwner {
+    process: Option<ProcessSession>,
+    marker: PathBuf,
+}
+
+impl QueueOwner {
+    fn spawn(mode: &str) -> Result<Self, String> {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let marker = std::env::temp_dir().join(format!(
+            "tfsb-queue-{}-{}.log",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+            .map_err(|error| error.to_string())?;
+        let mut owner = Self {
+            process: None,
+            marker,
+        };
+        owner.process = Some(
+            spawn_test_process(
+                &fake_binary()?,
+                &format!("{mode}|{}", owner.marker.display()),
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        Ok(owner)
     }
 
-    let (idle, mut idle_process) = fake_request("idle-flood", 1, Duration::from_secs(2))?;
-    if !matches!(idle, Ok(FakeResult { ok: true })) {
-        return Err(format!(
-            "idle flood did not first complete its request: {idle:?}"
-        ));
+    fn cleanup(&mut self) -> Result<QueueCleanup, String> {
+        let process = self.process.as_mut().ok_or("missing queue process")?;
+        let started = Instant::now();
+        let outcome = terminate_process(process);
+        Ok(QueueCleanup {
+            outcome,
+            elapsed: started.elapsed(),
+            reader_joined: process.reader.is_none(),
+            stderr_joined: process.stderr.is_none(),
+            child: process
+                .child
+                .try_wait()
+                .map(|status| status.is_some())
+                .map_err(|error| error.to_string()),
+        })
     }
-    std::thread::sleep(Duration::from_millis(80));
+}
+
+impl Drop for QueueOwner {
+    fn drop(&mut self) {
+        if let Some(process) = self.process.as_mut() {
+            // Fallback for panic or an unexpected helper error. The enclosing
+            // exact-test subprocess also provides finite supervision.
+            process.termination_fault = None;
+            let cleanup = terminate_process(process);
+            if !cleanup.is_success() {
+                eprintln!("queue fallback cleanup: {cleanup:?}");
+            }
+        }
+        if let Err(error) = std::fs::remove_file(&self.marker) {
+            eprintln!("queue marker cleanup: {error}");
+        }
+    }
+}
+
+fn observe_queue(process: &ProcessSession, budget: Duration) -> Result<Duration, String> {
     let started = Instant::now();
-    if !idle_process.transport_overflowed()
-        || !terminate_process(&mut idle_process).is_success()
-        || started.elapsed() > Duration::from_secs(2)
-        || idle_process.reader.is_some()
-        || idle_process.stderr.is_some()
-        || idle_process.child.try_wait().ok().flatten().is_none()
-    {
-        return Err("idle saturated producer was not bounded and joined".to_owned());
+    loop {
+        let overflowed = process
+            .transport
+            .lock()
+            .map_err(|_| "transport lock poisoned")?
+            .overflowed;
+        if overflowed {
+            return Ok(started.elapsed());
+        }
+        if started.elapsed() >= budget {
+            return Err(format!(
+                "readiness timeout after {:?}; overflow=false",
+                started.elapsed()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn queue_case(
+    mode: &str,
+    operation: impl FnOnce(&mut ProcessSession) -> Result<(), String>,
+) -> Result<(Result<(), String>, QueueCleanup), String> {
+    let mut owner = QueueOwner::spawn(mode)?;
+    let primary = operation(owner.process.as_mut().ok_or("missing queue process")?);
+    let cleanup = owner.cleanup()?;
+    let markers = std::fs::read_to_string(&owner.marker).map_err(|error| error.to_string());
+    eprintln!("queue case={mode}; primary={primary:?}; fixture={markers:?}; cleanup={cleanup:?}");
+    // Only relinquish the owner after reaping and joining both workers.
+    if cleanup.child == Ok(true) && cleanup.reader_joined && cleanup.stderr_joined {
+        owner.process.take();
+    }
+    Ok((primary, cleanup))
+}
+
+fn require_queue_success(result: (Result<(), String>, QueueCleanup)) -> Result<(), String> {
+    let (primary, cleanup) = result;
+    if primary.is_err() || !cleanup.successful() {
+        return Err(format!("primary={primary:?}; cleanup={cleanup:?}"));
     }
     Ok(())
+}
+
+fn idle_queue(
+    process: &mut ProcessSession,
+    delay: u64,
+    reader_delay: u64,
+    never: bool,
+    hold_gate: bool,
+) -> Result<(), String> {
+    let response: Result<FakeResult, StudioReasonCode> = SidecarSupervisor::request(
+        process,
+        1,
+        "test.method",
+        EmptyParams {},
+        Duration::from_secs(2),
+    );
+    eprintln!("queue request completion={response:?}");
+    if !matches!(response, Ok(FakeResult { ok: true })) {
+        return Err(format!("unexpected idle response: {response:?}"));
+    }
+    if hold_gate {
+        // Deterministic old-precondition reproduction: the producer cannot
+        // flood until explicitly released, even after the old 80 ms budget.
+        let old = observe_queue(process, Duration::from_millis(80));
+        eprintln!("old 80ms precondition={old:?}; flood gate still closed");
+        if old.is_ok() {
+            return Err("closed gate unexpectedly saturated".to_owned());
+        }
+    }
+    process
+        .transport
+        .lock()
+        .map_err(|_| "transport lock poisoned")?
+        .test_reader_delay = Duration::from_millis(reader_delay);
+    let started = Instant::now();
+    let control = serde_json::json!({"delayMs":delay,"never":never}).to_string() + "\n";
+    use std::io::Write;
+    let stdin = process.stdin.as_mut().ok_or("missing fixture stdin")?;
+    stdin
+        .write_all(control.as_bytes())
+        .and_then(|()| stdin.flush())
+        .map_err(|error| error.to_string())?;
+    let readiness = observe_queue(
+        process,
+        if never {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_secs(5)
+        },
+    );
+    eprintln!(
+        "queue delayMs={delay}; readerDelayMs={reader_delay}; readiness={readiness:?}; total={:?}",
+        started.elapsed()
+    );
+    readiness.map(|_| ())
+}
+
+fn queue_negative_controls() -> Result<(), String> {
+    let (primary, cleanup) = queue_case("idle-flood", |process| {
+        idle_queue(process, 0, 0, true, false)
+    })?;
+    if !primary
+        .as_ref()
+        .is_err_and(|error| error.contains("readiness timeout"))
+        || !cleanup.successful()
+    {
+        return Err(format!(
+            "never-flood control: primary={primary:?}; cleanup={cleanup:?}"
+        ));
+    }
+    let (primary, cleanup) = queue_case("remote-busy", |process| {
+        idle_queue(process, 0, 0, false, false)
+    })?;
+    if !primary
+        .as_ref()
+        .is_err_and(|error| error.contains("unexpected idle response"))
+        || !cleanup.successful()
+    {
+        return Err(format!(
+            "unexpected response control: primary={primary:?}; cleanup={cleanup:?}"
+        ));
+    }
+    let (primary, cleanup) = queue_case("success", |process| {
+        let response: Result<FakeResult, StudioReasonCode> = SidecarSupervisor::request(
+            process,
+            1,
+            "test.method",
+            EmptyParams {},
+            Duration::from_secs(2),
+        );
+        if response == Err(StudioReasonCode::SidecarProtocolInvalid) {
+            Ok(())
+        } else {
+            Err(format!("active precondition: {response:?}"))
+        }
+    })?;
+    if primary.is_ok() || !cleanup.successful() {
+        return Err(format!(
+            "active precondition control: primary={primary:?}; cleanup={cleanup:?}"
+        ));
+    }
+    let (primary, cleanup) = queue_case("exit-immediate", |process| {
+        // Observe the real reader complete before replacing its owned handle.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process
+            .reader
+            .as_ref()
+            .is_some_and(|reader| !reader.is_finished())
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if process
+            .reader
+            .as_ref()
+            .is_some_and(|reader| !reader.is_finished())
+        {
+            return Err("real reader did not finish before negative control".to_owned());
+        }
+        if let Some(reader) = process.reader.take() {
+            reader.join().map_err(|_| "original reader panicked")?;
+        }
+        process.reader = Some(
+            std::thread::Builder::new()
+                .name("queue-owned-panic".to_owned())
+                .spawn(|| std::panic::resume_unwind(Box::new("queue negative control")))
+                .map_err(|error| error.to_string())?,
+        );
+        Err("primary assertion deliberately failed".to_owned())
+    })?;
+    if primary != Err("primary assertion deliberately failed".to_owned())
+        || cleanup.outcome != TerminationOutcome::ReapedWorkerJoinFailure
+        || cleanup.elapsed >= Duration::from_secs(2)
+        || cleanup.child != Ok(true)
+        || !cleanup.reader_joined
+        || !cleanup.stderr_joined
+    {
+        return Err(format!(
+            "real join failure control: primary={primary:?}; cleanup={cleanup:?}"
+        ));
+    }
+    let mut owner = QueueOwner::spawn("hang")?;
+    owner
+        .process
+        .as_mut()
+        .ok_or("missing process")?
+        .termination_fault = Some(TerminationFault::UnreapedKillFailure);
+    let first = owner.cleanup()?;
+    owner
+        .process
+        .as_mut()
+        .ok_or("missing process")?
+        .termination_fault = None;
+    let final_cleanup = owner.cleanup()?;
+    eprintln!("unreaped ownership control: first={first:?}; final={final_cleanup:?}");
+    if !first.outcome.is_unreaped() || first.child != Ok(false) || !final_cleanup.successful() {
+        return Err(format!(
+            "unreaped control: first={first:?}; final={final_cleanup:?}"
+        ));
+    }
+    owner.process.take();
+    Ok(())
+}
+
+#[test]
+fn queue_saturation_is_terminal_and_never_blocks_cleanup() -> Result<(), String> {
+    const CHILD: &str = "TFSB_QUEUE_QUALIFICATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = std::process::Command::new(
+            std::env::current_exe().map_err(|error| error.to_string())?,
+        )
+        .args([
+            "--exact",
+            "sidecar::supervisor::tests::queue_saturation_is_terminal_and_never_blocks_cleanup",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .spawn()
+        .map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("queue subprocess failed: {status}"))
+                };
+            }
+            if Instant::now() >= deadline {
+                child.kill().map_err(|error| error.to_string())?;
+                let reap_deadline = Instant::now() + Duration::from_secs(2);
+                while child
+                    .try_wait()
+                    .map_err(|error| error.to_string())?
+                    .is_none()
+                    && Instant::now() < reap_deadline
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                return Err("queue subprocess exceeded finite 20s supervision budget".to_owned());
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    require_queue_success(queue_case("saturation", |process| {
+        process.test_wait_for_reader = true;
+        let response: Result<FakeResult, StudioReasonCode> = SidecarSupervisor::request(
+            process,
+            1,
+            "test.method",
+            EmptyParams {},
+            Duration::from_secs(2),
+        );
+        process.test_wait_for_reader = false;
+        let readiness = observe_queue(process, Duration::from_secs(5));
+        eprintln!(
+            "active response={response:?}; reader completion barrier; readiness={readiness:?}"
+        );
+        if response != Err(StudioReasonCode::SidecarProtocolInvalid) {
+            return Err(format!("active saturation was not terminal: {response:?}"));
+        }
+        readiness.map(|_| ())
+    })?)?;
+    for (delay, reader_delay, hold_gate) in [
+        (0, 0, false),
+        (120, 0, true),
+        (0, 120, false),
+        (240, 180, false),
+    ] {
+        require_queue_success(queue_case("idle-flood", |process| {
+            idle_queue(process, delay, reader_delay, false, hold_gate)
+        })?)?;
+    }
+    queue_negative_controls()
 }
 
 #[test]
@@ -1230,7 +1564,12 @@ fn idle_crash_saturation_restart_shutdown_and_drop_are_bounded() -> Result<(), S
     saturated
         .start(Channel::new(|_| Ok(())))
         .map_err(|_| "idle-flood sidecar did not initialize".to_owned())?;
-    std::thread::sleep(Duration::from_millis(80));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !matches!(saturated.status().state, HostLifecycleState::Failed)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
     if !matches!(saturated.status().state, HostLifecycleState::Failed)
         || saturated.status().last_reason_code != Some("sidecar-protocol-invalid")
         || saturated.process.is_some()
@@ -1259,8 +1598,21 @@ fn idle_crash_saturation_restart_shutdown_and_drop_are_bounded() -> Result<(), S
     saturated_shutdown
         .start(Channel::new(|_| Ok(())))
         .map_err(|_| "shutdown saturation sidecar did not initialize".to_owned())?;
-    std::thread::sleep(Duration::from_millis(80));
-    if saturated_shutdown.shutdown().is_ok() || saturated_shutdown.process.is_some() {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !saturated_shutdown
+        .process
+        .as_ref()
+        .is_some_and(ProcessSession::transport_overflowed)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let shutdown_overflow = saturated_shutdown
+        .process
+        .as_ref()
+        .is_some_and(ProcessSession::transport_overflowed);
+    let shutdown_result = saturated_shutdown.shutdown();
+    if !shutdown_overflow || shutdown_result.is_ok() || saturated_shutdown.process.is_some() {
         return Err("shutdown after saturation did not fail closed and reap".to_owned());
     }
 
@@ -1268,8 +1620,25 @@ fn idle_crash_saturation_restart_shutdown_and_drop_are_bounded() -> Result<(), S
     saturated_drop
         .start(Channel::new(|_| Ok(())))
         .map_err(|_| "drop saturation sidecar did not initialize".to_owned())?;
-    std::thread::sleep(Duration::from_millis(80));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !saturated_drop
+        .process
+        .as_ref()
+        .is_some_and(ProcessSession::transport_overflowed)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let drop_overflow = saturated_drop
+        .process
+        .as_ref()
+        .is_some_and(ProcessSession::transport_overflowed);
     drop(saturated_drop);
+    if !drop_overflow {
+        return Err(
+            "drop saturation precondition timed out; cleanup was still attempted".to_owned(),
+        );
+    }
 
     let mut graceful = lifecycle_supervisor("lifecycle-success")?;
     graceful

@@ -24,6 +24,8 @@ pub(crate) enum ReaderEvent {
 #[derive(Debug, Default)]
 pub(crate) struct TransportState {
     pub(crate) overflowed: bool,
+    #[cfg(test)]
+    pub(crate) test_reader_delay: Duration,
 }
 
 type TransportLock = Mutex<TransportState>;
@@ -79,10 +81,26 @@ pub(crate) struct ProcessSession {
     pub(crate) raster: RasterStatus,
     #[cfg(test)]
     pub(crate) termination_fault: Option<TerminationFault>,
+    #[cfg(test)]
+    pub(crate) test_wait_for_reader: bool,
 }
 
 impl ProcessSession {
     pub(crate) fn transport_overflowed(&self) -> bool {
+        #[cfg(test)]
+        if self.test_wait_for_reader {
+            // The request has been written. Keep its consumer stopped until
+            // the real reader terminates on saturation; never drain the queue.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self
+                .reader
+                .as_ref()
+                .is_some_and(|reader| !reader.is_finished())
+                && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
         self.transport.lock().map_or(true, |state| state.overflowed)
     }
 }
@@ -289,6 +307,14 @@ fn session_from_child_inner(
                     }
                     Ok(count) => match framer.push(&buffer[..count]) {
                         Ok(frames) => {
+                            #[cfg(test)]
+                            {
+                                let delay = reader_transport
+                                    .lock()
+                                    .map(|state| state.test_reader_delay)
+                                    .unwrap_or_default();
+                                thread::sleep(delay);
+                            }
                             for frame in frames {
                                 if !publish(&sender, &reader_transport, ReaderEvent::Frame(frame)) {
                                     return;
@@ -362,6 +388,8 @@ fn session_from_child_inner(
         },
         #[cfg(test)]
         termination_fault: None,
+        #[cfg(test)]
+        test_wait_for_reader: false,
     })
 }
 
