@@ -55,13 +55,22 @@ jobs:
           const core = JSON.parse(readFileSync("authenticated-inputs/stellar-binding.json", "utf8"));
           const loom = JSON.parse(readFileSync("authenticated-inputs/loom-binding.json", "utf8"));
           if (publication.schema !== "tfsb.public-paired-inputs-v1") throw new Error("Explicit public paired-input manifest required");
-          for (const product of [publication.stellar, publication.loom]) {
-            if (!product || !/^[a-f0-9]{40}$/.test(product.commit) || !/^[a-f0-9]{40}$/.test(product.contentTree) || !/^[a-f0-9]{64}$/.test(product.packageSha256)) throw new Error("Full actual public source and package identities required");
+          if (publication.stellar?.status === "release-candidate" || publication.loom?.status === "release-candidate") {
+            if (!/^[a-f0-9]{64}$/.test(publication.stellar?.packageSha256 ?? "") || !/^[a-f0-9]{64}$/.test(publication.loom?.packageSha256 ?? "")) throw new Error("Candidate package identities required");
+            if (publication.stellar.packageSha256 !== core.package.sha256 || publication.loom.packageSha256 !== loom.sha256) throw new Error("Candidate paired inputs do not match retained candidate packages");
+            if (!publication.loom?.catalogBuildEvidenceSha256 && !loom.catalogBuildEvidence?.sha256) throw new Error("Candidate Loom requires catalog build evidence");
+            const historical = publication.loom?.history ?? loom.history;
+            const hasHistory = Array.isArray(historical) ? historical.some((h) => h.version === "0.1.0" && h.sha256) : (historical?.version === "0.1.0" && historical?.sha256);
+            if (!hasHistory) throw new Error("Candidate Loom requires historical 0.1.0 provenance");
+          } else {
+            for (const product of [publication.stellar, publication.loom]) {
+              if (!product || !/^[a-f0-9]{40}$/.test(product.commit) || !/^[a-f0-9]{40}$/.test(product.contentTree) || !/^[a-f0-9]{64}$/.test(product.packageSha256)) throw new Error("Full actual public source and package identities required");
+            }
+            if (publication.stellar.commit !== core.input.publicMergeCommit || publication.stellar.contentTree !== core.input.sourceTree || publication.stellar.packageSha256 !== core.package.sha256 || publication.loom.packageSha256 !== loom.sha256) throw new Error("Public paired inputs do not match retained candidate packages");
+            const source = loom.publicSource;
+            const tested = loom.testedProducer;
+            if (source?.repository !== "Knowledge-Forge-AI/theme-forge-stellar-loom" || tested?.repository !== source.repository || publication.loom.repository !== source.repository || source?.status !== "published" || source.producerRole !== "durable-main" || publication.loom.commit !== source.commit || publication.loom.contentTree !== source.contentTree || source.contentTree !== tested?.contentTree || tested.packageSha256 !== loom.sha256 || tested.producerRole !== "merge-candidate" || !/^[a-f0-9]{40}$/.test(tested.commit) || !Number.isSafeInteger(tested.runId) || !Number.isSafeInteger(tested.runAttempt) || !Number.isSafeInteger(tested.artifactId) || !/^sha256:[a-f0-9]{64}$/.test(tested.artifactDigest) || !/^[a-f0-9]{64}$/.test(tested.artifactManifestSha256) || JSON.stringify(publication.loom.testedProducer) !== JSON.stringify(tested) || loom.equality?.durableMainAndTestedProducerTreesEqual !== true || loom.equality?.registryAndTestedPackageSha256Equal !== true || JSON.stringify(publication.loom.equality) !== JSON.stringify(loom.equality)) throw new Error("Durable Loom source and tested producer lineage mismatch");
           }
-          if (publication.stellar.commit !== core.input.publicMergeCommit || publication.stellar.contentTree !== core.input.sourceTree || publication.stellar.packageSha256 !== core.package.sha256 || publication.loom.packageSha256 !== loom.sha256) throw new Error("Public paired inputs do not match retained candidate packages");
-          const source = loom.publicSource;
-          const tested = loom.testedProducer;
-          if (source?.repository !== "Knowledge-Forge-AI/theme-forge-stellar-loom" || tested?.repository !== source.repository || publication.loom.repository !== source.repository || source?.status !== "published" || source.producerRole !== "durable-main" || publication.loom.commit !== source.commit || publication.loom.contentTree !== source.contentTree || source.contentTree !== tested?.contentTree || tested.packageSha256 !== loom.sha256 || tested.producerRole !== "merge-candidate" || !/^[a-f0-9]{40}$/.test(tested.commit) || !Number.isSafeInteger(tested.runId) || !Number.isSafeInteger(tested.runAttempt) || !Number.isSafeInteger(tested.artifactId) || !/^sha256:[a-f0-9]{64}$/.test(tested.artifactDigest) || !/^[a-f0-9]{64}$/.test(tested.artifactManifestSha256) || JSON.stringify(publication.loom.testedProducer) !== JSON.stringify(tested) || loom.equality?.durableMainAndTestedProducerTreesEqual !== true || loom.equality?.registryAndTestedPackageSha256Equal !== true || JSON.stringify(publication.loom.equality) !== JSON.stringify(loom.equality)) throw new Error("Durable Loom source and tested producer lineage mismatch");
           NODE
       - name: Bind source policy receipt
         run: node tools/ci/artifact-manifest.mjs --root .test-reports/source-policy --output .test-reports/source-policy/artifact-manifest.json --job source-policy --require receipt.json
@@ -145,6 +154,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     needs: source-policy
+    env:
+      CARGO_HOME: ${{ runner.temp }}/cargo-home
     steps:
       - name: Checkout PR merge candidate
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -163,9 +174,13 @@ jobs:
           node tools/ci/exact-head.mjs --output .test-reports/nebular/receipt.json --expected-branch staging --expected-base main --checkout-role merge-candidate
       - name: Select repository-pinned Rust 1.98.0 toolchain
         run: |
+          test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          mkdir "$CARGO_HOME"
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
-          rustc --version
-          cargo --version
+          echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
+          RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
       - run: npm ci --ignore-scripts
       - run: npm ci --prefix loom-preview-source --ignore-scripts
       - run: npm run build
@@ -185,14 +200,30 @@ jobs:
           node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ"
           cmp "$RUNNER_TEMP/manifest-first.json" src-tauri/sidecar-payload/manifest.json
           node tools/loom-prepare.mjs
+          if [ -d authenticated-inputs/scene-tarball ]; then
+            SCENE_TGZ=$(find authenticated-inputs/scene-tarball -name '*.tgz' -type f -print -quit)
+            if [ -n "$SCENE_TGZ" ]; then
+              node tools/scene-prepare.mjs prepare "$SCENE_TGZ" "$RUNNER_TEMP/node-authenticated"
+              node tools/scene-prepare.mjs verify src-tauri/scene-payload "$RUNNER_TEMP/node-authenticated"
+            fi
+          fi
           node tools/sidecar-verify.mjs
           tar -czf .test-reports/nebular/sidecar-payload.tar.gz -C src-tauri sidecar-payload
       - name: Execute sidecar protocol transcripts
         run: |
           node tools/sidecar-transcript.mjs > .test-reports/nebular/sidecar-transcript.json
+      - name: Fetch locked Rust dependencies for offline notices and qualification
+        working-directory: src-tauri
+        run: |
+          cargo --version | grep '^cargo 1.98.0 '
+          cargo fetch --locked --target aarch64-apple-darwin
+      - name: Generate and validate mandatory release notices
+        run: node tools/release-notices.mjs
       - name: Rust qualification gates
         working-directory: src-tauri
         run: |
+          rustc --version | grep '^rustc 1.98.0 '
+          cargo --version | grep '^cargo 1.98.0 '
           cargo fmt --all -- --check
           cargo check --locked --all-targets --all-features
           cargo clippy --locked --all-targets --all-features -- -D warnings

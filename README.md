@@ -1,35 +1,36 @@
 # Theme Forge Nebular Fusion
 
-Theme Forge Nebular Fusion is a local, evidence-bound desktop workbench for reviewing, inspecting, and managing Theme Forge brand systems and artifacts.
+Theme Forge Nebular Fusion is a local, evidence-bound desktop workbench for reviewing, inspecting, and managing Theme Forge brand systems and artifacts. This candidate tree represents unreleased 0.3 development with metadata 0.3.0.
 
-- Package version: `0.2.0`
+It provides three persistent work areas: **Brand/System**, **Vector/Graphics**, and **Starlight Theme**.
+The Scene workbench produces SVG. Distributed PNG and remote resource ingestion are not supported.
+
+- Package version: `0.3.0` (unreleased 0.3 release candidate)
 - Public repository: `Knowledge-Forge-AI/theme-forge-nebular-fusion`
 - Target platform: macOS (Apple Silicon `aarch64-apple-darwin`)
 - Architecture: Tauri v2 desktop host with strict CSP and isolated sidecar execution
-- Paired core: Theme Forge Stellar Burst `0.4.0`, authenticated by exact package and source identities
+- Paired core: Theme Forge Stellar Burst `0.5.0`, authenticated by exact package and source identities
+- Paired theme builder: Theme Forge Stellar Loom `0.2.0`, authenticated by exact package and source identities
 - Minimum macOS version: 13.0 on Apple Silicon
 
 ## Application distribution
 
-This is a local 0.2.0 candidate, not a published release. The macOS-arm64
-application is an ad-hoc-signed, unnotarized developer distribution. Verify
-its supplied checksum before opening it. No hosted package provenance or
-Developer ID identity is claimed. The input manifests bind the exact Node,
-Stellar Burst 0.4.0 and Stellar Loom 0.1.0 packages included in the app.
+The macOS-arm64 application is an ad-hoc-signed, unnotarized developer distribution. Verify its supplied checksum before opening it. Homebrew cask distribution is WITHHELD pending Developer ID signing and notarization. The source and developer app distribution carries no published claim; this application is not published on npm. No hosted npm provenance or Developer ID identity is claimed. The input manifests bind the exact Node (v22.23.2), Stellar Burst 0.5.0, and Stellar Loom 0.2.0 release-candidate packages included in the app.
 
-The optional raster capability is bundled from the authenticated companion
-archive and lock under `authenticated-inputs/`. The companion remains
-`@knowledge-forge-ai/tfsb-raster-resvg@0.0.0-tfsb47f`; it is not a separate
-npm registry product. Its AGPL/commercial, MPL and third-party notices travel
-with the distribution. No embedded model or provider is included.
+The optional raster capability is bundled from the authenticated companion archive and lock under `authenticated-inputs/`. The companion remains `@knowledge-forge-ai/tfsb-raster-resvg@0.0.0-tfsb47f`; it is not a separate npm registry product. Its AGPL/commercial, MPL and third-party notices travel with the distribution. No embedded model or provider is included.
 
 ## Development
 
 Prerequisites:
 - Node.js >= 22.23.2
-- Rust 1.98.0 (edition 2024)
+- Nix for the product-local locked Rust 1.98.0 environment (edition 2024)
 
 ```sh
+# Enter the locked toolchain; its Rust binaries precede host rustup proxies.
+nix develop .
+rustc --version # 1.98.0
+cargo --version # 1.98.0
+
 # Install each owning lock without dependency lifecycle scripts
 npm ci --ignore-scripts
 npm ci --prefix loom-preview-source --ignore-scripts
@@ -71,7 +72,7 @@ npm run build
 # Authenticate the pinned Node release, then prepare the exact paired core.
 # Choose fresh paths outside this source copy for the downloaded archive/receipt.
 node tools/ci/verify-node-authenticity.mjs --download-dir /path/to/node-download --output-node /path/to/node-authenticated --output /path/to/node-receipt.json
-node tools/sidecar-prepare.mjs --node /path/to/node-authenticated --root-tarball authenticated-inputs/core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.4.0.tgz
+node tools/sidecar-prepare.mjs --node /path/to/node-authenticated --root-tarball authenticated-inputs/core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz
 node tools/sidecar-verify.mjs
 
 # Build the normal application with its ordinary configuration.
@@ -82,13 +83,19 @@ cd src-tauri
 cargo test --locked --all-targets --all-features -- --test-threads=1
 ```
 
+## Bundled license material
+
+The app build generates deterministic third-party notices for its native and
+frontend dependencies and includes them under the bundle's release-notices
+resources. Missing required material fails the build. Supplemental upstream
+notices, source revisions and file digests are recorded under legal/supplemental.
+
 ## Public CI input handoff
 
-Local builds use the exact package bindings without requiring an unpublished
-Loom commit. Before the separately authorized public campaign, supply
-`authenticated-inputs/publication-manifest.json` with schema
+The completed public release uses the exact published package bindings.
+The composition supplies `authenticated-inputs/publication-manifest.json` with schema
 `tfsb.public-paired-inputs-v1` and `stellar` / `loom` records containing the
-actual full `commit`, `contentTree` and `packageSha256`. The source-policy
+recorded full `commit`, `contentTree` and `packageSha256`. The source-policy
 job rejects missing or inconsistent records. No future SHA is invented here.
 
 ## License
