@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-scene-dispose"
+description = "Enables the studio_scene_dispose command without any pre-configured scope."
+commands.allow = ["studio_scene_dispose"]
+
+[[permission]]
+identifier = "deny-studio-scene-dispose"
+description = "Denies the studio_scene_dispose command without any pre-configured scope."
+commands.deny = ["studio_scene_dispose"]

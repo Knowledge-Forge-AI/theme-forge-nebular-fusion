@@ -13,6 +13,10 @@ import type {
   ThemeSpecification,
 } from "./types";
 import { SAMPLE_CYAN_THEME } from "./builtin-themes";
+import { SAMPLE_THEME_V2, type ThemeSpecificationV2 } from "./v2-model";
+import { ThemeV2Controls } from "./ThemeV2Controls";
+import { ThemeV2Exchange } from "./ThemeV2Exchange";
+import type { ThemeDescriptorV2 } from "./v2-bridge";
 import { SenderEvidenceImage } from "./SenderEvidenceImage";
 import { StarlightPreview, type ColorSchemeMode } from "./StarlightPreview";
 import {
@@ -22,11 +26,17 @@ import {
 
 export interface ThemeLabProps {
   readonly bridge: ThemeLabBridge;
+  readonly managed?: boolean;
 }
 
 export type EditorTab = "palette" | "typography" | "diagnostics" | "output" | "exchange";
+type ThemeDocument = ThemeSpecification | ThemeSpecificationV2;
+function isV2(specification: ThemeDocument): specification is ThemeSpecificationV2 {
+  return specification.schemaVersion === "tfsl.theme-v2";
+}
 
 type PendingDiscardAction =
+  | { type: "new-v2" }
   | { type: "reset" }
   | { type: "example"; name: string }
   | { type: "open" }
@@ -46,8 +56,8 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
-export function ThemeLab({ bridge }: ThemeLabProps) {
-  const [spec, setSpec] = useState<ThemeSpecification>(SAMPLE_CYAN_THEME);
+export function ThemeLab({ bridge, managed = false }: ThemeLabProps) {
+  const [spec, setSpec] = useState<ThemeDocument>(SAMPLE_CYAN_THEME);
   const [activeExample, setActiveExample] = useState<string>("stellar-cyan");
   const [displayName, setDisplayName] = useState<string | undefined>();
   const [dirty, setDirty] = useState<boolean>(false);
@@ -55,7 +65,15 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   const [previewRevision, setPreviewRevision] = useState<number>(1);
   const [compiledCss, setCompiledCss] = useState<string | undefined>();
   const [lastGoodCss, setLastGoodCss] = useState<string | undefined>();
-  const [descriptor, setDescriptor] = useState<ThemeDescriptor | undefined>();
+  const [previewSpec, setPreviewSpec] = useState<ThemeDocument | undefined>();
+  const [descriptor, setDescriptor] = useState<ThemeDescriptor | ThemeDescriptorV2 | undefined>();
+  const [fieldsValid, setFieldsValid] = useState(true);
+  const fieldsValidRef = useRef(true);
+  const [lineHeightDraft, setLineHeightDraft] = useState<string | undefined>();
+  const [documentGeneration, setDocumentGeneration] = useState(0);
+  const saveAsRequiredRef = useRef(false);
+  const [previewAccent, setPreviewAccent] = useState<string | undefined>();
+  const previewAccentRef = useRef<string | undefined>(undefined);
   const [diagnostics, setDiagnostics] = useState<readonly ContrastDiagnostic[]>([]);
   const [compileError, setCompileError] = useState<string | undefined>();
   const [backendAvailable, setBackendAvailable] = useState<boolean>(true);
@@ -105,11 +123,34 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   const [newAnnotationField, setNewAnnotationField] = useState<string>("");
 
   const compileTimerRef = useRef<number | null>(null);
-  const pendingDraftCompileRef = useRef<ThemeSpecification | null>(null);
+  const pendingDraftCompileRef = useRef<ThemeDocument | null>(null);
+  const pendingNativeRevisionRef = useRef<number | null>(null);
+  const nativeInvalidationRef = useRef<Promise<void>>(Promise.resolve());
+  const invalidatingRef = useRef(false);
   const latestIntendedOpRef = useRef<number>(1);
   const latestAppliedOpRef = useRef<number>(0);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const packetTextsRef = useRef(new Map<string, string>());
+  const invalidateNativeDraft = (revision: number) => {
+    pendingNativeRevisionRef.current = revision;
+    if (!bridge.updateDraft || !sessionIdRef.current || invalidatingRef.current) return;
+    invalidatingRef.current = true;
+    nativeInvalidationRef.current = (async () => {
+      try {
+        while (pendingNativeRevisionRef.current !== null) {
+          const next = pendingNativeRevisionRef.current;
+          pendingNativeRevisionRef.current = null;
+          const response = await bridge.updateDraft!({ sessionId: sessionIdRef.current!, uiRevision: next });
+          if (response.uiRevision !== next) throw new Error("Draft revision acknowledgement mismatch");
+        }
+      } finally {
+        invalidatingRef.current = false;
+      }
+    })();
+    void nativeInvalidationRef.current.catch(() => {
+      setCompileError("Native draft synchronization failed; reopen Theme Lab before saving or adopting.");
+    });
+  };
   const packetText = (packet: Record<string, unknown>): string => {
     const digest = String(packet.candidateDigest ?? packet.briefDigest ?? packet.reviewDigest);
     const text = packetTextsRef.current.get(digest);
@@ -160,6 +201,12 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
         }
         latestAppliedOpRef.current = opId;
         if (res.valid && res.specification) {
+          fieldsValidRef.current = true;
+          setFieldsValid(true);
+          setLineHeightDraft(undefined);
+          saveAsRequiredRef.current = false;
+          previewAccentRef.current = undefined;
+          setPreviewAccent(undefined);
           pendingDraftCompileRef.current = null;
           setSpec(res.specification);
           setActiveExample(name);
@@ -169,6 +216,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
           setPreviewRevision(res.uiRevision);
           setCompiledCss(res.compiledCss);
           setLastGoodCss(res.compiledCss);
+          setPreviewSpec(res.specification);
           setCandidatePreviewCss(null);
           setPreviewRevision(latestIntendedOpRef.current);
           setDescriptor(res.descriptor);
@@ -209,20 +257,34 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
       latestAppliedOpRef.current = latestIntendedOpRef.current;
       pendingDraftCompileRef.current = null;
       packetTextsRef.current.clear();
-      void bridge.dispose?.();
+      if (!managed) {
+        void bridge.dispose?.();
+      }
     };
-  }, [checkStatus, loadExampleTheme, bridge]);
+  }, [checkStatus, loadExampleTheme, bridge, managed]);
 
-  const executeCompile = async (nextSpec: ThemeSpecification, nextRev: number) => {
+  const executeCompile = async (nextSpec: ThemeDocument, nextRev: number) => {
     if (nextRev !== latestIntendedOpRef.current) return;
     try {
+      await nativeInvalidationRef.current;
+      if (nextRev !== latestIntendedOpRef.current || !fieldsValidRef.current) return;
       setStatusMessage("Compiling theme…");
-      const res = await bridge.compile({
+      const request = {
         specification: nextSpec,
         uiRevision: nextRev,
         sessionId: sessionIdRef.current,
-      });
+      };
+      const res = isV2(nextSpec)
+        ? await (bridge.compileV2 ? bridge.compileV2({ ...request, specification: nextSpec, options: { accent: previewAccentRef.current } }) : Promise.reject(new Error("Theme v2 compiler bridge unavailable")))
+        : await bridge.compile({ ...request, specification: nextSpec });
       if (nextRev < latestIntendedOpRef.current || nextRev <= latestAppliedOpRef.current) {
+        return;
+      }
+      if (res.uiRevision !== nextRev) {
+        setCompiledCss(undefined);
+        pendingDraftCompileRef.current = null;
+        setCompileError("Compiler returned a mismatched revision; compile the current draft again.");
+        setStatusMessage("Compilation result rejected");
         return;
       }
       latestAppliedOpRef.current = nextRev;
@@ -230,6 +292,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
       if (res.valid && res.compiledCss) {
         setCompiledCss(res.compiledCss);
         setLastGoodCss(res.compiledCss);
+          setPreviewSpec(nextSpec);
         setPreviewRevision(res.uiRevision);
         setDescriptor(res.descriptor);
         setDiagnostics(res.diagnostics);
@@ -252,7 +315,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
     }
   };
 
-  const scheduleCompile = (nextSpec: ThemeSpecification, nextRev: number) => {
+  const scheduleCompile = (nextSpec: ThemeDocument, nextRev: number) => {
     pendingDraftCompileRef.current = nextSpec;
     if (compileTimerRef.current !== null) {
       window.clearTimeout(compileTimerRef.current);
@@ -272,6 +335,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   };
 
   const handleManualCompile = () => {
+    if (!fieldsValidRef.current) return;
     if (compileTimerRef.current !== null) {
       window.clearTimeout(compileTimerRef.current);
       compileTimerRef.current = null;
@@ -283,17 +347,66 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   };
 
   const updateSpec = (mutator: (draft: ThemeSpecification) => void) => {
+    if (isV2(spec)) return;
     const nextSpec: ThemeSpecification = JSON.parse(JSON.stringify(spec)) as ThemeSpecification;
     mutator(nextSpec);
     const nextRev = ++latestIntendedOpRef.current;
     setCandidatePreviewCss(null);
-    setPreviewRevision(latestIntendedOpRef.current);
+    setCompiledCss(undefined);
+    setDiagnostics([]);
+    setCompileError(undefined);
     setCandidateVerification(null);
     setPendingDiscardAction(null);
     setSpec(nextSpec);
     setDirty(true);
     setDraftRevision(nextRev);
+    invalidateNativeDraft(nextRev);
     scheduleCompile(nextSpec, nextRev);
+  };
+
+  const updateV2Spec = (nextSpec: ThemeSpecificationV2) => {
+    const nextRev = ++latestIntendedOpRef.current;
+    setSpec(nextSpec);
+    setDirty(true);
+    setDraftRevision(nextRev);
+    setCompiledCss(undefined);
+    setDiagnostics([]);
+    setCompileError(undefined);
+    setCandidatePreviewCss(null);
+    setCandidateVerification(null);
+    setPendingDiscardAction(null);
+    invalidateNativeDraft(nextRev);
+    scheduleCompile(nextSpec, nextRev);
+  };
+
+  const createV2Draft = () => {
+    fieldsValidRef.current = true;
+    setFieldsValid(true);
+    setDocumentGeneration((value) => value + 1);
+    setDisplayName(undefined);
+    saveAsRequiredRef.current = true;
+    previewAccentRef.current = undefined;
+    setPreviewAccent(undefined);
+    setActiveTab("palette");
+    setActiveBrief(null);
+    setSelectedCandidateIndex(null);
+    updateV2Spec(structuredClone(SAMPLE_THEME_V2));
+  };
+
+  const handleFieldsValidity = (valid: boolean) => {
+    fieldsValidRef.current = valid;
+    setFieldsValid(valid);
+    if (!valid) {
+      const revision = ++latestIntendedOpRef.current;
+      if (compileTimerRef.current !== null) window.clearTimeout(compileTimerRef.current);
+      pendingDraftCompileRef.current = null;
+      setDirty(true);
+      setDraftRevision(revision);
+      setCompiledCss(undefined);
+      setCandidatePreviewCss(null);
+      setCandidateVerification(null);
+      invalidateNativeDraft(revision);
+    }
   };
 
   const executeOpen = async () => {
@@ -304,7 +417,10 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
         compileTimerRef.current = null;
       }
       opId = ++latestIntendedOpRef.current;
-      const res = await bridge.openTheme();
+      await nativeInvalidationRef.current;
+      const res = bridge.openDocument
+        ? await bridge.openDocument({ uiRevision: opId, sessionId: sessionIdRef.current })
+        : await bridge.openTheme();
       if (opId < latestIntendedOpRef.current || opId <= latestAppliedOpRef.current) {
         return;
       }
@@ -318,6 +434,12 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
       }
       latestAppliedOpRef.current = opId;
       if (res.specification) {
+        fieldsValidRef.current = true;
+        setFieldsValid(true);
+        setDocumentGeneration((value) => value + 1);
+        saveAsRequiredRef.current = false;
+        previewAccentRef.current = undefined;
+        setPreviewAccent(undefined);
         pendingDraftCompileRef.current = null;
         setSpec(res.specification);
         setDisplayName(res.displayName);
@@ -326,6 +448,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
         setPreviewRevision(opId);
         setCompiledCss(res.compiledCss);
         setLastGoodCss(res.compiledCss);
+          setPreviewSpec(res.specification);
         setCandidatePreviewCss(null);
         setPreviewRevision(latestIntendedOpRef.current);
         setDescriptor(res.descriptor);
@@ -354,10 +477,18 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   };
 
   const handleSave = async (saveAs: boolean) => {
+    if (!fieldsValidRef.current) return;
+    const saveDraftRevision = latestIntendedOpRef.current;
     try {
-      const saveDraftRevision = latestIntendedOpRef.current;
-      const res = await bridge.saveTheme({ saveAs, specification: spec });
+      await nativeInvalidationRef.current;
+      if (latestIntendedOpRef.current !== saveDraftRevision) return;
+      const request = { saveAs: saveAs || saveAsRequiredRef.current, specification: spec, uiRevision: saveDraftRevision, sessionId: sessionIdRef.current };
+      const res = bridge.saveDocument
+        ? await bridge.saveDocument(request)
+        : !isV2(spec) ? await bridge.saveTheme({ saveAs: request.saveAs, specification: spec }) : await Promise.reject(new Error("Theme v2 save bridge unavailable"));
+      if (latestIntendedOpRef.current !== saveDraftRevision) return;
       if (!res.cancelled) {
+        saveAsRequiredRef.current = false;
         if (latestIntendedOpRef.current === saveDraftRevision) {
           setDirty(false);
         }
@@ -367,6 +498,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
         setStatusMessage(`Saved ${res.displayName ?? "theme"}`);
       }
     } catch {
+      if (latestIntendedOpRef.current !== saveDraftRevision) return;
       setCompileError("Failed to save theme file");
     }
   };
@@ -383,7 +515,8 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
     if (dirty) {
       setPendingDiscardAction({ type: "reset" });
     } else {
-      void loadExampleTheme(activeExample);
+      if (isV2(spec)) createV2Draft();
+      else void loadExampleTheme(activeExample);
     }
   };
 
@@ -437,6 +570,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
         setPreviewRevision(opId);
         setCompiledCss(res.compiledCss);
         setLastGoodCss(res.compiledCss);
+          setPreviewSpec(res.specification);
         setCandidatePreviewCss(null);
         setPreviewRevision(latestIntendedOpRef.current);
         setCandidateVerification(null);
@@ -540,6 +674,10 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   // Uses production pure typed request builders with current draft constraints
   // ---------------------------------------------------------------------------
   const handleExportBrief = async () => {
+    if (isV2(spec)) {
+      setCompileError("Theme v2 brief context is not available through the historical Loom v1 packet owner.");
+      return;
+    }
     const exchangeOp = ++latestIntendedOpRef.current;
     try {
       setStatusMessage("Exporting theme brief…");
@@ -809,9 +947,11 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
   const confirmDiscard = () => {
     const action = pendingDiscardAction;
     setPendingDiscardAction(null);
+    if (action?.type === "new-v2") { createV2Draft(); return; }
     if (!action) return;
     if (action.type === "reset") {
-      void loadExampleTheme(activeExample);
+      if (isV2(spec)) createV2Draft();
+      else void loadExampleTheme(activeExample);
     } else if (action.type === "example") {
       void loadExampleTheme(action.name);
     } else if (action.type === "open") {
@@ -829,7 +969,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
     setPendingDiscardAction(null);
   };
 
-  const currentPalette: ThemePalette = spec.colors[paletteMode];
+  const currentPalette: ThemePalette | undefined = isV2(spec) ? undefined : spec.colors[paletteMode];
 
   const updateAccent = (key: keyof ThemePalette["accent"], value: string) => {
     updateSpec((draft) => {
@@ -862,11 +1002,13 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
           <span className="theme-title">
             {spec.name} {spec.version ? `v${spec.version}` : ""}
           </span>
+          <span className="preview-badge">{spec.schemaVersion}</span>
           {dirty ? <span className="dirty-indicator" title="Unsaved changes">* Modified</span> : null}
           {displayName ? <span className="file-path-badge">{displayName}</span> : null}
         </div>
 
         <div className="theme-lab-header-actions">
+          <button type="button" disabled={!bridge.compileV2 || !backendAvailable} onClick={() => dirty ? setPendingDiscardAction({ type: "new-v2" }) : createV2Draft()}>New v2 Theme</button>
           <div className="button-group">
             <button
               type="button"
@@ -889,7 +1031,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
               type="button"
               className="compile-button"
               onClick={handleManualCompile}
-              disabled={!backendAvailable}
+              disabled={!backendAvailable || !fieldsValid}
               title="Compile current theme draft"
             >
               Compile
@@ -897,10 +1039,10 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
             <button type="button" onClick={handleOpenClick} disabled={!backendAvailable}>
               Open…
             </button>
-            <button type="button" onClick={() => void handleSave(false)} disabled={!backendAvailable}>
+            <button type="button" onClick={() => void handleSave(false)} disabled={!backendAvailable || !fieldsValid}>
               Save
             </button>
-            <button type="button" onClick={() => void handleSave(true)} disabled={!backendAvailable}>
+            <button type="button" onClick={() => void handleSave(true)} disabled={!backendAvailable || !fieldsValid}>
               Save As…
             </button>
             <button type="button" className="danger-button" onClick={handleResetClick} disabled={!backendAvailable}>
@@ -911,15 +1053,15 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
           <div className="button-group">
             <button
               type="button"
-              onClick={handleExportBrief}
+              onClick={isV2(spec) ? () => setActiveTab("exchange") : handleExportBrief}
               disabled={!backendAvailable}
               title="Export theme brief for external authoring"
             >
-              Export Brief…
+              {isV2(spec) ? "Review context…" : "Export Brief…"}
             </button>
             <button
               type="button"
-              onClick={handleImportPacket}
+              onClick={isV2(spec) ? () => setActiveTab("exchange") : handleImportPacket}
               disabled={!backendAvailable}
               title="Import brief, candidate, or review packet"
             >
@@ -951,14 +1093,14 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
               className={activeTab === "palette" ? "tab-button active" : "tab-button"}
               onClick={() => setActiveTab("palette")}
             >
-              Palette
+              {isV2(spec) ? "Theme controls" : "Palette"}
             </button>
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === "typography"}
               className={activeTab === "typography" ? "tab-button active" : "tab-button"}
-              onClick={() => setActiveTab("typography")}
+              onClick={() => setActiveTab(isV2(spec) ? "palette" : "typography")}
             >
               Typography & Layout
             </button>
@@ -992,7 +1134,15 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
           </nav>
 
           <div className="tab-content">
-            {activeTab === "palette" ? (
+            {isV2(spec) ? <div hidden={activeTab !== "palette"} inert={activeTab !== "palette" ? true : undefined}>
+              <label>Preview accent <select aria-label="Preview accent" value={previewAccent ?? spec.defaultAccent} onChange={(event) => {
+                previewAccentRef.current = event.target.value;
+                setPreviewAccent(event.target.value);
+                updateV2Spec(spec);
+              }}>{Object.keys(spec.accentVariants).map((accent) => <option key={accent} value={accent}>{accent}</option>)}</select></label>
+              <ThemeV2Controls key={documentGeneration} specification={spec} onChange={updateV2Spec} onValidityChange={handleFieldsValidity} />
+            </div> : null}
+            {activeTab === "palette" && currentPalette ? (
               <div className="palette-editor">
                 <div className="mode-selector">
                   <span>Palette Mode:</span>
@@ -1094,7 +1244,7 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
               </div>
             ) : null}
 
-            {activeTab === "typography" ? (
+            {activeTab === "typography" && !isV2(spec) ? (
               <div className="typography-editor">
                 <fieldset className="form-section">
                   <legend>Typography</legend>
@@ -1148,15 +1298,21 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
                     <label htmlFor="field-line-height">Line Height</label>
                     <input
                       id="field-line-height"
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       step="0.05"
-                      value={spec.typography.lineHeight ?? 1.6}
-                      onChange={(e) =>
-                        updateSpec((d) => {
-                          d.typography.lineHeight = parseFloat(e.target.value) || 1.6;
-                        })
-                      }
+                      value={lineHeightDraft ?? spec.typography.lineHeight ?? 1.6}
+                      aria-invalid={lineHeightDraft !== undefined && !fieldsValid}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setLineHeightDraft(raw);
+                        const value = Number(raw);
+                        const valid = raw.trim() !== "" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw.trim()) && Number.isFinite(value) && value >= 1 && value <= 3;
+                        handleFieldsValidity(valid);
+                        if (valid) updateSpec((d) => { d.typography.lineHeight = value; });
+                      }}
                     />
+                    {lineHeightDraft !== undefined && !fieldsValid ? <span role="alert">Line height must be a number from 1 to 3. The draft has been retained.</span> : null}
                   </div>
                 </fieldset>
 
@@ -1280,7 +1436,32 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
               </div>
             ) : null}
 
-            {activeTab === "exchange" ? (
+            {isV2(spec) ? <div hidden={activeTab !== "exchange"} inert={activeTab !== "exchange"}>
+              <ThemeV2Exchange bridge={bridge} sessionId={sessionIdRef.current} draftRevision={draftRevision} draftDirty={dirty}
+                reserveAdoptionRevision={() => ++latestIntendedOpRef.current}
+                onAdopt={(adopted, result) => {
+                  const revision = latestIntendedOpRef.current;
+                  latestAppliedOpRef.current = revision;
+                  if (compileTimerRef.current !== null) window.clearTimeout(compileTimerRef.current);
+                  pendingDraftCompileRef.current = null;
+                  fieldsValidRef.current = true;
+                  setFieldsValid(true);
+                  setDocumentGeneration((value) => value + 1);
+                  setSpec(adopted);
+                  setDraftRevision(revision);
+                  setPreviewRevision(revision);
+                  setCompiledCss(result?.compiledCss);
+                  if (result?.compiledCss) { setLastGoodCss(result.compiledCss); setPreviewSpec(adopted); }
+                  setDescriptor(result?.descriptor);
+                  setDiagnostics(result?.diagnostics ?? []);
+                  setCompileError(undefined);
+                  setDisplayName(undefined);
+                  saveAsRequiredRef.current = true;
+                  setDirty(true);
+                  setStatusMessage("Candidate adopted as an unsaved v2 draft");
+                }} />
+            </div> : null}
+            {activeTab === "exchange" && !isV2(spec) ? (
               <div className="exchange-panel">
                 <div className="exchange-header">
                   <div className="exchange-title-row">
@@ -1801,8 +1982,11 @@ export function ThemeLab({ bridge }: ThemeLabProps) {
             css={candidatePreviewCss ?? (compiledCss ?? lastGoodCss)}
             revision={candidatePreviewCss ? candidatePreviewRevision : previewRevision}
             mode={previewMode}
-            isLastGood={compileError !== undefined && lastGoodCss !== undefined && !candidatePreviewCss}
+            isLastGood={(compileError !== undefined || draftRevision > previewRevision) && lastGoodCss !== undefined && !candidatePreviewCss}
             onModeChange={setPreviewMode}
+            gallery={isV2(spec)}
+            spec={candidatePreviewCss ? undefined : (isV2(spec) ? spec : undefined)}
+            compiledSpec={previewSpec && isV2(previewSpec) ? previewSpec : undefined}
           />
         </div>
       </div>

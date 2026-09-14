@@ -1,10 +1,71 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ThemeLab } from "../features/theme-lab/ThemeLab";
 import { MockThemeLabBridge, SAMPLE_BRIEF_PACKET, SAMPLE_CANDIDATE_A_PACKET, SAMPLE_CANDIDATE_B_PACKET, SAMPLE_REVIEW_PACKET } from "../features/theme-lab/test/mock-bridge";
 import { SenderEvidenceImage } from "../features/theme-lab/SenderEvidenceImage";
 import type { ThemeLabBridge, ThemeLabCompileRequest, ThemeLabCompileResponse } from "../features/theme-lab/types";
+import type { ThemeDocumentSaveRequest } from "../features/theme-lab/v2-bridge";
 
 describe("Theme Lab Component", () => {
+  it("creates a separate unsaved v2 draft and retains invalid controls across sections", async () => {
+    const compileV2 = vi.fn(async (request: { uiRevision: number }) => ({ uiRevision: request.uiRevision, valid: true, compiledCss: "body {}", diagnostics: [] }));
+    const saveDocument = vi.fn(async (_request: ThemeDocumentSaveRequest) => ({ cancelled: false, displayName: "new-v2.json" }));
+    const bridge = Object.assign(new MockThemeLabBridge(), { compileV2, saveDocument });
+    render(<ThemeLab bridge={bridge} />);
+    await screen.findByText(/Loaded stellar-cyan/);
+    expect(compileV2).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "New v2 Theme" }));
+    await waitFor(() => expect(compileV2).toHaveBeenCalled());
+    expect(screen.getByText(/\* Modified/)).toBeTruthy();
+    const typo = () => within(screen.getByTestId("group-typography"));
+    fireEvent.change(typo().getByLabelText("body Font Size"), { target: { value: "oops" } });
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: "CSS & Descriptor" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Theme controls" }));
+    expect((typo().getByLabelText("body Font Size") as HTMLInputElement).value).toBe("oops");
+    fireEvent.change(typo().getByLabelText("body Font Size"), { target: { value: "18" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveDocument).toHaveBeenCalled());
+    expect(saveDocument.mock.calls[0]?.[0]).toMatchObject({ saveAs: true, specification: { schemaVersion: "tfsl.theme-v2", typography: { body: { size: 18 } } } });
+  });
+
+  it("labels retained CSS stale immediately while the edited draft is pending", async () => {
+    const bridge = new MockThemeLabBridge();
+    vi.spyOn(bridge, "compile").mockImplementation(() => new Promise(() => {}));
+    render(<ThemeLab bridge={bridge} />);
+    await screen.findByText(/Loaded stellar-cyan/);
+    fireEvent.change(screen.getByLabelText("Accent base hex code"), { target: { value: "#123456" } });
+    expect(screen.getByText(/Previewing last valid theme/)).toBeTruthy();
+  });
+
+  it("rejects a successful compiler result bound to a different revision", async () => {
+    const bridge = new MockThemeLabBridge();
+    const compile = bridge.compile.bind(bridge);
+    vi.spyOn(bridge, "compile").mockImplementation(async (request) => ({
+      ...await compile(request), uiRevision: (request.uiRevision ?? 0) + 1,
+    }));
+    render(<ThemeLab bridge={bridge} />);
+    await screen.findByText(/Loaded stellar-cyan/);
+    fireEvent.change(screen.getByLabelText("Accent base hex code"), { target: { value: "#123456" } });
+    await screen.findByText(/Compiler returned a mismatched revision/);
+    expect(screen.queryByText("Theme compiled successfully")).toBeNull();
+    expect(screen.getByText(/Previewing last valid theme/)).toBeTruthy();
+  });
+
+  it("does not attach an older save completion to a newly loaded draft", async () => {
+    const bridge = new MockThemeLabBridge();
+    let finishSave!: (result: { cancelled: boolean; displayName: string }) => void;
+    vi.spyOn(bridge, "saveTheme").mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
+    render(<ThemeLab bridge={bridge} />);
+    await screen.findByText(/Loaded stellar-cyan/);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(bridge.saveTheme).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "Amber Forge" }));
+    await screen.findByText(/Loaded amber-forge/);
+    finishSave({ cancelled: false, displayName: "older.theme.json" });
+    await waitFor(() => expect(screen.queryByText(/Saved older.theme.json/)).toBeNull());
+    expect(screen.getByText(/Loaded amber-forge/)).toBeTruthy();
+  });
+
   it("resumes only the latest pending draft compilation after packet selection cancels", async () => {
     const bridge = new MockThemeLabBridge();
     bridge.importPacket = async () => ({ cancelled: true });
@@ -201,7 +262,7 @@ describe("Theme Lab Component", () => {
 
     expect(await screen.findByRole("heading", { name: "Theme Lab" })).toBeTruthy();
 
-    const mobileBtn = screen.getByRole("button", { name: "Mobile (375px)" });
+    const mobileBtn = screen.getByRole("button", { name: "Mobile (390px)" });
     fireEvent.click(mobileBtn);
 
     const frameWrapper = container.querySelector(".preview-frame-wrapper");
@@ -639,6 +700,28 @@ describe("Theme Lab Component", () => {
 
     unmount();
     expect(disposeCalled).toBe(true);
+  });
+
+  it("does not invoke bridge.dispose on unmount when managed", async () => {
+    let disposeCalled = false;
+    const bridge = new MockThemeLabBridge();
+    const disposingBridge: ThemeLabBridge = {
+      ...bridge,
+      getStatus: () => bridge.getStatus(),
+      loadExample: (n, r, s) => bridge.loadExample(n, r, s),
+      compile: (r) => bridge.compile(r),
+      openTheme: () => bridge.openTheme(),
+      saveTheme: (r) => bridge.saveTheme(r),
+      dispose: async () => {
+        disposeCalled = true;
+      },
+    };
+
+    const { unmount } = render(<ThemeLab bridge={disposingBridge} managed />);
+    expect(await screen.findByRole("heading", { name: "Theme Lab" })).toBeTruthy();
+
+    unmount();
+    expect(disposeCalled).toBe(false);
   });
 
   it("explicit Compile button compiles current draft immediately", async () => {

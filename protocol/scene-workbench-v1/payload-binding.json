@@ -1,0 +1,331 @@
+{
+  "sha256": "013dc18c13b0e6d3abc82bb9f2c22af091b4af1a6321a0cf425c0a3978ab5709",
+  "bytes": 211242,
+  "sourceTreeDigest": "964775fc674636e296d8a343272b0984f4f18c185f4434880b53bff5ce85ef48",
+  "executableFiles": 39,
+  "schema": "tfsb.nebular-scene-binding-v1",
+  "engineSchema": "tfsb.vector-scene-v1",
+  "compatibility": 1,
+  "compilerLevel": 1,
+  "metadataVersion": "0.5.0",
+  "capability": "0.5-development",
+  "node": {
+    "version": "22.23.2",
+    "target": "aarch64-apple-darwin",
+    "sha256": "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572",
+    "bytes": 112937728
+  },
+  "adapterSha256": "1d0a28a146df201da9ef1fe2432595ccccef3ee3a4851d54e966adc51a8da195",
+  "files": [
+    {
+      "path": "bin/scene-batch.js",
+      "bytes": 3358,
+      "sha256": "1d0a28a146df201da9ef1fe2432595ccccef3ee3a4851d54e966adc51a8da195"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/COMMERCIAL-LICENSE.md",
+      "bytes": 932,
+      "sha256": "a81bcda7ec57a5c09f1cc6d05de420db7a0053b9496f1762065e083a60e5ede2"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/LICENSE",
+      "bytes": 34460,
+      "sha256": "62eef07fc3ad238dd889ff98cf9ed87b3ef0f421579b6945f87ec37c608afb62"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/NOTICE",
+      "bytes": 601,
+      "sha256": "d31e49346c1d4b9ea98ed49b817d48e68c4b9000e1763522da5ffe7f791e3657"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/diagnostics.js",
+      "bytes": 1146,
+      "sha256": "0807d8d20810f4dc97e12d2f0adfe3022a6e6869fbfb35fd052bfef3d38078ca"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/digests.js",
+      "bytes": 1375,
+      "sha256": "66f632dd1a092c7b9d424adda85a909069860a52dd79130ac5c800e20baff528"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/primitives.js",
+      "bytes": 14262,
+      "sha256": "8ea0aba048383082c285f449040a3d1d87d0f016c098b9141da23cebfedbe89b"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/canonical.js",
+      "bytes": 2802,
+      "sha256": "dfee79ef254cbcc99cc84e6e4dc1d90c01ed5d5b43b087ef51809ffae30af9b1"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/compile.js",
+      "bytes": 13719,
+      "sha256": "135c71215a19f2f77b24646f47fb49927144f80118b61849ec902fa5f309db96"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/constants.js",
+      "bytes": 3169,
+      "sha256": "2c3bfd8a6cc25e8be9dd75b4291221db7390dbe022076b41e440665e7dee73d3"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/emit.js",
+      "bytes": 13404,
+      "sha256": "e320009e7aafb970c59014eb795bb25dfee705ef6788e12afd9f98433f9443fa"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/geometry.js",
+      "bytes": 14497,
+      "sha256": "ccc86fd18106c6639bf3abc34d5681c35260bb64983d3187467561876ce8a218"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/glyphs/catalog.js",
+      "bytes": 6466,
+      "sha256": "cbb47ee1629e73139fcb9dc5b5af5c4947c763a0bf52320d352feb8b28b9d2b7"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/glyphs/labels.js",
+      "bytes": 6053,
+      "sha256": "7ed3f88a1616e23c45d2e5293b91857e9f2c32aa4dfd3aa7714bba15bf690c0f"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/guard.js",
+      "bytes": 3600,
+      "sha256": "592c290897fb4a31fbad6083609cd4bc2b888f2988ec62fd7230b64278955bbd"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/import-svg-guard.js",
+      "bytes": 14870,
+      "sha256": "67eecd5b5959e960d434a4569b7db0577bf7650a61cd40baaac390d6fc6928a0"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/import-svg.js",
+      "bytes": 70221,
+      "sha256": "d600ad614745f907261d7ea5ff24539fbb4f2b7c0339504ac98ce1dad8f95999"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/index.js",
+      "bytes": 572,
+      "sha256": "20b8e8b8329e08ee6fcbcdf6fadf62505ddb0acc1ca0c1fc7a6018a7f2b9162a"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/layout.js",
+      "bytes": 18684,
+      "sha256": "395fdbe3ce06f341bdb5aade341725e6abdf8857e91d5c62baeb475daa207bf0"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/path-canonical.js",
+      "bytes": 1841,
+      "sha256": "a58f8a4d97b2cc3263a387a4443f5fbce9a802329606849c1858831f2d8e270e"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/transforms.js",
+      "bytes": 11231,
+      "sha256": "78085867466af0aba892a7c2d0af6496cb61352d15e796d23677407b1f7722fd"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/validate.js",
+      "bytes": 87607,
+      "sha256": "4c12ff28885c7c04d4c4ee75b20bd3cf267775f7ac84ca0a587d26e8c1c43868"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/schema2-toml.js",
+      "bytes": 34384,
+      "sha256": "08e735b3fa6c7034ed843fd2bb2f381acbcd2c9a7792ca107cb6cd8437e666c6"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/schema2-validation.js",
+      "bytes": 4978,
+      "sha256": "d258ec8aeb6a47d70ac037201511f07ca05b6bcac3f0a8945a5619d3e2542243"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/toml-writer.js",
+      "bytes": 8597,
+      "sha256": "32773468d5655c38467f3f81fab81602c3f0be2200a56967f62942584072c7fa"
+    },
+    {
+      "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/package.json",
+      "bytes": 170,
+      "sha256": "752c20a23486c64adcf697246370cb5162d83306d90b58ba166eb0ba4523b343"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/CHANGELOG.md",
+      "bytes": 69194,
+      "sha256": "5138fc1f8c15712ed7ede448a53f06fad0c15f1f94b57b4cb74ccfe694329c5a"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/LICENSE",
+      "bytes": 1298,
+      "sha256": "4da724fc305d81606b245b324d4d2586916b9d248b23d82183df753ace0fdf71"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/SECURITY.md",
+      "bytes": 3980,
+      "sha256": "a17b482b11a4f3ff0aa20bad116c49472c5ba9417223adf915eb739d194aceea"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/index.d.ts",
+      "bytes": 73605,
+      "sha256": "342163401aa45f329d6b07a70d878ec9d1dfbf1630ee389ac242309178833baf"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/.eslintrc.yml",
+      "bytes": 63,
+      "sha256": "8962d52a0bb86f17e764dfaf160d265eaa969ed3d67da747b59c1df6eb4833c2"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/conventions.js",
+      "bytes": 13399,
+      "sha256": "da57fbe2b07f5a4aaee9217b49778936c11a1108da1761b2f24f356a900ff124"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/dom-parser.js",
+      "bytes": 20276,
+      "sha256": "4188e24b953e2c70b66150306c66547495ad968d040e31dd65f22a7b3485da28"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/dom.js",
+      "bytes": 133234,
+      "sha256": "bea9ba89adfec227e9e572ee934a48223a170c5cf96b7087d7e3d3023ac47be3"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/entities.js",
+      "bytes": 44533,
+      "sha256": "ef333b680379392e8ee120e1cc77e0a8ff99a135e3b365b048f69c0df5f571f9"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/errors.js",
+      "bytes": 6817,
+      "sha256": "3e97f9c4f0a189346e2621b29c7c5a3899cd7375d1d15cbfbddd044fb781cb9f"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/grammar.js",
+      "bytes": 23776,
+      "sha256": "144f27b46adfb4a139adeb7483820def568b3940a6893194c03f5a71a94babc0"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/index.js",
+      "bytes": 1595,
+      "sha256": "418c42598a45290498f4350b6b6f531ceeb25e8d4d9a107db2448a1c0b5b784e"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/lib/sax.js",
+      "bytes": 32465,
+      "sha256": "324e8a0c7b475c645efcd1736b634733e133150849bff741fa0e2215e7017d02"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/package.json",
+      "bytes": 2253,
+      "sha256": "b61c2dd342e0e1abb800302ec62c0b06ae7a07cd9b907c88428ff80100f64c6a"
+    },
+    {
+      "path": "node_modules/@xmldom/xmldom/readme.md",
+      "bytes": 13763,
+      "sha256": "5ee9af83f442f300bf14d6ba8a79a6708f4f721a68ce79ce6fb701bc9ccd2de7"
+    },
+    {
+      "path": "node_modules/smol-toml/LICENSE",
+      "bytes": 1499,
+      "sha256": "fa5659948374d4f555594f47f6da073b40dc503e921aeeece30df4362b3051a5"
+    },
+    {
+      "path": "node_modules/smol-toml/README.md",
+      "bytes": 23654,
+      "sha256": "6170186cc4c4e3e5b755e5d54939d01a4e2c5a930a650dde0ee0d3eef04cc3a2"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/date.d.ts",
+      "bytes": 2098,
+      "sha256": "c7ad3531c131f2b5b246b2d208b75c5403475ad155b7661fa2d673104b806791"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/date.js",
+      "bytes": 4942,
+      "sha256": "fcc8fcce1a3e8660ac572fb827c20e49d269ad50686c085bb72c3c50771323d5"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/error.d.ts",
+      "bytes": 1878,
+      "sha256": "c5ada15420e52bcc8a451a7c4f2daff318e6d0bf5f8c691b25158555a4508f0e"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/error.js",
+      "bytes": 2787,
+      "sha256": "28dbfc2871c0707f97cebb5a8be7e343a9cee58250b5814813d748b90d9e0d3b"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/extract.js",
+      "bytes": 3359,
+      "sha256": "851ddbb4ae8571fda887a03511a6688d9b168c49deceda34243ad77d6f2a39ec"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/index.cjs",
+      "bytes": 22907,
+      "sha256": "195ca51fc784617d361af3697756a896518e45bec4e35976baec2dffd656cb8f"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/index.d.ts",
+      "bytes": 2208,
+      "sha256": "b741d3219913446a93fe07e00dafe9fa3e857fa478e85b483cbf2e11d84521a5"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/index.js",
+      "bytes": 1883,
+      "sha256": "ded3ee91f3ce1ef746f6b57459b0c68475658eacb8e88fd18336a5408de009a1"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/parse.d.ts",
+      "bytes": 2058,
+      "sha256": "ebb272a8381742aad17e0445e0872c0496561e4bfa465576a70efdb23117a99f"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/parse.js",
+      "bytes": 5754,
+      "sha256": "92d512a52a44f72b3258e817e4cf3e6d576ffc5059666b9fe27341e7871ecead"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/primitive.js",
+      "bytes": 11015,
+      "sha256": "64418c1b056c86d24053caee06ec44bd48187c061b7ff09c21159f2e0e5dd8f5"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/stringify.d.ts",
+      "bytes": 1759,
+      "sha256": "c9a75924aa75b4e60542ff06437b3abd9679ee9f740245080fbe528f05fb8763"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/stringify.js",
+      "bytes": 7272,
+      "sha256": "a96ec2fa840067eff015a38a18849f1e3b2ff2e9cb9ad52cd9266497ad12b3de"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/struct.js",
+      "bytes": 7009,
+      "sha256": "dbd94692ef8225459b29232f23e82fd67ad84002349e67458456a09695f063b0"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/util.d.ts",
+      "bytes": 2130,
+      "sha256": "e08c5ba5f398c27b34b966b1b8427e7599394927c5397f765b7a085cd7f4541a"
+    },
+    {
+      "path": "node_modules/smol-toml/dist/util.js",
+      "bytes": 3404,
+      "sha256": "332fda936c5d81a493d1a7dfa574221d27d585657b337e5db466cc26aec26302"
+    },
+    {
+      "path": "node_modules/smol-toml/package.json",
+      "bytes": 1548,
+      "sha256": "fa2995d429c856669968d6281c14e6be93a40cd404dad43aa2e4599608f20bdc"
+    },
+    {
+      "path": "package.json",
+      "bytes": 33,
+      "sha256": "a90fc33418afa2b9cbf4768524b021135b965ecdf993457505bfae3ac44a8428"
+    },
+    {
+      "path": "scene-input.json",
+      "bytes": 8363,
+      "sha256": "f84ccf13d315ddf8daf3634bc20b0ed38eb25960bf7d9e888866cdeab5a62b00"
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+---
+title: Catalog Verification Overview
+description: Comprehensive verification of Stellar Loom catalog components, typography, layout, and consumer overrides.
+---
+
+import { Card, CardGrid, Tabs, TabItem, Badge, FileTree } from "@astrojs/starlight/components";
+
+## Component Demonstration Section
+
+This section contains representative Starlight components required by the catalog envelope qualification.
+
+### Badges and Asides
+
+<Badge text="Private catalog candidate" variant="success" />
+<Badge text="Catalog" variant="note" />
+<Badge text="Strict" variant="tip" />
+
+:::note[Information Callout]
+Standard informational aside testing low-luminance background surfaces and hairline borders.
+:::
+
+:::tip[Helpful Hint]
+Guidance callout testing accent border highlights and inline text readability.
+:::
+
+:::caution[Cautionary Notice]
+Alert callout testing contrast against the underlying background canvas.
+:::
+
+:::danger[Critical Error Alert]
+Alert callout testing high-visibility failure warning styling.
+:::
+
+### Content Roles
+
+> A bounded panel role in ordinary Markdown content.
+
+<details id="catalog-detail"><summary>Expanded content role</summary>Raised surface text.</details>
+
+<small id="catalog-muted">Muted content role.</small>
+
+### Cards Grid
+
+<CardGrid>
+  <Card title="Hero Layouts" icon="rocket">
+    Centered, media-top, media-left, media-right, and banner presets.
+  </Card>
+  <Card title="Pagination Variants" icon="document">
+    Plain, card, and compact navigation pagination templates.
+  </Card>
+  <Card title="Sidebar Modes" icon="list-format">
+    Nested, tabs, select, and active-only sidebar navigation modes.
+  </Card>
+  <Card title="Font Policy" icon="font">
+    Offline package-local Source Code Pro font verification via CDP.
+  </Card>
+</CardGrid>
+
+### Tabs Demonstration
+
+<Tabs>
+  <TabItem label="Theme Spec">
+    ```json
+    {
+      "name": "loom-celestia-catalog",
+      "layoutPreset": "compact"
+    }
+    ```
+  </TabItem>
+  <TabItem label="Catalog Route">
+    ```markdown
+    /catalog/hero-centered
+    /catalog/hero-media-top
+    ```
+  </TabItem>
+</Tabs>
+
+### File Tree Demonstration
+
+<FileTree>
+- packages/
+  - stellar-loom/
+    - examples/
+      - loom-black-catalog.json
+      - loom-flexoki-catalog.json
+      - loom-celestia-catalog.json
+    - tools/
+      - smoke-catalog.mjs
+</FileTree>
+
+### Representative Table
+
+| Feature Category | Coverage State | Implementation Gate |
+| :--- | :--- | :--- |
+| Hero Layouts | All 5 layout variants covered | 61B-catalog |
+| Pagination | Plain, card, compact variants | 61B-catalog |
+| Sidebar Modes | Nested, tabs, select, active-only | 61B-catalog |
+| Local Font | Source Code Pro woff2 offline CDP | 61B-catalog |
+
+### Code Block for Font CDP Verification
+
+<code id="catalog-font-probe">Source Code Pro local font rendering 0123456789</code>
+
+```typescript
+// Offline platform font test target
+export function verifySourceCodeProFontPlatformRendering(): string {
+  const customFamily = "Source Code Pro";
+  return `Testing ${customFamily} platform glyph count > 0`;
+}
+```
+
+### Consumer Specificity Override Target
+
+<div class="catalog-consumer-override-target" data-testid="consumer-override-target">
+  Consumer Specificity Override Marker Text
+</div>
+
+<p class="consumer-specificity-probe" data-testid="consumer-probe-text">
+  Consumer probe paragraph testing matching specificity override.
+</p>
+
+### Navigation Cross References
+
+- [Centered Hero Layout](/catalog/hero-centered)
+- [Media Top Hero Layout](/catalog/hero-media-top)
+- [Media Left Hero Layout](/catalog/hero-media-left)
+- [Media Right Hero Layout](/catalog/hero-media-right)
+- [Banner Hero Layout](/catalog/hero-banner)
+- [Nested Sidebar](/catalog/sidebar-nested)
+- [Sidebar-less Layout](/catalog/sidebar-less)

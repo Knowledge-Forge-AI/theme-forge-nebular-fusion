@@ -49,7 +49,7 @@ impl<'de> Deserialize<'de> for Digest {
 }
 
 impl Digest {
-    pub(super) fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

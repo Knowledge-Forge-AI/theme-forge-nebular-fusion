@@ -541,7 +541,7 @@ fn verify_manifest(
         return Err(io::Error::other("manifest identity"));
     }
     if manifest.core.name != "@knowledge-forge-ai/theme-forge-stellar-burst"
-        || manifest.core.version != "0.4.0"
+        || manifest.core.version != "0.5.0"
         || !valid_hex(&manifest.core.tarball.sha1, 40)
         || !valid_hex(&manifest.core.tarball.sha256, 64)
         || manifest.core.tarball.size > MAX_FILE_BYTES
