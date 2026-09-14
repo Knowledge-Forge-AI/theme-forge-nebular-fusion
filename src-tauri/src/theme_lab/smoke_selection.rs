@@ -5,6 +5,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 static IMPORT: AtomicUsize = AtomicUsize::new(0);
+static SAVE: AtomicUsize = AtomicUsize::new(0);
+static OPEN: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn initialize() -> StudioResult<()> {
     let Ok(input) = std::env::var("TFSB_NATIVE_EXCHANGE_DIR") else {
@@ -34,9 +36,10 @@ pub(crate) fn select(operation: &str) -> Option<StudioResult<Option<PathBuf>>> {
     let root = ROOT.get()?;
     let name = match operation {
         "import" => match IMPORT.fetch_add(1, Ordering::SeqCst) {
-            0 => "candidate-a.json",
-            1 => "candidate-b.json",
-            2 => "review.json",
+            0 => "candidate-v2.json",
+            1 => "candidate-a.json",
+            2 => "candidate-b.json",
+            3 => "review.json",
             _ => {
                 return Some(Err(StudioCommandError::new(
                     StudioReasonCode::SelectionRejected,
@@ -45,8 +48,20 @@ pub(crate) fn select(operation: &str) -> Option<StudioResult<Option<PathBuf>>> {
         },
         "brief" => "brief.json",
         "review" => "review.json",
-        "save" => "adopted.theme.json",
-        "open" => "baseline.theme.json",
+        "save" => {
+            if SAVE.fetch_add(1, Ordering::SeqCst) == 0 {
+                "v2-saved.theme.json"
+            } else {
+                "adopted.theme.json"
+            }
+        }
+        "open" => {
+            if OPEN.fetch_add(1, Ordering::SeqCst) == 0 {
+                "v2-saved.theme.json"
+            } else {
+                "baseline.theme.json"
+            }
+        }
         _ => {
             return Some(Err(StudioCommandError::new(
                 StudioReasonCode::SelectionRejected,

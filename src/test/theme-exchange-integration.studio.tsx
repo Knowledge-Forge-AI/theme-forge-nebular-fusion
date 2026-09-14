@@ -164,7 +164,7 @@ describe("TFSB53E-R1 Theme Design Exchange Integration", () => {
       expect(briefPacket.schema).toBe("tfsl.theme-brief");
       expect(briefPacket.briefId).toBe("brief-stellar-cyan");
       expect(briefPacket.briefDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-      expect(briefPacket.compilerVersion).toBe("0.1.0");
+      expect(briefPacket.compilerVersion).toBe("0.2.0");
     });
 
     it("exercises two imports without draft mutation and explicit select preview reaching real compiler", async () => {

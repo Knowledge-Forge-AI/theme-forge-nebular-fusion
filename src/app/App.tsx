@@ -11,16 +11,28 @@ import { TauriThemeLabBridge } from "../features/theme-lab/theme-lab-bridge";
 import type { ThemeLabBridge } from "../features/theme-lab/types";
 import type { StudioHostBridge, StudioHostStateEvent, StudioHostStatus, StudioProjectOpen, StudioSourceOpen } from "../protocol/contracts";
 
+import { VectorGraphicsLab } from "../features/vector-graphics";
+import type { VectorGraphicsBridge } from "../features/vector-graphics/types";
+import "../features/vector-graphics/styles.css";
+
+export type Destination = "brand-system" | "vector-graphics" | "starlight-theme";
+
+
 export function App({
   hostBridge,
   brandReadClient,
   themeLabBridge,
+  vectorGraphicsBridge,
 }: {
   readonly hostBridge: StudioHostBridge;
   readonly brandReadClient?: StudioBrandReadClient;
   readonly themeLabBridge?: ThemeLabBridge;
+  readonly vectorGraphicsBridge?: VectorGraphicsBridge;
 }) {
-  const [activeDestination, setActiveDestination] = useState<"workbench" | "theme-lab">("workbench");
+  const [activeDestination, setActiveDestination] = useState<Destination>("brand-system");
+  const [visitedDestinations, setVisitedDestinations] = useState<ReadonlySet<Destination>>(
+    () => new Set<Destination>(["brand-system"]),
+  );
   const [status, setStatus] = useState<StudioHostStatus>();
   const [event, setEvent] = useState<StudioHostStateEvent>();
   const [proposalDraft, setProposalDraft] = useState<Proposal>();
@@ -36,8 +48,22 @@ export function App({
   useEffect(() => {
     let active = true;
     void hostBridge.getStatus().then((next) => { if (active) setStatus(next); }, () => { if (active) setHostError("The Studio host status is unavailable."); });
-    return () => { active = false; hostBridge.close(); };
-  }, [hostBridge]);
+    return () => {
+      active = false;
+      hostBridge.close();
+      void effectiveThemeLabBridge.dispose?.();
+    };
+  }, [hostBridge, effectiveThemeLabBridge]);
+
+  const selectDestination = (destination: Destination) => {
+    setActiveDestination(destination);
+    setVisitedDestinations((current) => {
+      if (current.has(destination)) return current;
+      const next = new Set(current);
+      next.add(destination);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (status?.state !== "ready") return undefined;
@@ -82,33 +108,65 @@ export function App({
         <nav className="destination-nav" aria-label="Workbench destinations">
           <button
             type="button"
-            className={activeDestination === "workbench" ? "destination-tab active" : "destination-tab"}
-            onClick={() => setActiveDestination("workbench")}
-            aria-pressed={activeDestination === "workbench"}
+            className={activeDestination === "brand-system" ? "destination-tab active" : "destination-tab"}
+            onClick={() => selectDestination("brand-system")}
+            aria-pressed={activeDestination === "brand-system"}
           >
-            Brand Workbench
+            Brand / System
           </button>
           <button
             type="button"
-            className={activeDestination === "theme-lab" ? "destination-tab active" : "destination-tab"}
-            onClick={() => setActiveDestination("theme-lab")}
-            aria-pressed={activeDestination === "theme-lab"}
+            className={activeDestination === "vector-graphics" ? "destination-tab active" : "destination-tab"}
+            onClick={() => selectDestination("vector-graphics")}
+            aria-pressed={activeDestination === "vector-graphics"}
           >
-            Theme Lab
+            Vector / Graphics
+          </button>
+          <button
+            type="button"
+            className={activeDestination === "starlight-theme" ? "destination-tab active" : "destination-tab"}
+            onClick={() => selectDestination("starlight-theme")}
+            aria-pressed={activeDestination === "starlight-theme"}
+          >
+            Starlight Theme
           </button>
         </nav>
       </header>
       <main id="main-content">
-        {activeDestination === "theme-lab" ? (
-          <ThemeLab bridge={effectiveThemeLabBridge} />
-        ) : (
-          <>
+        {visitedDestinations.has("brand-system") ? (
+          <div
+            className="work-area work-area-brand-system"
+            data-destination="brand-system"
+            hidden={activeDestination !== "brand-system"}
+            inert={activeDestination !== "brand-system" ? true : undefined}
+          >
             {hostError ? <section className="panel bootstrap-error" role="alert" aria-live="assertive"><h2>Studio host unavailable</h2><p>{hostError}</p></section> : null}
             {status ? <Diagnostics source={hostBridge.source} status={status} event={event} selectionStatus={selectionStatus} onStart={start} onProject={selectProject} onSource={selectSource} onStop={stop} /> : <p role="status">Loading Studio host status…</p>}
             {status ? <BrandWorkbench client={readClient} planClient={planClient} host={status} project={project} source={source} sources={sources} proposalDraft={proposalDraft} /> : null}
             {status ? <DesignExchange host={status} project={project} sources={sources} readClient={readClient} onProposalPrefill={setProposalDraft} /> : null}
-          </>
-        )}
+          </div>
+        ) : null}
+        {visitedDestinations.has("vector-graphics") ? (
+          <div
+            className="work-area work-area-vector-graphics"
+            data-destination="vector-graphics"
+            hidden={activeDestination !== "vector-graphics"}
+            inert={activeDestination !== "vector-graphics" ? true : undefined}
+          >
+            <h2>Vector / Graphics</h2>
+            <VectorGraphicsLab bridge={vectorGraphicsBridge} projectHandle={project?.projectHandle} />
+          </div>
+        ) : null}
+        {visitedDestinations.has("starlight-theme") ? (
+          <div
+            className="work-area work-area-starlight-theme"
+            data-destination="starlight-theme"
+            hidden={activeDestination !== "starlight-theme"}
+            inert={activeDestination !== "starlight-theme" ? true : undefined}
+          >
+            <ThemeLab bridge={effectiveThemeLabBridge} managed />
+          </div>
+        ) : null}
       </main>
       <footer>Nebular Fusion 0.2.0 · Studio protocol 1.2 live reads and typed plans · explicit human confirmation · no embedded model</footer>
     </div>

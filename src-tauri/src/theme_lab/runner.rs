@@ -6,12 +6,12 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
+use super::validation::validate_descriptor_and_digest;
 
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 use crate::theme_lab::types::{
-    BatchSubprocessRequest, BatchSubprocessResponse, ThemeLabCompileRequest,
-    ThemeLabCompileResponse, ThemeLabExampleResponse, ThemeSpecification,
+    BatchSubprocessRequest, BatchSubprocessResponse, ThemeDocument, ThemeLabCompileRequest,
+    ThemeLabCompileResponse, ThemeLabExampleResponse,
 };
 
 const MAX_INPUT_BYTES: usize = 32 * 1024 * 1024; // 32MB max batch transport envelope
@@ -22,10 +22,7 @@ const MAX_COMPILE_OUTPUT_BYTES: usize = 2 * 1024 * 1024 + 1024; // 2MB for compi
 const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024; // 16MB for exchange packets
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const COMPILER_VERSION: &str = "0.1.0";
-pub(crate) const EXPECTED_DESCRIPTOR_SCHEMA: &str = "tfsl.theme-descriptor-v1";
-pub(crate) const EXPECTED_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
-pub(crate) const EXPECTED_DESCRIPTOR_ADAPTER: &str = "starlight-v0.42";
+pub const COMPILER_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Default)]
 struct ExecutionState {
@@ -45,7 +42,9 @@ struct ExecutionController {
 pub struct ThemeLabRunner {
     node_binary: PathBuf,
     batch_adapter: PathBuf,
+    v2_adapter: Option<PathBuf>,
     controller: Arc<ExecutionController>,
+    authenticate_payload: bool,
 }
 
 fn terminate_child(child: &mut Child) -> bool {
@@ -82,13 +81,49 @@ impl<'a> Drop for ChildProcessGuard<'a> {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct CandidateProbe {
+    schema: Option<String>,
+    #[serde(rename = "schemaVersion")]
+    schema_version: Option<u32>,
+    #[serde(rename = "semanticCompiler")]
+    semantic_compiler: Option<String>,
+}
+
+fn is_candidate_v2(raw: &str) -> bool {
+    let Ok(probe) = serde_json::from_str::<CandidateProbe>(raw) else {
+        return false;
+    };
+    match (probe.schema.as_deref(), probe.schema_version) {
+        (Some("tfsl.theme-catalog-candidate"), Some(1)) => true,
+        (Some("tfsl.theme-candidate"), Some(2)) => matches!(
+            probe.semantic_compiler.as_deref(),
+            Some("tfsl.theme-compiler-v2-core-1") | Some("tfsl.theme-compiler-v2-code-1")
+        ),
+        _ => false,
+    }
+}
+
 impl ThemeLabRunner {
     pub fn new(node_binary: PathBuf, batch_adapter: PathBuf) -> Self {
+        let v2_adapter =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("loom-adapter/theme-adapter.mjs");
+        let v2_adapter = if v2_adapter.is_file() {
+            Some(v2_adapter)
+        } else {
+            None
+        };
         Self {
             node_binary,
             batch_adapter,
+            v2_adapter,
             controller: Arc::new(ExecutionController::default()),
+            authenticate_payload: false,
         }
+    }
+
+    pub fn v2_adapter_path(&self) -> Option<&Path> {
+        self.v2_adapter.as_deref()
     }
 
     pub fn is_packaged_bundle(current_exe: &Path) -> bool {
@@ -111,7 +146,7 @@ impl ThemeLabRunner {
     }
 
     pub fn discover_with_mode(resource_dir: &Path, current_exe: &Path, packaged: bool) -> Self {
-        if packaged {
+        if packaged || !cfg!(debug_assertions) {
             let bundled_node = current_exe
                 .parent()
                 .map(|parent| parent.join("tfsb-studio-service"))
@@ -124,17 +159,28 @@ impl ThemeLabRunner {
                     .join("bin")
                     .join("tfsl-batch.js")
             };
-            Self::new(bundled_node, bundled_adapter)
+            let bundled_v2 = resource_dir.join("loom-adapter").join("theme-adapter.mjs");
+            Self {
+                node_binary: bundled_node,
+                batch_adapter: bundled_adapter,
+                v2_adapter: Some(bundled_v2),
+                controller: Arc::new(ExecutionController::default()),
+                authenticate_payload: true,
+            }
         } else {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
             let node_binary = if let Ok(path) = std::env::var("TFSB_STUDIO_NODE_BINARY") {
                 PathBuf::from(path)
-            } else if let Some(parent) = current_exe.parent() {
-                let candidate = parent.join("tfsb-studio-service");
-                if candidate.is_file() {
-                    candidate
-                } else {
-                    PathBuf::from("node")
-                }
+            } else if let Some(parent) = current_exe.parent()
+                && let candidate = parent.join("tfsb-studio-service")
+                && candidate.is_file()
+            {
+                candidate
+            } else if root
+                .join("binaries/tfsb-studio-service-aarch64-apple-darwin")
+                .is_file()
+            {
+                root.join("binaries/tfsb-studio-service-aarch64-apple-darwin")
             } else {
                 PathBuf::from("node")
             };
@@ -151,54 +197,30 @@ impl ThemeLabRunner {
                     .join("loom-payload")
                     .join("bin")
                     .join("tfsl-batch.js")
-            } else if resource_dir
-                .join("src-tauri")
-                .join("loom-payload")
-                .join("bin")
-                .join("tfsl-batch.js")
-                .is_file()
-            {
-                resource_dir
-                    .join("src-tauri")
-                    .join("loom-payload")
-                    .join("bin")
-                    .join("tfsl-batch.js")
             } else {
-                resource_dir
-                    .join("loom-payload")
-                    .join("bin")
-                    .join("tfsl-batch.js")
+                root.join("loom-payload/bin/tfsl-batch.js")
             };
 
-            let dev_adapter = resource_dir
-                .ancestors()
-                .find_map(|ancestor| {
-                    let candidate = ancestor
-                        .join("packages")
-                        .join("stellar-loom")
-                        .join("bin")
-                        .join("tfsl-batch.js");
-                    if candidate.is_file() {
-                        Some(candidate)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| bundled_adapter.clone());
+            let v2_adapter = root.join("loom-adapter/theme-adapter.mjs");
 
-            let batch_adapter = if bundled_adapter.is_file() {
-                bundled_adapter
-            } else {
-                dev_adapter
-            };
-
-            Self::new(node_binary, batch_adapter)
+            Self {
+                node_binary,
+                batch_adapter: bundled_adapter,
+                v2_adapter: Some(v2_adapter),
+                controller: Arc::new(ExecutionController::default()),
+                authenticate_payload: true,
+            }
         }
     }
 
     pub fn is_available(&self) -> bool {
         let node_ok = self.node_binary.is_file() || self.node_binary == Path::new("node");
-        node_ok && self.batch_adapter.is_file()
+        let batch_ok = self.batch_adapter.is_file();
+        let v2_ok = self
+            .v2_adapter
+            .as_ref()
+            .is_some_and(|p| crate::sidecar::scene_artifact::authenticate_theme_adapter(p).is_ok());
+        node_ok && batch_ok && v2_ok
     }
 
     pub fn node_binary_path(&self) -> &Path {
@@ -221,9 +243,29 @@ impl ThemeLabRunner {
         }
     }
 
-    fn execute_batch(
+    pub fn execute_batch(
         &self,
         request: &BatchSubprocessRequest,
+    ) -> StudioResult<BatchSubprocessResponse> {
+        self.execute_process(request, &self.batch_adapter)
+    }
+
+    pub fn execute_v2(
+        &self,
+        request: &BatchSubprocessRequest,
+    ) -> StudioResult<BatchSubprocessResponse> {
+        let v2_adapter = self
+            .v2_adapter
+            .as_ref()
+            .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SidecarArtifactUnavailable))?;
+        crate::sidecar::scene_artifact::authenticate_theme_adapter(v2_adapter)?;
+        self.execute_process(request, v2_adapter)
+    }
+
+    fn execute_process(
+        &self,
+        request: &BatchSubprocessRequest,
+        script_path: &Path,
     ) -> StudioResult<BatchSubprocessResponse> {
         if !self.is_available() {
             return Err(StudioCommandError::new(
@@ -306,7 +348,7 @@ impl ThemeLabRunner {
             *guard = Some(cancel_token.clone());
         }
 
-        let result = self.execute_batch_inner(&request, &request_bytes, &cancel_token);
+        let result = self.execute_batch_inner(&request, &request_bytes, &cancel_token, script_path);
 
         // 4. Clear cancel token if still ours
         if let Ok(mut guard) = self.controller.active_cancel.lock()
@@ -330,13 +372,24 @@ impl ThemeLabRunner {
         request: &BatchSubprocessRequest,
         request_bytes: &[u8],
         cancel_token: &Arc<AtomicBool>,
+        script_path: &Path,
     ) -> StudioResult<BatchSubprocessResponse> {
         if cancel_token.load(Ordering::SeqCst) {
             return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
         }
 
+        if self.authenticate_payload {
+            crate::sidecar::scene_artifact::authenticate_theme_payload(
+                &self.node_binary,
+                &self.batch_adapter,
+            )?;
+        }
+        if cancel_token.load(Ordering::SeqCst) {
+            return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+        }
+
         let mut child = Command::new(&self.node_binary)
-            .arg(&self.batch_adapter)
+            .arg(script_path)
             .env_clear()
             .env("NODE_ENV", "production")
             .env("LANG", "C")
@@ -358,91 +411,95 @@ impl ThemeLabRunner {
             .stdin
             .take()
             .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SidecarCrashed))?;
-        let stdin_bytes = request_bytes.to_vec();
-        let stdin_thread = thread::Builder::new()
-            .name("tfsl-batch-stdin".to_owned())
-            .spawn(move || {
-                let _ = stdin.write_all(&stdin_bytes);
-                drop(stdin);
-            });
+        let bytes_to_write = request_bytes.to_vec();
+        let stdin_thread = Some(thread::spawn(move || {
+            let _ = stdin.write_all(&bytes_to_write);
+            let _ = stdin.flush();
+            drop(stdin);
+        }));
 
-        // Worker thread for reading stdout
+        // Worker thread for reading stdout with hard byte cap
         let mut stdout = guard
             .child
             .stdout
             .take()
             .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SidecarCrashed))?;
-        let max_stdout = match request.action.as_str() {
+        let (stdout_tx, stdout_rx) = mpsc::channel();
+        let stdout_limit = match request.action.as_str() {
             "compile" | "example" | "validate" => MAX_COMPILE_OUTPUT_BYTES,
             _ => MAX_STDOUT_BYTES,
         };
-        let (stdout_tx, stdout_rx) = mpsc::channel();
-        let stdout_thread = thread::Builder::new()
-            .name("tfsl-batch-stdout".to_owned())
-            .spawn(move || {
-                let mut output_bytes = Vec::new();
-                let mut buffer = [0u8; 4096];
-                loop {
-                    match stdout.read(&mut buffer) {
-                        Ok(0) => {
-                            let _ = stdout_tx.send(Ok(output_bytes));
-                            break;
-                        }
-                        Ok(n) => {
-                            output_bytes.extend_from_slice(&buffer[..n]);
-                            if output_bytes.len() > max_stdout {
-                                let _ = stdout_tx.send(Err(StudioReasonCode::ResultTooLarge));
-                                break;
-                            }
-                        }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => {
-                            let _ = stdout_tx.send(Err(StudioReasonCode::SidecarCrashed));
+        let stdout_thread = Some(thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                match stdout.read(&mut chunk) {
+                    Ok(0) => {
+                        let _ = stdout_tx.send(Ok(buffer));
+                        break;
+                    }
+                    Ok(n) => {
+                        buffer.extend_from_slice(&chunk[..n]);
+                        if buffer.len() > stdout_limit {
+                            let _ = stdout_tx.send(Err(StudioReasonCode::ResultTooLarge));
                             break;
                         }
                     }
+                    Err(_) => {
+                        let _ = stdout_tx.send(Err(StudioReasonCode::SidecarCrashed));
+                        break;
+                    }
                 }
-            });
+            }
+        }));
 
-        // Worker thread for draining stderr
+        // Worker thread for reading stderr
         let mut stderr = guard
             .child
             .stderr
             .take()
             .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SidecarCrashed))?;
-        let stderr_thread = thread::Builder::new()
-            .name("tfsl-batch-stderr".to_owned())
-            .spawn(move || {
-                let mut buffer = [0u8; 4096];
-                let mut total = 0usize;
-                loop {
-                    match stderr.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            total = total.saturating_add(n);
-                            if total > MAX_STDERR_BYTES {
-                                // drain without accumulating memory
-                            }
+        let (stderr_tx, _stderr_rx) = mpsc::channel();
+        let stderr_thread = Some(thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                match stderr.read(&mut chunk) {
+                    Ok(0) => {
+                        let _ = stderr_tx.send(buffer);
+                        break;
+                    }
+                    Ok(n) => {
+                        buffer.extend_from_slice(&chunk[..n]);
+                        if buffer.len() > MAX_STDERR_BYTES {
+                            let _ = stderr_tx.send(buffer);
+                            break;
                         }
-                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => break,
+                    }
+                    Err(_) => {
+                        let _ = stderr_tx.send(buffer);
+                        break;
                     }
                 }
-            });
+            }
+        }));
 
-        let deadline = Instant::now() + EXECUTION_TIMEOUT;
-        let mut timed_out = false;
+        // Polling loop checking timeout and cancellation
+        let start = Instant::now();
         let mut cancelled = false;
+        let mut timed_out = false;
 
         loop {
             if cancel_token.load(Ordering::SeqCst) {
                 cancelled = true;
                 break;
             }
-            if Instant::now() >= deadline {
+
+            if start.elapsed() > EXECUTION_TIMEOUT {
                 timed_out = true;
                 break;
             }
+
             match guard.child.try_wait() {
                 Ok(Some(_)) => {
                     break;
@@ -555,7 +612,7 @@ impl ThemeLabRunner {
                         StudioReasonCode::SidecarProtocolInvalid,
                     ));
                 };
-                Self::validate_descriptor_and_digest(css, desc)?;
+                validate_descriptor_and_digest(css, desc, response.styles.as_deref())?;
             }
             "example" => {
                 if response.specification.is_none() {
@@ -585,14 +642,16 @@ impl ThemeLabRunner {
                         StudioReasonCode::SidecarProtocolInvalid,
                     ));
                 };
-                Self::validate_descriptor_and_digest(css, desc)?;
+                validate_descriptor_and_digest(css, desc, response.styles.as_deref())?;
             }
             "validate" => {
                 // valid is true, error is none
             }
             "exchange-brief-create"
             | "exchange-packet-parse"
+            | "exchange-packet-parse-v2"
             | "exchange-candidate-verify"
+            | "exchange-candidate-verify-v2"
             | "exchange-review-create"
             | "exchange-review-validate" => {
                 // exchange actions
@@ -607,34 +666,30 @@ impl ThemeLabRunner {
         Ok(response)
     }
 
-    fn validate_descriptor_and_digest(
-        css: &str,
-        descriptor: &crate::theme_lab::types::ThemeDescriptor,
-    ) -> StudioResult<()> {
-        if descriptor.schema != EXPECTED_DESCRIPTOR_SCHEMA
-            || descriptor.schema_version != EXPECTED_DESCRIPTOR_SCHEMA_VERSION
-            || descriptor.adapter != EXPECTED_DESCRIPTOR_ADAPTER
-        {
-            return Err(StudioCommandError::new(
-                StudioReasonCode::SidecarProtocolInvalid,
-            ));
-        }
-
-        let mut hasher = Sha256::new();
-        hasher.update(css.as_bytes());
-        let computed_digest = format!("{:x}", hasher.finalize());
-        if computed_digest != descriptor.output_digest {
-            return Err(StudioCommandError::new(StudioReasonCode::DigestMismatch));
-        }
-
-        Ok(())
-    }
-
     pub fn compile(
         &self,
         request: ThemeLabCompileRequest,
     ) -> StudioResult<ThemeLabCompileResponse> {
         let ui_revision = request.ui_revision.unwrap_or(0);
+
+        if request.specification.is_v2()
+            && request.options.as_ref().and_then(|o| o.strict_contrast) == Some(true)
+        {
+            return Ok(ThemeLabCompileResponse {
+                ui_revision,
+                valid: false,
+                compiled_css: None,
+                descriptor: None,
+                styles: None,
+                diagnostics: vec![],
+                error: Some(crate::theme_lab::types::ThemeLabError {
+                    code: "STRICT_CONTRAST_UNSUPPORTED".to_owned(),
+                    message: "V2 strict contrast is unsupported in core".to_owned(),
+                    field_path: None,
+                }),
+            });
+        }
+
         let batch_req = BatchSubprocessRequest {
             action: "compile".to_owned(),
             specification: Some(request.specification),
@@ -649,6 +704,7 @@ impl ThemeLabRunner {
             valid: batch_res.valid,
             compiled_css: batch_res.compiled_css,
             descriptor: batch_res.descriptor,
+            styles: batch_res.styles,
             diagnostics: batch_res.diagnostics,
             error: batch_res.error,
         })
@@ -679,15 +735,16 @@ impl ThemeLabRunner {
             specification: Some(spec),
             compiled_css: batch_res.compiled_css,
             descriptor: batch_res.descriptor,
+            styles: batch_res.styles,
             diagnostics: batch_res.diagnostics,
             error: batch_res.error,
         })
     }
 
-    pub fn validate_spec(&self, spec: ThemeSpecification) -> StudioResult<ThemeSpecification> {
+    pub fn validate_spec(&self, doc: ThemeDocument) -> StudioResult<ThemeDocument> {
         let batch_req = BatchSubprocessRequest {
             action: "validate".to_owned(),
-            specification: Some(spec.clone()),
+            specification: Some(doc.clone()),
             ..Default::default()
         };
 
@@ -696,13 +753,13 @@ impl ThemeLabRunner {
             return Err(StudioCommandError::new(StudioReasonCode::PlanInvalid));
         }
 
-        Ok(spec)
+        Ok(doc)
     }
 
-    pub fn compile_spec(&self, spec: ThemeSpecification) -> StudioResult<BatchSubprocessResponse> {
+    pub fn compile_spec(&self, doc: ThemeDocument) -> StudioResult<BatchSubprocessResponse> {
         let batch_req = BatchSubprocessRequest {
             action: "compile".to_owned(),
-            specification: Some(spec),
+            specification: Some(doc),
             ..Default::default()
         };
 
@@ -727,6 +784,17 @@ impl ThemeLabRunner {
         if packet_json.len() > MAX_PACKET_BYTES {
             return Err(StudioCommandError::new(StudioReasonCode::ResultTooLarge));
         }
+
+        if is_candidate_v2(&packet_json) && self.v2_adapter.is_some() {
+            let batch_req = BatchSubprocessRequest {
+                action: "exchange-packet-parse-v2".to_owned(),
+                packet_json: Some(packet_json),
+                expected_kind,
+                ..Default::default()
+            };
+            return self.execute_v2(&batch_req);
+        }
+
         let batch_req = BatchSubprocessRequest {
             action: "exchange-packet-parse".to_owned(),
             packet_json: Some(packet_json),
@@ -743,29 +811,98 @@ impl ThemeLabRunner {
         brief: String,
         options: Option<crate::theme_lab::types::ThemeCompileOptions>,
     ) -> StudioResult<BatchSubprocessResponse> {
-        let batch_req = BatchSubprocessRequest {
-            action: "exchange-candidate-verify".to_owned(),
-            candidate: Some(candidate),
-            brief: Some(brief),
-            options,
-            ..Default::default()
-        };
+        let is_v2 = is_candidate_v2(&candidate);
 
-        let result = self.execute_batch(&batch_req)?;
-        if result.valid {
-            let invalid = || StudioCommandError::new(StudioReasonCode::SidecarProtocolInvalid);
-            let css = result.compiled_css.as_ref().ok_or_else(invalid)?;
-            let descriptor = result.descriptor.as_ref().ok_or_else(invalid)?;
-            let verification = result.candidate_verification.as_ref().ok_or_else(invalid)?;
-            Self::validate_descriptor_and_digest(css, descriptor)?;
-            if !verification.valid
-                || verification.theme_digest != format!("sha256:{}", descriptor.input_digest)
-                || result.specification.is_none()
+        if is_v2 {
+            // Reject mixed tuple: V1 brief with V2 candidate
+            if !brief.trim().is_empty()
+                && (brief.contains("\"tfsl.theme-brief\"")
+                    && (brief.contains("\"schemaVersion\": 1")
+                        || brief.contains("\"schemaVersion\":1")))
             {
-                return Err(invalid());
+                return Err(StudioCommandError::new(
+                    StudioReasonCode::SidecarProtocolInvalid,
+                ));
             }
+
+            let batch_req = BatchSubprocessRequest {
+                action: "exchange-candidate-verify-v2".to_owned(),
+                candidate: Some(candidate),
+                brief: if brief.trim().is_empty() {
+                    None
+                } else {
+                    Some(brief)
+                },
+                options,
+                ..Default::default()
+            };
+
+            let result = self.execute_v2(&batch_req)?;
+            if result.valid {
+                let invalid = || StudioCommandError::new(StudioReasonCode::SidecarProtocolInvalid);
+                let css = result.compiled_css.as_ref().ok_or_else(invalid)?;
+                let descriptor = result.descriptor.as_ref().ok_or_else(invalid)?;
+                let verification = result.candidate_verification.as_ref().ok_or_else(invalid)?;
+
+                let (v2_desc, v2_verif, v2_spec) =
+                    match (descriptor, verification, result.specification.as_ref()) {
+                        (
+                            crate::theme_lab::types::ThemeDescriptor::V2(d),
+                            crate::theme_lab::types::ThemeCandidateVerificationResult::V2(v),
+                            Some(crate::theme_lab::types::ThemeDocument::V2(s)),
+                        ) => (d, v, s),
+                        _ => return Err(invalid()),
+                    };
+
+                validate_descriptor_and_digest(css, descriptor, result.styles.as_deref())?;
+
+                if !v2_verif.valid
+                    || v2_verif.schema != "tfsb.theme-candidate-verification-v2"
+                    || v2_verif.schema_version != 2
+                    || v2_verif.input_digest != v2_desc.input_digest
+                    || v2_verif.output_digest != v2_desc.output_digest
+                    || v2_desc.theme_name != v2_spec.name
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(result)
+        } else {
+            let batch_req = BatchSubprocessRequest {
+                action: "exchange-candidate-verify".to_owned(),
+                candidate: Some(candidate),
+                brief: Some(brief),
+                options,
+                ..Default::default()
+            };
+
+            let result = self.execute_batch(&batch_req)?;
+            if result.valid {
+                let invalid = || StudioCommandError::new(StudioReasonCode::SidecarProtocolInvalid);
+                let css = result.compiled_css.as_ref().ok_or_else(invalid)?;
+                let descriptor = result.descriptor.as_ref().ok_or_else(invalid)?;
+                let verification = result.candidate_verification.as_ref().ok_or_else(invalid)?;
+
+                let (v1_desc, v1_verif, v1_spec) =
+                    match (descriptor, verification, result.specification.as_ref()) {
+                        (
+                            crate::theme_lab::types::ThemeDescriptor::V1(d),
+                            crate::theme_lab::types::ThemeCandidateVerificationResult::V1(v),
+                            Some(crate::theme_lab::types::ThemeDocument::V1(s)),
+                        ) => (d, v, s),
+                        _ => return Err(invalid()),
+                    };
+
+                validate_descriptor_and_digest(css, descriptor, None)?;
+                if !v1_verif.valid
+                    || v1_verif.theme_digest != format!("sha256:{}", v1_desc.input_digest)
+                    || v1_desc.theme_name != v1_spec.name
+                {
+                    return Err(invalid());
+                }
+            }
+            Ok(result)
         }
-        Ok(result)
     }
 
     pub fn create_review(&self, review_input: String) -> StudioResult<BatchSubprocessResponse> {
@@ -777,6 +914,7 @@ impl ThemeLabRunner {
 
         self.execute_batch(&batch_req)
     }
+
     pub fn validate_review(
         &self,
         request: crate::theme_lab::types::ThemeReviewValidateRequest,

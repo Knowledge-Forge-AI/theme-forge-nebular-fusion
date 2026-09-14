@@ -107,8 +107,45 @@ fn initialize_response(id: u64, mode: &str) -> String {
     format!("{response}\n")
 }
 
+fn queue_marker(path: Option<&str>, message: &str) -> io::Result<()> {
+    if let Some(path) = path {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        writeln!(file, "{message}")?;
+    }
+    Ok(())
+}
+
+fn queue_flood(output: &mut impl Write, id: u64, marker: Option<&str>) -> io::Result<()> {
+    queue_marker(marker, "flood-started")?;
+    let mut payload = String::new();
+    for completed in 0..128 {
+        payload.push_str(&format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{id},\"stage\":\"scanning\",\"total\":128}}}}\n"));
+    }
+    let result = output
+        .write_all(payload.as_bytes())
+        .and_then(|()| output.flush());
+    queue_marker(
+        marker,
+        if result.is_ok() {
+            "flood-complete"
+        } else {
+            "flood-write-failed"
+        },
+    )?;
+    result
+}
+
 fn main() -> io::Result<()> {
-    let mode = env::var("TFSB_FAKE_MODE").unwrap_or_else(|_| "success".to_owned());
+    let configuration = env::var("TFSB_FAKE_MODE").unwrap_or_else(|_| "success".to_owned());
+    let (mode, marker) = configuration
+        .split_once('|')
+        .map_or((configuration.as_str(), None), |(mode, marker)| {
+            (mode, Some(marker))
+        });
+    let mode = mode.to_owned();
     if mode == "exit-immediate" {
         return Ok(());
     }
@@ -147,9 +184,11 @@ fn main() -> io::Result<()> {
         match mode.as_str() {
             "lifecycle-idle-crash" => return Ok(()),
             "lifecycle-idle-flood" => {
+                let mut payload = String::with_capacity(128 * 128);
                 for completed in 0..128 {
-                    stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{first_id},\"stage\":\"scanning\",\"total\":128}}}}\n").as_bytes())?;
+                    payload.push_str(&format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{first_id},\"stage\":\"scanning\",\"total\":128}}}}\n"));
                 }
+                stdout.write_all(payload.as_bytes())?;
                 stdout.flush()?;
                 thread::sleep(Duration::from_secs(5));
                 return Ok(());
@@ -272,19 +311,26 @@ fn main() -> io::Result<()> {
             stdout.write_all(success(first_id).as_bytes())?;
         }
         "saturation" => {
-            for completed in 0..128 {
-                stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{first_id},\"stage\":\"scanning\",\"total\":128}}}}\n").as_bytes())?;
-            }
+            queue_marker(marker, "request-received")?;
+            queue_flood(&mut stdout, first_id, marker)?;
+            thread::sleep(Duration::from_secs(5));
         }
         "idle-flood" => {
             stdout.write_all(success(first_id).as_bytes())?;
             stdout.flush()?;
-            thread::sleep(Duration::from_millis(20));
-            for completed in 0..128 {
-                stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":{completed},\"requestId\":{first_id},\"stage\":\"scanning\",\"total\":128}}}}\n").as_bytes())?;
+            queue_marker(marker, "response-flushed")?;
+            if let Some(gate) = lines.next().transpose()? {
+                queue_marker(marker, "gate-received")?;
+                let control: serde_json::Value = serde_json::from_str(&gate)?;
+                if control["never"].as_bool() == Some(true) {
+                    thread::sleep(Duration::from_secs(5));
+                    return Ok(());
+                }
+                let delay = control["delayMs"].as_u64().unwrap_or(0).min(500);
+                thread::sleep(Duration::from_millis(delay));
+                queue_flood(&mut stdout, first_id, marker)?;
+                thread::sleep(Duration::from_secs(5));
             }
-            stdout.flush()?;
-            thread::sleep(Duration::from_secs(5));
         }
         "bad-progress" => stdout.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"$/progress\",\"params\":{{\"completed\":2,\"requestId\":{},\"stage\":\"unknown\",\"total\":1}}}}\n", first_id + 1).as_bytes())?,
         "partial" => {

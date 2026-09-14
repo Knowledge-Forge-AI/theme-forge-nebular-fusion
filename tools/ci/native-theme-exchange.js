@@ -1,7 +1,7 @@
 // Included only by the explicitly instrumented native-smoke host.
 // Drives the real component; packet creation and file selection stay host-owned.
 window.__runThemeExchangeSmoke = async ({ results, waitFor, sleep }) => {
-  const button = (label) => [...document.querySelectorAll("button")].find((el) => (el.textContent.trim() === label || (label === "Design Exchange" && el.textContent.trim().startsWith("Design Exchange ("))));
+  const button = (label) => [...document.querySelectorAll(".theme-lab-workspace button")].find((el) => (el.textContent.trim() === label || (label === "Design Exchange" && el.textContent.trim().startsWith("Design Exchange ("))));
   const click = async (label) => (await waitFor(() => button(label), `exchange_button_${label}`)).click();
   const set = async (selector, value) => {
     const el = await waitFor(() => document.querySelector(selector), `exchange_control_${selector}`);
@@ -176,6 +176,6 @@ window.__runThemeExchangeSmoke = async ({ results, waitFor, sleep }) => {
   results.measurements.exchange.themeDigest = `sha256:${descriptor.inputDigest}`;
   results.measurements.exchange.cssDigest = cssDigest;
   await click("Save");
-  await waitFor(() => !document.body.textContent.includes("* Modified"), "exchange_saved");
+  await waitFor(() => !document.querySelector(".theme-lab-workspace .dirty-indicator"), "exchange_saved");
   results.steps.push("exchange_adopted_specification_saved");
 };

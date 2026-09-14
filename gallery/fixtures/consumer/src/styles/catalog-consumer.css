@@ -1,0 +1,5 @@
+/* Consumer controls use exactly the adapter compatibility specificity. */
+:root:not([data-has-sidebar]) { --sl-content-width: 65rem; }
+@media print {
+  :root[data-theme] { --sl-color-bg: #fefefe; --sl-color-text: #123456; }
+}

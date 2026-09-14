@@ -6,3 +6,7 @@ src-tauri/target/
 src-tauri/loom-payload/
 .downloaded-artifacts/
 .test-reports/
+src-tauri/scene-payload/
+
+# Deterministic build license output
+/src-tauri/release-notices/

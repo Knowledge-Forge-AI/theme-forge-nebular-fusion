@@ -11,3 +11,5 @@ pub(crate) mod process;
 pub(crate) mod protocol;
 pub(crate) mod supervisor;
 pub(crate) mod visual_evidence;
+
+pub(crate) mod scene_artifact;

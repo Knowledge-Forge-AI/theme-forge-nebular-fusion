@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-scene-export-apply"
+description = "Enables the studio_scene_export_apply command without any pre-configured scope."
+commands.allow = ["studio_scene_export_apply"]
+
+[[permission]]
+identifier = "deny-studio-scene-export-apply"
+description = "Denies the studio_scene_export_apply command without any pre-configured scope."
+commands.deny = ["studio_scene_export_apply"]

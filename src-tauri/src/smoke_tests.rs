@@ -1,9 +1,87 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, WebviewWindow};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GalleryCspEvidence {
+    pub asset_path: String,
+    pub asset_sha256: String,
+    pub effective_csp: String,
+    pub access_control_allow_origin: String,
+    pub package_identity: String,
+    pub harness_csp_scope: String,
+    pub browser_harness_only: bool,
+    pub ipc_denied: bool,
+    pub local_origin_allowed: bool,
+    pub frame_ancestors_self: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_meta_csp: Option<String>,
+}
+
+static GALLERY_EVIDENCE: Mutex<Option<GalleryCspEvidence>> = Mutex::new(None);
+
+pub(crate) fn record_gallery_response(path: &str, headers: &tauri::http::HeaderMap, body: &[u8]) {
+    if !path.starts_with("/preview/gallery/") || !path.ends_with("/index.html") {
+        return;
+    }
+    let Some(csp_val) = headers.get("content-security-policy") else {
+        return;
+    };
+    let Ok(effective_csp) = csp_val.to_str() else {
+        return;
+    };
+    let allow_origin = headers
+        .get("access-control-allow-origin")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let asset_sha256 = {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(body))
+    };
+
+    let ipc_denied = !effective_csp.contains("ipc:") && !effective_csp.contains("ipc.localhost");
+    let local_origin_allowed = effective_csp.contains("tauri://localhost");
+    let frame_ancestors_self = effective_csp.contains("frame-ancestors 'self'");
+
+    let evidence = GalleryCspEvidence {
+        asset_path: path.to_string(),
+        asset_sha256,
+        effective_csp: effective_csp.to_string(),
+        access_control_allow_origin: allow_origin,
+        package_identity: format!("{}@{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
+        harness_csp_scope: "tauri-response-header".to_string(),
+        browser_harness_only: false,
+        ipc_denied,
+        local_origin_allowed,
+        frame_ancestors_self,
+        document_meta_csp: std::str::from_utf8(body).ok().and_then(|html| {
+            html.split("http-equiv=\"Content-Security-Policy\" content=\"")
+                .nth(1)
+                .and_then(|tail| tail.split('"').next())
+                .filter(|policy| policy.len() <= 8192)
+                .map(str::to_owned)
+        }),
+    };
+
+    if let Ok(mut guard) = GALLERY_EVIDENCE.lock() {
+        let should_update = match *guard {
+            None => true,
+            Some(ref existing) => {
+                (!existing.asset_path.ends_with(".html") && path.ends_with(".html"))
+                    || path.contains("flexoki-catalog")
+            }
+        };
+        if should_update {
+            *guard = Some(evidence);
+        }
+    }
+}
 
 pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output_path: String) {
     let window = window.clone();
@@ -29,6 +107,13 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
 
         if let Err(error) = window.eval(include_str!("../../tools/ci/native-theme-exchange.js")) {
             eprintln!("[smoke] exchange script injection failed: {error}");
+            app.exit(1);
+            return;
+        }
+        if window
+            .eval(include_str!("../../tools/ci/native-theme-v2.js"))
+            .is_err()
+        {
             app.exit(1);
             return;
         }
@@ -69,21 +154,22 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             results.steps.push("wait_app_mount");
             await waitFor(() => {
                 const tabs = Array.from(document.querySelectorAll("nav.destination-nav button"));
-                return tabs.some(t => t.textContent && t.textContent.includes("Theme Lab"));
+                return tabs.some(t => t.textContent && t.textContent.includes("Starlight Theme"));
             }, "wait_for_tabs");
 
             // 2. Switch to Theme Lab (retry click until container appears)
             results.steps.push("switched_to_theme_lab");
             await waitFor(() => {
-                if (document.querySelector(".theme-lab-workspace")) return true;
+                if (document.querySelector('.work-area:not([hidden]) .theme-lab-workspace')) return true;
                 const tabs = Array.from(document.querySelectorAll("nav.destination-nav button"));
-                const tab = tabs.find(t => t.textContent && t.textContent.includes("Theme Lab"));
+                const tab = tabs.find(t => t.textContent && t.textContent.includes("Starlight Theme"));
                 if (tab) {
-                    tab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
                     tab.click();
                 }
-                return document.querySelector(".theme-lab-workspace");
+                return document.querySelector('.work-area:not([hidden]) .theme-lab-workspace');
             }, "switch_to_theme_lab_container", 15000);
+
+            await window.__runThemeV2Smoke({ results, waitFor });
 
             // 3. Wait for initial compile and preview iframe (Stellar Cyan default)
             const t0 = Date.now();
@@ -107,7 +193,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const tabBtns = Array.from(document.querySelectorAll('button[role="tab"], .editor-tabs button'));
                 return tabBtns.find(b => b.textContent && (b.textContent.includes("CSS & Descriptor") || b.textContent.includes("Output")));
             }, "find_output_tab");
-            outputTab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             outputTab.click();
 
             const cssTextArea = await waitFor(() => document.querySelector('textarea[aria-label="Compiled CSS output"]'), "wait_css_output");
@@ -146,7 +231,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const tabBtns = Array.from(document.querySelectorAll('button[role="tab"], .editor-tabs button'));
                 return tabBtns.find(b => b.textContent && b.textContent.includes("Palette"));
             }, "find_palette_tab");
-            paletteTab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             paletteTab.click();
 
             // 5. Main editor style isolation verification (before edit)
@@ -168,7 +252,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             const compileBtn = await waitFor(() => {
                 return document.querySelector("button.compile-button") || Array.from(document.querySelectorAll("button")).find(b => b.textContent && b.textContent.includes("Compile"));
             }, "find_compile_button");
-            compileBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             compileBtn.click();
 
             await waitFor(() => {
@@ -210,7 +293,10 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             iframe.contentWindow.postMessage({ type: "tfsl:attempt-command", command: "studio_theme_lab_status" }, "*");
             const denialResult = await waitFor(() => {
                 if (iframe.dataset.commandAttempt) {
-                    try { return JSON.parse(iframe.dataset.commandAttempt); } catch (_) {}
+                    try {
+                        const raw = iframe.dataset.commandAttempt;
+                        return typeof raw === "string" ? JSON.parse(raw) : raw;
+                    } catch (_) {}
                 }
                 return null;
             }, "wait_command_denial", 10000);
@@ -231,13 +317,11 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll("button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Amber Forge"));
             }, "find_amber_forge_button");
-            amberBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             amberBtn.click();
 
             const discardModal = await waitFor(() => document.querySelector(".modal-backdrop"), "wait_discard_modal");
             const modalCancelBtn = discardModal.querySelector(".modal-actions button:not(.danger-button)");
             if (!modalCancelBtn) throw new Error("Missing cancel button in discard modal");
-            modalCancelBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             modalCancelBtn.click();
 
             await waitFor(() => !document.querySelector(".modal-backdrop"), "wait_discard_modal_close");
@@ -251,13 +335,11 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll("button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Amber Forge"));
             }, "find_amber_forge_button_2");
-            amberBtn2.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             amberBtn2.click();
 
             const discardModal2 = await waitFor(() => document.querySelector(".modal-backdrop"), "wait_discard_modal_2");
             const confirmBtn = discardModal2.querySelector("button.danger-button");
             if (!confirmBtn) throw new Error("Missing confirm button in discard modal");
-            confirmBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             confirmBtn.click();
 
             await waitFor(() => !document.querySelector(".modal-backdrop"), "wait_discard_modal_close_2");
@@ -278,7 +360,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll(".segmented-control button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Light"));
             }, "find_light_button");
-            lightBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             lightBtn.click();
             await sleep(250);
 
@@ -286,7 +367,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll(".segmented-control button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Mobile"));
             }, "find_mobile_button");
-            mobileBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             mobileBtn.click();
             await waitFor(() => document.querySelector(".preview-frame-wrapper.mobile"), "wait_mobile_wrapper");
 
@@ -294,7 +374,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll(".segmented-control button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Desktop"));
             }, "find_desktop_button");
-            desktopBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             desktopBtn.click();
             await waitFor(() => document.querySelector(".preview-frame-wrapper.desktop"), "wait_desktop_wrapper");
 
@@ -302,7 +381,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll(".segmented-control button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Dark"));
             }, "find_dark_button");
-            darkBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             darkBtn.click();
             await sleep(250);
 
@@ -328,7 +406,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             const compileBtn2 = await waitFor(() => {
                 return document.querySelector("button.compile-button") || Array.from(document.querySelectorAll("button")).find(b => b.textContent && b.textContent.includes("Compile"));
             }, "find_compile_button_2");
-            compileBtn2.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             compileBtn2.click();
 
             await waitFor(() => {
@@ -352,20 +429,20 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll(".theme-lab-header-actions button, .button-group button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Reset"));
             }, "find_reset_button");
-            resetBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             resetBtn.click();
 
             const modal = await waitFor(() => document.querySelector(".modal-backdrop"), "wait_discard_modal_reset");
             const confirmResetBtn = modal.querySelector("button.danger-button");
             if (!confirmResetBtn) throw new Error("Missing confirm reset button");
-            confirmResetBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             confirmResetBtn.click();
 
             await waitFor(() => !document.querySelector(".modal-backdrop"), "wait_reset_modal_close");
 
             await waitFor(() => {
                 const acc = iframe.dataset.computedAccent;
-                return acc && (acc.includes("f59e0b") || acc.includes("245, 158, 11"));
+                return acc && (acc.includes("f59e0b") || acc.includes("245, 158, 11"))
+                    && document.querySelector(".theme-lab-status-bar")?.textContent?.includes("Loaded")
+                    && !document.querySelector(".dirty-indicator");
             }, "wait_restored_amber_accent", 20000);
 
             // Switch back to default Stellar Cyan example
@@ -373,7 +450,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
                 const btns = Array.from(document.querySelectorAll("button"));
                 return btns.find(b => b.textContent && b.textContent.includes("Stellar Cyan"));
             }, "find_cyan_button");
-            cyanBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             cyanBtn.click();
 
             await waitFor(() => {
@@ -385,27 +461,25 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
 
             // 13. Leave Theme Lab (View Switching to Brand Workbench)
             await waitFor(() => {
-                if (!document.querySelector(".theme-lab-workspace")) return true;
+                if (!document.querySelector('.work-area:not([hidden]) .theme-lab-workspace')) return true;
                 const tabs = Array.from(document.querySelectorAll("nav.destination-nav button"));
-                const brandTab = tabs.find(t => t.textContent && t.textContent.includes("Brand Workbench"));
+                const brandTab = tabs.find(t => t.textContent && t.textContent.includes("Brand / System"));
                 if (brandTab) {
-                    brandTab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
                     brandTab.click();
                 }
-                return !document.querySelector(".theme-lab-workspace");
+                return !document.querySelector('.work-area:not([hidden]) .theme-lab-workspace');
             }, "switch_to_brand_workbench", 15000);
             results.steps.push("left_theme_lab_to_brand_workbench");
 
             // 14. Re-enter Theme Lab
             await waitFor(() => {
-                if (document.querySelector(".theme-lab-workspace")) return true;
+                if (document.querySelector('.work-area:not([hidden]) .theme-lab-workspace')) return true;
                 const tabs = Array.from(document.querySelectorAll("nav.destination-nav button"));
-                const themeTab = tabs.find(t => t.textContent && t.textContent.includes("Theme Lab"));
+                const themeTab = tabs.find(t => t.textContent && t.textContent.includes("Starlight Theme"));
                 if (themeTab) {
-                    themeTab.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
                     themeTab.click();
                 }
-                return document.querySelector(".theme-lab-workspace");
+                return document.querySelector('.work-area:not([hidden]) .theme-lab-workspace');
             }, "reenter_theme_lab", 15000);
 
             const reenteredIframe = await waitFor(() => {
@@ -435,7 +509,6 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             const compileBtn3 = await waitFor(() => {
                 return document.querySelector("button.compile-button") || Array.from(document.querySelectorAll("button")).find(b => b.textContent && b.textContent.includes("Compile"));
             }, "find_compile_button_3");
-            compileBtn3.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
             compileBtn3.click();
 
             await waitFor(() => {
@@ -458,9 +531,12 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
             results.errors.push(err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err));
             results.debug = {
                 currentStep: results.currentStep,
+                statusText: document.querySelector(".theme-lab-status-bar")?.textContent,
+                dirty: !!document.querySelector(".dirty-indicator"),
+                errorText: document.querySelector(".error-banner")?.textContent,
                 activeTab: document.querySelector(".destination-tab.active")?.textContent,
                 buttons: Array.from(document.querySelectorAll("button")).map(b => b.textContent?.trim()).filter(Boolean),
-                hasThemeLabContainer: !!document.querySelector(".theme-lab-workspace"),
+                hasThemeLabContainer: !!document.querySelector('.work-area:not([hidden]) .theme-lab-workspace'),
                 hasIframe: !!document.querySelector("iframe.preview-iframe"),
                 iframeAccent: document.querySelector("iframe.preview-iframe")?.dataset?.computedAccent
             };
@@ -473,12 +549,18 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
 })();
 "##;
 
+        let runner_script = if std::env::var("TFSB_STUDIO_SCENE_SMOKE").as_deref() == Ok("1") {
+            include_str!("../../tools/ci/native-scene-workbench.js")
+        } else {
+            runner_script
+        };
         if let Err(e) = window.eval(runner_script) {
             eprintln!("[smoke] failed to inject runner script: {e}");
         }
 
         let completed = Arc::new(AtomicBool::new(false));
-        let deadline = Instant::now() + Duration::from_secs(90);
+        // Bounded aggregate budget includes both v1 and v2 native-selected workflows.
+        let deadline = Instant::now() + Duration::from_secs(180);
 
         while Instant::now() < deadline {
             thread::sleep(Duration::from_millis(250));
@@ -489,6 +571,14 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
 
             if crate::theme_lab::smoke_selection::alternatives_ready() {
                 let _ = window.eval("window.__TFSB_EXCHANGE_READY__ = true;");
+            }
+            let gallery_json = GALLERY_EVIDENCE.lock().ok().and_then(|guard| {
+                guard
+                    .as_ref()
+                    .and_then(|evidence| serde_json::to_string(evidence).ok())
+            });
+            if let Some(json) = gallery_json {
+                let _ = window.eval(format!("window.__TFSB_GALLERY_EFFECTIVE_CSP__ = {json};"));
             }
             let _ = window.eval_with_callback(
                 "window.__TFSB_SMOKE_RESULT__ || ''",
@@ -546,4 +636,55 @@ pub fn start_native_smoke_harness(window: &WebviewWindow, app: AppHandle, output
         let _ = std::fs::write(&output_path, timeout_str);
         app.exit(1);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gallery_csp_evidence_records_actual_policy_and_denies_ipc()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert(
+            "content-security-policy",
+            "default-src 'none'; script-src 'self' tauri://localhost 'wasm-unsafe-eval'; style-src 'self' tauri://localhost 'unsafe-inline'; connect-src tauri://localhost; frame-ancestors 'self'".parse()?,
+        );
+        headers.insert("access-control-allow-origin", "*".parse()?);
+        let dummy_body = b"<!DOCTYPE html><html><body>Flexoki Catalog Entry</body></html>";
+        record_gallery_response(
+            "/preview/gallery/flexoki-catalog/catalog/index.html",
+            &headers,
+            dummy_body,
+        );
+
+        let guard = GALLERY_EVIDENCE.lock().map_err(|_| "mutex poisoned")?;
+        let evidence = guard.as_ref().ok_or("evidence should be recorded")?;
+        assert_eq!(
+            evidence.asset_path,
+            "/preview/gallery/flexoki-catalog/catalog/index.html"
+        );
+        assert!(evidence.ipc_denied);
+        assert!(evidence.local_origin_allowed);
+        assert!(evidence.frame_ancestors_self);
+        assert_eq!(evidence.access_control_allow_origin, "*");
+        assert_eq!(evidence.harness_csp_scope, "tauri-response-header");
+        assert!(!evidence.browser_harness_only);
+        assert_eq!(evidence.asset_sha256.len(), 64);
+        assert!(
+            evidence
+                .package_identity
+                .contains("theme-forge-nebular-fusion")
+        );
+        assert!(evidence.document_meta_csp.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn non_gallery_paths_are_ignored() -> Result<(), Box<dyn std::error::Error>> {
+        let headers = tauri::http::HeaderMap::new();
+        record_gallery_response("/preview/index.html", &headers, b"");
+        record_gallery_response("/index.html", &headers, b"");
+        Ok(())
+    }
 }

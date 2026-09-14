@@ -438,6 +438,32 @@ export interface ThemeReviewValidateResponse {
   error?: ThemeLabError | string | undefined;
 }
 
+import type {
+  ThemeSpecificationV2,
+  ThemeDescriptorV2,
+  ThemeV2CompileResponse,
+  ThemeDocumentOpenResponse,
+  ThemeV2CompileRequest,
+  ThemeDocumentOpenRequest,
+  ThemeDocumentSaveRequest,
+  ThemeDraftUpdateRequest,
+  ThemeDraftUpdateResponse,
+  ThemeV2StyleFile,
+} from "./v2-bridge";
+
+export type {
+  ThemeSpecificationV2,
+  ThemeDescriptorV2,
+  ThemeV2CompileResponse,
+  ThemeDocumentOpenResponse,
+  ThemeV2CompileRequest,
+  ThemeDocumentOpenRequest,
+  ThemeDocumentSaveRequest,
+  ThemeDraftUpdateRequest,
+  ThemeDraftUpdateResponse,
+  ThemeV2StyleFile,
+};
+
 export interface ThemeLabBridge {
   getStatus(): Promise<ThemeLabStatusResponse>;
   compile(request: ThemeLabCompileRequest): Promise<ThemeLabCompileResponse>;
@@ -452,4 +478,117 @@ export interface ThemeLabBridge {
   verifyThemeCandidate?(request: ThemeCandidateVerifyRequest): Promise<ThemeCandidateVerifyResponse>;
   validateThemeReview?(request: ThemeReviewValidateRequest): Promise<ThemeReviewValidateResponse>;
   dispose?: () => Promise<void>;
+
+  // TFSB63B v2 methods
+  compileV2?(request: {
+    specification: ThemeSpecificationV2;
+    uiRevision: number;
+    sessionId?: string | undefined;
+    options?: {
+      accent?: string | undefined;
+      strictContrast?: boolean | undefined;
+    } | undefined;
+  }): Promise<ThemeV2CompileResponse>;
+
+  openDocument?(request?: {
+    uiRevision?: number | undefined;
+    sessionId?: string | undefined;
+  } | undefined): Promise<ThemeDocumentOpenResponse>;
+
+  saveDocument?(request: {
+    saveAs: boolean;
+    specification: ThemeSpecification | ThemeSpecificationV2;
+    uiRevision: number;
+    sessionId?: string | undefined;
+  }): Promise<ThemeLabSaveResponse>;
+
+  updateDraft?(request: {
+    sessionId: string;
+    uiRevision: number;
+  }): Promise<{ uiRevision: number }>;
+
+  // TFSB63B/V2 Design Exchange methods
+  verifyCandidateV2?(request: ThemeCandidateVerifyRequestV2): Promise<ThemeCandidateVerifyResponseV2>;
+  adoptCandidateV2?(request: ThemeCandidateAdoptRequestV2): Promise<ThemeCandidateAdoptResponseV2>;
+}
+
+// ---------------------------------------------------------------------------
+// V2 Design Exchange Types
+// ---------------------------------------------------------------------------
+
+export type ThemeReviewDispositionV2 = "approve" | "revise" | "reject";
+
+export interface ThemeReviewContextV1 {
+  readonly schema: "tfsb.theme-review-context-v1";
+  readonly schemaVersion: 1;
+  readonly brief: {
+    readonly title: string;
+    readonly goal: string;
+  };
+  readonly candidateDigest: string;
+  readonly disposition: ThemeReviewDispositionV2;
+  readonly summary: string;
+}
+
+export interface ThemeCandidateVerificationResultV2 {
+  readonly schema: "tfsb.theme-candidate-verification-v2";
+  readonly schemaVersion: 2;
+  readonly valid: boolean;
+  readonly candidateId: string;
+  readonly candidateDigest: string;
+  readonly inputDigest: string;
+  readonly outputDigest: string;
+  readonly descriptor?: ThemeDescriptorV2 | undefined;
+  readonly styles?: readonly ThemeV2StyleFile[] | undefined;
+  readonly compiledCss?: string | undefined;
+  readonly diagnostics: readonly ContrastDiagnostic[];
+  readonly errors: readonly string[];
+  readonly warnings: readonly string[];
+}
+
+export interface ThemeCandidateVerifyRequestV2 {
+  candidate: string;
+  brief?: string | undefined;
+  sessionId?: string | undefined;
+  uiRevision?: number | undefined;
+  options?: {
+    strictContrast?: boolean | undefined;
+    accent?: string | undefined;
+  } | undefined;
+}
+
+export interface ThemeCandidateVerifyResponseV2 {
+  valid: boolean;
+  candidateVerification?: ThemeCandidateVerificationResultV2 | undefined;
+  compiledCss?: string | undefined;
+  descriptor?: ThemeDescriptorV2 | undefined;
+  styles?: readonly ThemeV2StyleFile[] | undefined;
+  diagnostics?: readonly ContrastDiagnostic[] | undefined;
+  error?: ThemeLabError | string | undefined;
+  uiRevision?: number | undefined;
+}
+
+export interface ThemeCandidateAdoptRequestV2 {
+  candidate: string;
+  brief: string;
+  sessionId: string;
+  uiRevision: number;
+  options?: {
+    strictContrast?: boolean | undefined;
+    accent?: string | undefined;
+  } | undefined;
+  force?: boolean | undefined;
+}
+
+export interface ThemeCandidateAdoptResponseV2 {
+  adopted: boolean;
+  requiresConfirmation?: boolean | undefined;
+  specification?: ThemeSpecificationV2 | undefined;
+  specificationV2?: ThemeSpecificationV2 | undefined;
+  descriptor?: ThemeDescriptorV2 | undefined;
+  styles?: readonly ThemeV2StyleFile[] | undefined;
+  compiledCss?: string | undefined;
+  css?: string | undefined;
+  diagnostics?: readonly ContrastDiagnostic[] | undefined;
+  error?: ThemeLabError | string | undefined;
 }
