@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use tfsb_studio_lib::errors::StudioReasonCode;
 use tfsb_studio_lib::state::theme_lab::ThemeLabState;
 use tfsb_studio_lib::theme_lab::runner::{COMPILER_VERSION, ThemeLabRunner};
-use tfsb_studio_lib::theme_lab::types::ThemeCandidateAdoptRequest;
+use tfsb_studio_lib::theme_lab::types::{ThemeCandidateAdoptRequest, ThemeDraftUpdateRequest};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -605,26 +605,146 @@ fn theme_packet_export_absent_only_and_import_roundtrip() -> Result<(), Box<dyn 
     Ok(())
 }
 
+struct ControlledAdoptionFixture {
+    temp_dir: PathBuf,
+    admitted_signal: PathBuf,
+    release_signal: PathBuf,
+    state: ThemeLabState,
+}
+
+impl ControlledAdoptionFixture {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let node = find_node()?;
+        let real_batch = find_loom_batch()?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("tfsb-adopt-ctrl-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir)?;
+        let admitted_signal = temp_dir.join("admitted.signal");
+        let release_signal = temp_dir.join("release.signal");
+        let adapter_path = temp_dir.join("controlled-batch.mjs");
+
+        let script = format!(
+            r#"import fs from 'node:fs';
+import {{ spawn }} from 'node:child_process';
+
+const realNode = {};
+const realBatch = {};
+const admittedPath = {};
+const releasePath = {};
+
+const chunks = [];
+for await (const chunk of process.stdin) {{
+  chunks.push(chunk);
+}}
+const inputBuffer = Buffer.concat(chunks);
+let req = null;
+try {{
+  req = JSON.parse(inputBuffer.toString('utf8'));
+}} catch (_) {{}}
+
+if (req && req.action === 'exchange-candidate-verify') {{
+  fs.writeFileSync(admittedPath, 'admitted\n');
+  const start = Date.now();
+  while (!fs.existsSync(releasePath)) {{
+    if (Date.now() - start > 4000) {{
+      break;
+    }}
+    await new Promise(r => setTimeout(r, 5));
+  }}
+}}
+
+const child = spawn(realNode, [realBatch], {{
+  stdio: ['pipe', 'inherit', 'inherit']
+}});
+child.stdin.end(inputBuffer);
+child.on('close', (code, signal) => {{
+  if (signal) {{
+    process.kill(process.pid, signal);
+  }} else {{
+    process.exit(code ?? 0);
+  }}
+}});
+"#,
+            serde_json::to_string(&node.to_string_lossy())?,
+            serde_json::to_string(&real_batch.to_string_lossy())?,
+            serde_json::to_string(&admitted_signal.to_string_lossy())?,
+            serde_json::to_string(&release_signal.to_string_lossy())?,
+        );
+        std::fs::write(&adapter_path, script)?;
+
+        let runner = ThemeLabRunner::new(node, adapter_path);
+        let state = ThemeLabState::new(runner);
+
+        Ok(Self {
+            temp_dir,
+            admitted_signal,
+            release_signal,
+            state,
+        })
+    }
+
+    fn state(&self) -> ThemeLabState {
+        self.state.clone()
+    }
+
+    fn wait_for_admitted(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let start = std::time::Instant::now();
+        while !self.admitted_signal.exists() {
+            if start.elapsed() > timeout {
+                return Err("timed out waiting for admitted.signal from controlled adapter".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(())
+    }
+
+    fn release(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let _ = std::fs::File::create(&self.release_signal)?;
+        Ok(())
+    }
+}
+
+impl Drop for ControlledAdoptionFixture {
+    fn drop(&mut self) {
+        self.state.cancel_active();
+        let _ = std::fs::File::create(&self.release_signal);
+        let _ = std::fs::remove_dir_all(&self.temp_dir);
+    }
+}
+
+fn bounded_join<T>(
+    handle: std::thread::JoinHandle<T>,
+    timeout: std::time::Duration,
+) -> Result<T, Box<dyn std::error::Error>> {
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() > timeout {
+            return Err("timed out waiting for worker thread to finish".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    handle.join().map_err(|_| "worker thread panicked".into())
+}
+
 #[test]
-fn theme_candidate_adopt_superseded_or_cancelled_in_flight()
--> Result<(), Box<dyn std::error::Error>> {
-    let runner = create_test_runner()?;
-    let state = ThemeLabState::new(runner);
+fn theme_candidate_adopt_cancelled_in_flight() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = ControlledAdoptionFixture::new()?;
+    let state = fixture.state();
+    let (brief_json, candidate_json) = rebound_v1_fixtures()?;
 
-    let fixtures = find_loom_fixtures()?;
-    let brief_json = std::fs::read_to_string(fixtures.join("brief.tfsl-brief.json"))?;
-    let candidate_json = std::fs::read_to_string(fixtures.join("candidate-a.tfsl-candidate.json"))?;
-
-    // 1. In-flight cancellation test
-    let state_clone = state.clone();
-    let candidate_clone = candidate_json.clone();
-    let brief_clone = brief_json.clone();
     let orig_status = state.status();
+    let state_clone = state.clone();
 
     let handle = std::thread::spawn(move || {
         state_clone.adopt_candidate(ThemeCandidateAdoptRequest {
-            candidate: candidate_clone,
-            brief: brief_clone,
+            candidate: candidate_json,
+            brief: brief_json,
             session_id: orig_status.session_id,
             ui_revision: orig_status.latest_revision + 1,
             force: true,
@@ -632,60 +752,161 @@ fn theme_candidate_adopt_superseded_or_cancelled_in_flight()
         })
     });
 
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    // 1. Wait for deterministic proof of admission into verify_candidate execution
+    fixture.wait_for_admitted(std::time::Duration::from_secs(3))?;
+
+    // 2. Trigger cancellation while demonstrably in flight
     state.cancel_active();
 
-    let res = handle.join().map_err(|_| "thread join failed")?;
-    assert!(
-        res.is_err(),
-        "adopt_candidate must fail when cancelled in flight"
-    );
-    if let Err(err) = res {
-        assert_eq!(err.reason_code(), StudioReasonCode::Cancelled);
+    // 3. Worker thread must terminate with StudioReasonCode::Cancelled within bound
+    let res = bounded_join(handle, std::time::Duration::from_secs(3))?;
+    match res {
+        Err(err) => assert_eq!(err.reason_code(), StudioReasonCode::Cancelled),
+        Ok(_) => return Err("adopt_candidate must fail when cancelled in flight".into()),
     }
 
-    // State must remain unadopted and not dirty
+    // 4. Session state must remain unadopted and not dirty
     let status_after_cancel = state.status();
     assert_eq!(status_after_cancel.adopted_theme_digest, None);
     assert_eq!(status_after_cancel.dirty, Some(false));
 
-    // 2. In-flight supersession by newer revision test
-    let runner2 = create_test_runner()?;
-    let state2 = ThemeLabState::new(runner2);
-    let state2_clone = state2.clone();
-    let status2 = state2.status();
+    Ok(())
+}
 
-    let handle2 = std::thread::spawn(move || {
-        state2_clone.adopt_candidate(ThemeCandidateAdoptRequest {
+#[test]
+fn theme_candidate_adopt_superseded_in_flight() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = ControlledAdoptionFixture::new()?;
+    let state = fixture.state();
+    let (brief_json, candidate_json) = rebound_v1_fixtures()?;
+
+    let orig_status = state.status();
+    let session_id = orig_status.session_id.clone();
+    let session_id_closure = session_id.clone();
+    let target_rev = orig_status.latest_revision + 1;
+    let supersede_rev = orig_status.latest_revision + 2;
+    let state_clone = state.clone();
+
+    let handle = std::thread::spawn(move || {
+        state_clone.adopt_candidate(ThemeCandidateAdoptRequest {
             candidate: candidate_json,
             brief: brief_json,
-            session_id: status2.session_id.clone(),
-            ui_revision: status2.latest_revision + 1,
+            session_id: session_id_closure,
+            ui_revision: target_rev,
             force: true,
             options: None,
         })
     });
 
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    // Supersede revision by running example with higher revision
-    let ex_res = state2.example(
-        "stellar-cyan".to_string(),
-        Some(status2.latest_revision + 2),
-        None,
-    )?;
-    assert!(ex_res.valid);
+    // 1. Wait for deterministic proof of admission into verify_candidate execution
+    fixture.wait_for_admitted(std::time::Duration::from_secs(3))?;
 
-    let res2 = handle2.join().map_err(|_| "thread 2 join failed")?;
-    assert!(
-        res2.is_err(),
-        "adopt_candidate must fail when superseded in flight"
-    );
-    if let Err(err) = res2 {
-        assert_eq!(err.reason_code(), StudioReasonCode::Cancelled);
+    // 2. Supersede session revision via draft_update (lock-only mutation, does not cancel runner process)
+    let update_res = state.draft_update(ThemeDraftUpdateRequest {
+        session_id,
+        ui_revision: supersede_rev,
+    })?;
+    assert_eq!(update_res.ui_revision, supersede_rev);
+
+    // 3. Release the held verification operation so it completes validly and attempts to commit
+    fixture.release()?;
+
+    // 4. Thread must observe session revision mismatch and return StudioReasonCode::Cancelled within bound
+    let res = bounded_join(handle, std::time::Duration::from_secs(3))?;
+    match res {
+        Err(err) => assert_eq!(err.reason_code(), StudioReasonCode::Cancelled),
+        Ok(_) => return Err("adopt_candidate must fail when superseded in flight".into()),
     }
 
-    // State must remain unadopted
-    assert_eq!(state2.status().adopted_theme_digest, None);
+    // 5. Session state must remain unadopted, with dirty reflecting draft_update
+    let status_after_supersede = state.status();
+    assert_eq!(status_after_supersede.adopted_theme_digest, None);
+    assert_eq!(status_after_supersede.dirty, Some(true));
 
+    Ok(())
+}
+
+#[test]
+fn theme_candidate_adopt_completion_before_cancel() -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = ControlledAdoptionFixture::new()?;
+    let state = fixture.state();
+    let (brief_json, candidate_json) = rebound_v1_fixtures()?;
+    let candidate_val: serde_json::Value = serde_json::from_str(&candidate_json)?;
+
+    // Release gate immediately so execution runs to completion without holding
+    fixture.release()?;
+
+    let orig_status = state.status();
+    let adopt_res = state.adopt_candidate(ThemeCandidateAdoptRequest {
+        candidate: candidate_json,
+        brief: brief_json,
+        session_id: orig_status.session_id,
+        ui_revision: orig_status.latest_revision + 1,
+        force: true,
+        options: None,
+    })?;
+    assert!(adopt_res.adopted, "completed adoption must succeed");
+
+    let status_completed = state.status();
+    let expected_digest = candidate_val["themeDigest"]
+        .as_str()
+        .ok_or("missing themeDigest")?;
+    assert_eq!(
+        status_completed.adopted_theme_digest.as_deref(),
+        Some(expected_digest)
+    );
+    assert_eq!(status_completed.dirty, Some(true));
+
+    // Cancellation after completed operation must not revoke adopted state (linearization contract)
+    state.cancel_active();
+    let status_after_late_cancel = state.status();
+    assert_eq!(
+        status_after_late_cancel.adopted_theme_digest.as_deref(),
+        Some(expected_digest)
+    );
+    assert_eq!(status_after_late_cancel.dirty, Some(true));
+
+    Ok(())
+}
+
+#[test]
+fn theme_candidate_adopt_pre_admission_delay() -> Result<(), Box<dyn std::error::Error>> {
+    let runner = create_test_runner()?;
+    let state = ThemeLabState::new(runner);
+    let (brief_json, candidate_json) = rebound_v1_fixtures()?;
+    let orig_status = state.status();
+
+    // Signal cancellation before spawning / pre-admission
+    state.cancel_active();
+
+    let state_clone = state.clone();
+    let handle = std::thread::spawn(move || {
+        state_clone.adopt_candidate(ThemeCandidateAdoptRequest {
+            candidate: candidate_json,
+            brief: brief_json,
+            session_id: orig_status.session_id,
+            ui_revision: orig_status.latest_revision + 1,
+            force: true,
+            options: None,
+        })
+    });
+
+    let res = bounded_join(handle, std::time::Duration::from_secs(3))?;
+    match res {
+        Err(err) => assert_eq!(err.reason_code(), StudioReasonCode::Cancelled),
+        Ok(_) => return Err("pre-admission cancellation must fail adopt_candidate".into()),
+    }
+
+    let status = state.status();
+    assert_eq!(status.adopted_theme_digest, None);
+    assert_eq!(status.dirty, Some(false));
+
+    Ok(())
+}
+
+#[test]
+fn theme_candidate_adopt_superseded_or_cancelled_in_flight()
+-> Result<(), Box<dyn std::error::Error>> {
+    theme_candidate_adopt_cancelled_in_flight()?;
+    theme_candidate_adopt_superseded_in_flight()?;
     Ok(())
 }
