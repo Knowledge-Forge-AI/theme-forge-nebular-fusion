@@ -6,5 +6,6 @@ pub(crate) mod selection;
 pub mod theme_lab;
 pub mod theme_packet;
 
+pub mod app_theme;
 pub mod scene;
 pub mod scene_packet;

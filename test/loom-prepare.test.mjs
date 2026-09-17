@@ -86,7 +86,9 @@ describe("loom-prepare catalog evidence authentication", () => {
 
   it("exports expected current candidate identities and fixed 97 inventory", () => {
     expect(EXPECTED_LOOM_NAME).toBe("@knowledge-forge-ai/theme-forge-stellar-loom");
-    expect(EXPECTED_LOOM_VERSION).toBe("0.1.1");
+    expect(EXPECTED_LOOM_VERSION).toBe("0.2.0");
+    expect(SUPPORTED_LOOM_VERSIONS).toContain("0.3.0");
+    expect(SUPPORTED_LOOM_VERSIONS).toContain("0.2.0");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.1.1");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.1.0");
     expect(FIXED_97_INVENTORY).toHaveLength(97);

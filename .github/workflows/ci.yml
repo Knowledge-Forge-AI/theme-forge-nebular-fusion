@@ -298,6 +298,15 @@ jobs:
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           category: "/language:${{ matrix.language }}"
+          output: "${{ env.TFSB_CODEQL_REPORT_DIR }}"
+          upload: false
+      - name: Evaluate finding ratchet on CodeQL findings
+        run: node tools/ci/finding-ratchet.mjs --baseline tools/ci/finding-ratchet-baseline.json --input "$TFSB_CODEQL_REPORT_DIR" --product nebular-fusion --tool codeql --check
+      - name: Upload CodeQL SARIF report
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: "${{ env.TFSB_CODEQL_REPORT_DIR }}"
+          category: "/language:${{ matrix.language }}"
 
   supply-chain:
     name: Supply chain, Syft SBOMs, Grype scan, and Cargo audit
@@ -371,6 +380,8 @@ jobs:
         run: |
           TFSB_RELEASE_DIR="$RUNNER_TEMP/tfsb-nebular-release"
           node tools/ci/run-syft-grype.mjs --target "$TFSB_RELEASE_DIR" --output-dir .test-reports/supply-chain --name nebular-fusion             --component-input "shipped-runtime:node=$TFSB_RELEASE_DIR/runtime/catalog"             --component-input "build-input:frontend-lock=$RUNNER_TEMP/tfsb-nebular-inventory/frontend"             --component-input "build-input:rust-lock=$RUNNER_TEMP/tfsb-nebular-inventory/rust"             --component-input "build-input:paired-core=$RUNNER_TEMP/tfsb-nebular-inventory/core"             --component-input "build-input:paired-loom=$RUNNER_TEMP/tfsb-nebular-inventory/loom"             --component-catalogers node=binary-classifier-cataloger             --component-catalogers frontend-lock=javascript-lock-cataloger,javascript-package-cataloger             --component-catalogers rust-lock=rust-cargo-lock-cataloger             --component-catalogers paired-core=javascript-lock-cataloger,javascript-package-cataloger             --component-catalogers paired-loom=javascript-lock-cataloger,javascript-package-cataloger
+      - name: Evaluate finding ratchet on Grype findings
+        run: node tools/ci/finding-ratchet.mjs --baseline tools/ci/finding-ratchet-baseline.json --input .test-reports/supply-chain/nebular-fusion.grype.sarif --product nebular-fusion --tool grype --check
       - name: Run selected workflow and secret checks
         run: node tools/ci/run-workflow-checks.mjs --root . --output-dir .test-reports/workflow-checks
       - name: Retain workflow and secret check outputs
@@ -378,10 +389,8 @@ jobs:
           rm -rf .test-reports/supply-chain/workflow-checks
           mv .test-reports/workflow-checks .test-reports/supply-chain/workflow-checks
           find .test-reports/supply-chain -type f -size 0 -delete
-      - name: Install cargo-audit
-        run: cargo +1.98.0 install cargo-audit --version 0.22.2 --locked
       - name: Run Cargo audit
-        run: cargo +1.98.0 audit --json --file src-tauri/Cargo.lock > .test-reports/supply-chain/cargo-audit.json
+        run: node tools/ci/run-cargo-audit.mjs --lockfile src-tauri/Cargo.lock --output .test-reports/supply-chain/cargo-audit.json
       - name: Bind supply-chain artifacts
         run: |
           node tools/ci/artifact-manifest.mjs --root .test-reports/supply-chain --output .test-reports/supply-chain/artifact-manifest.json --job supply-chain --require receipt.json --require nebular-fusion.syft.json --require nebular-fusion.spdx.json --require nebular-fusion.cdx.json --require nebular-fusion.grype.json --require nebular-fusion.grype.sarif --require nebular-fusion.receipt.json --require workflow-checks/actionlint.result.json --require workflow-checks/zizmor.result.json --require workflow-checks/betterleaks.result.json --require workflow-checks/workflow-checks.receipt.json --require workflow-checks/betterleaks.report.json --require cargo-audit.json

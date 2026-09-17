@@ -21,7 +21,7 @@ function assertProcessEvidence(processEvidence) {
 }
 
 test("packed sidecar transcript validates observed protocol, capability, and process evidence", async (context) => {
-  if (!existsSync(packedBinary) || !existsSync(packedManifest)) {
+  if (process.platform !== "darwin" || process.arch !== "arm64" || !existsSync(packedBinary) || !existsSync(packedManifest)) {
     context.skip("real packed sidecar evidence is produced and required by the macOS-arm64 qualification job");
     return;
   }

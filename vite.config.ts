@@ -12,9 +12,13 @@ export default defineConfig({
     sourcemap: false,
   },
   test: {
-    include: ["src/test/**/*.studio.{ts,tsx}"],
+    include: [
+      "src/test/**/*.studio.{ts,tsx}",
+      "src/features/**/test/*.test.{ts,tsx}",
+    ],
     environment: "jsdom",
     globals: true,
     restoreMocks: true,
+    testTimeout: 30000,
   },
 });

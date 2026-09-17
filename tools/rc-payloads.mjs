@@ -44,7 +44,7 @@ export const EXPECTED_BURST_SHA256 =
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
 export const EXPECTED_LOOM_VERSION = "0.2.0";
 export const EXPECTED_LOOM_SHA256 =
-  "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f";
+  "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34";
 
 export const EXPECTED_NODE_VERSION = "22.23.2";
 export const EXPECTED_NODE_TARGET = "aarch64-apple-darwin";
