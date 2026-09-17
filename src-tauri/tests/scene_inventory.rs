@@ -22,8 +22,8 @@ fn handlers_inventory_permissions_and_scene_bridge_agree() -> Result<(), Box<dyn
     assert_eq!(expected.len(), inventory.len(), "duplicate native command");
     assert_eq!(
         expected.len(),
-        42,
-        "unexplained change from the 24 + 18 command plan"
+        49,
+        "unexplained change from the 42 + 7 command plan"
     );
     let lib = fs::read_to_string(root.join("src/lib.rs"))?;
     let handler = lib

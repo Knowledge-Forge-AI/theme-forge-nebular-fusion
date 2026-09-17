@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -18,7 +18,20 @@ import {
   verifyDistribution,
 } from "./sidecar-common.mjs";
 
-const root = resolve(import.meta.dirname, `../src-tauri/target/sidecar-builder-tests-${process.pid}`);
+const baseTargetDir = process.env.CARGO_TARGET_DIR
+  ? resolve(process.env.CARGO_TARGET_DIR)
+  : (process.env.TMPDIR
+    ? realpathSync(resolve(process.env.TMPDIR))
+    : resolve(import.meta.dirname, "../src-tauri/target"));
+const root = resolve(baseTargetDir, `sidecar-builder-tests-${process.pid}`);
+
+process.on("exit", () => {
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup error
+  }
+});
 const requiredFiles = [
   ["dist/service-protocol/server-cli.js", "service"],
   ["native/directory-snapshot/prebuilds/darwin-arm64/native-addon-posix-openat-v1.node", "native"],

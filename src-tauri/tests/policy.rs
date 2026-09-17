@@ -163,6 +163,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
             && relative != Path::new("src/sidecar/process.rs")
             && relative != Path::new("src/theme_lab/runner.rs")
             && relative != Path::new("src/scene/runner.rs")
+            && relative != Path::new("src/app_theme/runner.rs")
         {
             return Err(io::Error::other(
                 "process spawn outside sidecar process owner",
@@ -174,6 +175,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
                     "#[cfg(feature = \"native-smoke\")]\npub(crate) mod smoke_selection;",
                 ))
             && ![
+                Path::new("src/app_theme/runner.rs"),
                 Path::new("src/commands/design_packet.rs"),
                 Path::new("src/commands/theme_packet.rs"),
                 Path::new("src/design_evidence/io.rs"),
@@ -183,6 +185,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 Path::new("src/sidecar/process.rs"),
                 Path::new("src/sidecar/supervisor.rs"),
                 Path::new("src/sidecar/supervisor/tests.rs"),
+                Path::new("src/state/app_theme.rs"),
                 Path::new("src/state/theme_lab.rs"),
             ]
             .contains(&relative)
@@ -310,7 +313,7 @@ fn scene_runner_test_fields_do_not_truncate_production_scan() -> io::Result<()> 
 fn single_maintained_native_source_inventory_is_exact_and_complete() -> io::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let inventory_files = load_maintained_source_inventory(root)?;
-    assert_eq!(inventory_files.len(), 66);
+    assert_eq!(inventory_files.len(), 71);
     let files = maintained_rust_files(root)?;
     for expected in &inventory_files {
         let expected_path = root.join("src").join(expected);

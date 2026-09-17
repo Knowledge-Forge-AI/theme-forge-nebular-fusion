@@ -48,6 +48,13 @@
     "allow-studio-scene-packet-export",
     "allow-studio-scene-review-create",
     "allow-studio-scene-candidate-verify",
-    "allow-studio-scene-candidate-adopt"
+    "allow-studio-scene-candidate-adopt",
+    "allow-studio-app-theme-status",
+    "allow-studio-app-theme-compile",
+    "allow-studio-app-theme-paired-compile",
+    "allow-studio-app-theme-open-profile",
+    "allow-studio-app-theme-save-profile",
+    "allow-studio-app-theme-export-package",
+    "allow-studio-app-theme-reset"
   ]
 }
