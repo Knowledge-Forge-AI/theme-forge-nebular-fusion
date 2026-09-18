@@ -16,7 +16,7 @@ import {
   stat,
   writeFile
 } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { constants } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -88,19 +88,24 @@ function isClearlyText(bytes) {
  * @param {{label: string, allowSymlink?: boolean}} options
  */
 async function inspectBinaryCandidate(candidatePath, options) {
-  let linkInfo;
+  let handle;
+  let isSymlink = false;
   try {
-    linkInfo = await lstat(candidatePath);
+    handle = await open(candidatePath, constants.O_RDONLY | (options.allowSymlink ? 0 : constants.O_NOFOLLOW));
   } catch (error) {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code === "ENOENT") return null;
-    throw error;
+    const err = /** @type {NodeJS.ErrnoException} */ (error);
+    if (err.code === "ENOENT") return null;
+    if (err.code === "ELOOP") {
+      if (!options.allowSymlink) {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary must not be a symlink: ${basename(candidatePath)}`);
+      }
+      isSymlink = true;
+      handle = await open(candidatePath, constants.O_RDONLY);
+    } else {
+      throw error;
+    }
   }
 
-  if (linkInfo.isSymbolicLink() && !options.allowSymlink) {
-    throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary must not be a symlink: ${basename(candidatePath)}`);
-  }
-
-  const handle = await open(candidatePath, "r");
   try {
     const info = await handle.stat();
     if (!info.isFile()) {
@@ -118,7 +123,7 @@ async function inspectBinaryCandidate(candidatePath, options) {
       path: candidatePath,
       sha256: sha256Hex(bytes),
       bytes,
-      symlink: linkInfo.isSymbolicLink()
+      symlink: isSymlink
     };
   } finally {
     await handle.close();
@@ -167,11 +172,15 @@ async function extractPinnedBinary(archiveBytes, asset, toolName) {
       stdio: ["pipe", "pipe", "pipe"]
     });
     const extractedPath = resolve(extractionDir, asset.binary_path);
-    const extractedInfo = await lstat(extractedPath);
-    if (extractedInfo.isSymbolicLink()) {
-      throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive did not contain a regular ${toolName} binary.`);
+    let handle;
+    try {
+      handle = await open(extractedPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === "ELOOP") {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive did not contain a regular ${toolName} binary.`);
+      }
+      throw error;
     }
-    const handle = await open(extractedPath, "r");
     let bytes;
     try {
       const handleStat = await handle.stat();
@@ -232,13 +241,13 @@ async function ensureVerifiedArchive(toolsDir, archiveName, expectedDigest, url,
 
   let handle = null;
   try {
-    const archiveInfo = await lstat(archivePath);
-    if (archiveInfo.isSymbolicLink()) {
+    handle = await open(archivePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    const error = /** @type {NodeJS.ErrnoException} */ (err);
+    if (error.code === "ELOOP") {
       throw new Error(`[TOOL_BOOTSTRAP_FAIL] Cached ${toolName} archive is not a regular file: ${archiveName}`);
     }
-    handle = await open(archivePath, "r");
-  } catch (err) {
-    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") {
+    if (error.code !== "ENOENT") {
       throw err;
     }
   }
@@ -333,23 +342,29 @@ export async function ensureToolWithProvenance(toolName, toolsDir) {
   await requirePrivateToolDirectory(resolvedToolsDir);
   const binDir = join(resolvedToolsDir, "bin");
   // Existing cached candidates are read only; never execute their mutable path.
-  if (existsSync(binDir) && (await lstat(binDir)).isSymbolicLink()) {
-    throw new Error("[TOOL_BOOTSTRAP_FAIL] Tool cache bin must be a private directory, not a symlink.");
+  try {
+    const binStat = await lstat(binDir);
+    if (binStat.isSymbolicLink()) {
+      throw new Error("[TOOL_BOOTSTRAP_FAIL] Tool cache bin must be a private directory, not a symlink.");
+    }
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== "ENOENT") throw error;
   }
   const targetBinPath = cacheBinaryPath(toolName, resolvedToolsDir);
 
   // Preflight local candidates before archive acquisition. This makes the
   // reproduced unauthenticated text cache fail closed without network access.
-  let candidate = null;
+  let candidate = await inspectBinaryCandidate(targetBinPath, { label: `Cached ${toolName}` });
   let source = "extracted-verified";
-  if (existsSync(targetBinPath)) {
-    candidate = await inspectBinaryCandidate(targetBinPath, { label: `Cached ${toolName}` });
+  if (candidate) {
     source = "cache-verified";
   } else {
     const pathCandidate = findPathBinary(toolName);
     if (pathCandidate) {
       candidate = await inspectBinaryCandidate(pathCandidate, { label: `PATH ${toolName}`, allowSymlink: true });
-      source = "path-verified";
+      if (candidate) {
+        source = "path-verified";
+      }
     }
   }
 
@@ -410,12 +425,21 @@ export async function ensureTool(toolName, toolsDir) {
  * @param {string} targetPath
  */
 async function targetIdentity(targetPath) {
-  const info = await lstat(targetPath);
-  if (info.isSymbolicLink()) {
-    throw new Error(`[SUPPLY_CHAIN_FAIL] Scan target must not be a symlink: ${basename(targetPath)}`);
+  let handle;
+  try {
+    handle = await open(targetPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    const err = /** @type {NodeJS.ErrnoException} */ (error);
+    if (err.code === "ELOOP") {
+      throw new Error(`[SUPPLY_CHAIN_FAIL] Scan target must not be a symlink: ${basename(targetPath)}`);
+    }
+    if (err.code === "ENOENT") {
+      throw new Error(`[SUPPLY_CHAIN_FAIL] Target not found: ${basename(targetPath)}`);
+    }
+    throw error;
   }
+  const info = await handle.stat();
   if (info.isFile()) {
-    const handle = await open(targetPath, "r");
     try {
       const bytes = await handle.readFile();
       return { kind: "file", size: bytes.length, fileCount: 1, sha256: sha256Hex(bytes) };
@@ -423,6 +447,7 @@ async function targetIdentity(targetPath) {
       await handle.close();
     }
   }
+  await handle.close();
   if (!info.isDirectory()) {
     throw new Error(`[SUPPLY_CHAIN_FAIL] Scan target is not a file or directory: ${basename(targetPath)}`);
   }
@@ -438,25 +463,29 @@ async function targetIdentity(targetPath) {
     for (const entry of entries) {
       const childPath = join(currentPath, entry.name);
       const childRelative = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-      const childInfo = await lstat(childPath);
-      hash.update(`${childRelative}\0${childInfo.mode & 0o7777}\0`);
-      if (childInfo.isDirectory()) {
-        hash.update("d\0");
+      if (entry.isDirectory()) {
+        const childInfo = await lstat(childPath);
+        hash.update(`${childRelative}\0${childInfo.mode & 0o7777}\0d\0`);
         await visit(childPath, childRelative);
-      } else if (childInfo.isFile()) {
-        const handle = await open(childPath, "r");
+      } else if (entry.isFile()) {
+        const fileHandle = await open(childPath, constants.O_RDONLY | constants.O_NOFOLLOW);
         let bytes;
+        let fileStat;
         try {
-          bytes = await handle.readFile();
+          fileStat = await fileHandle.stat();
+          bytes = await fileHandle.readFile();
         } finally {
-          await handle.close();
+          await fileHandle.close();
         }
+        hash.update(`${childRelative}\0${fileStat.mode & 0o7777}\0`);
         size += bytes.length;
         fileCount += 1;
         hash.update("f\0");
         hash.update(bytes);
         hash.update("\0");
-      } else if (childInfo.isSymbolicLink()) {
+      } else if (entry.isSymbolicLink()) {
+        const childInfo = await lstat(childPath);
+        hash.update(`${childRelative}\0${childInfo.mode & 0o7777}\0`);
         const linkTarget = await readlink(childPath);
         if (isAbsolute(linkTarget)) {
           throw new Error(`[SUPPLY_CHAIN_FAIL] Scan-target symlink has an absolute destination: ${childRelative}`);
@@ -653,24 +682,27 @@ async function resolveComponentInputs(values, targetPath, target, catalogerSelec
       throw new Error(`[SUPPLY_CHAIN_FAIL] Component input ${label} has an invalid path.`);
     }
     const inputPath = resolve(targetPath, inputValue);
-    const inputInfo = await lstat(inputPath).catch((error) => {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code === "ENOENT") {
+    let identity;
+    try {
+      identity = await targetIdentity(inputPath);
+    } catch (error) {
+      const err = /** @type {NodeJS.ErrnoException} */ (error);
+      if (err.code === "ENOENT" || err.message?.includes("Target not found")) {
         throw new Error(`[SUPPLY_CHAIN_FAIL] Component input not found: ${label}`);
       }
+      if (err.code === "ELOOP" || err.message?.includes("must not be a symlink")) {
+        throw new Error(`[SUPPLY_CHAIN_FAIL] Component input must not be a symlink: ${label}`);
+      }
+      if (err.message?.includes("is not a file or directory")) {
+        throw new Error(`[SUPPLY_CHAIN_FAIL] Component input is not a file or directory: ${label}`);
+      }
       throw error;
-    });
-    if (inputInfo.isSymbolicLink()) {
-      throw new Error(`[SUPPLY_CHAIN_FAIL] Component input must not be a symlink: ${label}`);
-    }
-    if (!inputInfo.isFile() && !inputInfo.isDirectory()) {
-      throw new Error(`[SUPPLY_CHAIN_FAIL] Component input is not a file or directory: ${label}`);
     }
     const inputRealpath = await realpath(inputPath);
     const stagingRelative = relative(stagingParentRealpath, inputRealpath);
     if (stagingRelative === ".." || stagingRelative.startsWith(`..${sep}`) || isAbsolute(stagingRelative)) {
       throw new Error(`[SUPPLY_CHAIN_FAIL] Component input must be inside the release staging parent: ${label}`);
     }
-    const identity = await targetIdentity(inputPath);
     const explicitCatalogers = candidate.catalogers !== undefined
       ? candidate.catalogers
       : catalogerSelections.get(label);
@@ -969,13 +1001,12 @@ export async function sanitizeReportFile(path, format, roots, residualRoots) {
 export async function runSupplyChainScan(options) {
   if (!options?.targetPath || !options?.outputDir) throw new Error("[SUPPLY_CHAIN_FAIL] targetPath and outputDir are required.");
   const targetPath = resolve(options.targetPath);
-  if (!existsSync(targetPath)) throw new Error(`[SUPPLY_CHAIN_FAIL] Target not found: ${basename(targetPath)}`);
-
   const name = safeArtifactName(options.artifactName ?? basename(targetPath).replace(/\.(tar\.gz|tgz|tar|zip)$/u, ""));
   const outputDir = resolve(options.outputDir);
   await mkdir(outputDir, { recursive: true });
-  const targetInfo = await lstat(targetPath);
-  if (targetInfo.isDirectory()) {
+
+  const initialTarget = await targetIdentity(targetPath);
+  if (initialTarget.kind === "directory") {
     const outputRelative = relative(targetPath, outputDir);
     if (outputRelative === "" || (!outputRelative.startsWith(`..${sep}`) && outputRelative !== ".." && !isAbsolute(outputRelative))) {
       throw new Error("[SUPPLY_CHAIN_FAIL] Output directory must be outside a directory scan target.");
@@ -1001,7 +1032,6 @@ export async function runSupplyChainScan(options) {
   await mkdir(join(isolatedHome, "tmp"), { recursive: true });
   await mkdir(databaseCache, { recursive: true });
 
-  const initialTarget = await targetIdentity(targetPath);
   const componentInputs = await resolveComponentInputs(
     options.componentInputs,
     targetPath,

@@ -15,6 +15,7 @@ export default defineConfig({
     include: [
       "src/test/**/*.studio.{ts,tsx}",
       "src/features/**/test/*.test.{ts,tsx}",
+      "test/**/*.test.{ts,tsx,mjs,js}",
     ],
     environment: "jsdom",
     globals: true,

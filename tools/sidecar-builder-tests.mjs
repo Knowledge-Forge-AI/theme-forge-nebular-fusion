@@ -151,7 +151,8 @@ test("shared verifier corpus exercises the actual JavaScript verifier", async ()
       case "duplicate-fields": {
         const path = resolve(candidate.payload, "manifest.json");
         const raw = await readFile(path, "utf8");
-        await writeFile(path, raw.replace("{", '{"schemaVersion":1,'));
+        const firstBrace = raw.indexOf("{");
+        await writeFile(path, raw.slice(0, firstBrace) + '{"schemaVersion":1,' + raw.slice(firstBrace + 1));
         break;
       }
       case "noncanonical-manifest": await writeFile(resolve(candidate.payload, "manifest.json"), `${JSON.stringify(candidate.manifest, null, 2)}\n`); break;
@@ -219,7 +220,8 @@ test("unknown, missing, and duplicate manifest fields fail closed", async (conte
     if (kind === "duplicate") {
       const path = resolve(candidate.payload, "manifest.json");
       const raw = await readFile(path, "utf8");
-      await writeFile(path, raw.replace("{", '{"schemaVersion":1,'));
+      const firstBrace = raw.indexOf("{");
+      await writeFile(path, raw.slice(0, firstBrace) + '{"schemaVersion":1,' + raw.slice(firstBrace + 1));
     }
     await assert.rejects(verify(candidate));
   });

@@ -1,14 +1,14 @@
 {
   "schema": "tfsb.source-candidate-v1",
-  "lineageCommit": "919e5af13b3dd6732ad54b47cfa93fe0226c2aba",
+  "lineageCommit": "823c8403e393e5688c038fb60461945717ac4864",
   "identity": {
-    "commit": "919e5af13b3dd6732ad54b47cfa93fe0226c2aba",
+    "commit": "823c8403e393e5688c038fb60461945717ac4864",
     "commitRole": "lineage-only",
     "kind": "selected-worktree-materialization",
     "materialization": {
-      "fileCount": 1353,
-      "totalBytes": 17822588,
-      "treeDigest": "703d34accad736fa98560c5d4c52cc23ccd042f89f2705b3fff2d0ed8a80f743",
+      "fileCount": 1367,
+      "totalBytes": 17970472,
+      "treeDigest": "2c553e5cd7d9df273bf8cb85f36733c621825f336a55155d70a8812f233c3b43",
       "files": [
         {
           "path": ".gitignore",
@@ -254,7 +254,7 @@
           "path": "apps/studio/gallery/manifest.json",
           "size": 81553,
           "mode": 420,
-          "sha256": "5e7edfb2f5e87e27c731deccfe99ecd4789c5ebaab41e9607d1392ccdc6e8ec0"
+          "sha256": "a488d616ee10ac6c82acaba3fc97f2fcff9ed427a7a73f2a688ec2a8c3ad4fa4"
         },
         {
           "path": "apps/studio/index.html",
@@ -582,9 +582,9 @@
         },
         {
           "path": "apps/studio/protocol/theme-lab-v2/payload-binding.json",
-          "size": 53771,
+          "size": 55841,
           "mode": 420,
-          "sha256": "14528b13ae270cc6988e53bf2a071ad1f52809801ebfbf558895e8b228d1f38a"
+          "sha256": "5a01b479f56a8a76ab175e950a3f9005a416723d109bac3c35dc31f91a42a11f"
         },
         {
           "path": "apps/studio/rust-toolchain.toml",
@@ -1146,9 +1146,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/plan_protocol.rs",
-          "size": 24933,
+          "size": 24953,
           "mode": 420,
-          "sha256": "758664af679241371925ec98844226a4e3ecdefd39b30f061a4abdb8da8244d9"
+          "sha256": "ca17675edad988a1a3b656f38e3ff1082ec59db827b23bfbba04faeb1ae53678"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/plan_transport.rs",
@@ -1403,6 +1403,48 @@
           "sha256": "0ecd681fb1d234ba92e82296e1648ecf17cb67d4bd7210b33a310e77668e81fe"
         },
         {
+          "path": "apps/studio/src/features/application-theme/ApplicationPreview.tsx",
+          "size": 6151,
+          "mode": 420,
+          "sha256": "db8ef3aac8c829e5376ace7b924ce1a1026040c13345b2b871a65f5aa5c2b57b"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/ApplicationThemeLab.tsx",
+          "size": 27851,
+          "mode": 420,
+          "sha256": "33222bb28d8589804cb2421150ed3aff437b9c7ed7da3b5369e80cb939f17a2e"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/app-theme-bridge.ts",
+          "size": 5873,
+          "mode": 420,
+          "sha256": "fdb3fbd3ad49d565087fc3acba4b49324c960a808d3f4ccc38f78789897341dc"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/builtin-forge-console.profile.json",
+          "size": 1791,
+          "mode": 420,
+          "sha256": "1a512abe15520f5e9877a7f595769c95c46447ca92518910b43cfb1e8b5a8ecb"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/builtin-profiles.ts",
+          "size": 225,
+          "mode": 420,
+          "sha256": "009ab5041e212d2bf6971f730494f7aaf7e21600351a812d5a559a57df911499"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/index.ts",
+          "size": 296,
+          "mode": 420,
+          "sha256": "2faab661a3a1064fb9e30d6b2805744f28e26718302ab3248cac2cc798b1cda8"
+        },
+        {
+          "path": "apps/studio/src/features/application-theme/types.ts",
+          "size": 3057,
+          "mode": 420,
+          "sha256": "7bb313603b293ae7ff4c950b8d6303edf567b01ea6093a80b6423525a86e0a98"
+        },
+        {
           "path": "apps/studio/src/features/brand-plans/ConsumerPlanForm.tsx",
           "size": 5313,
           "mode": 420,
@@ -1628,7 +1670,7 @@
           "path": "apps/studio/src/features/theme-lab/gallery-contract.ts",
           "size": 44845,
           "mode": 420,
-          "sha256": "4c860207dde6ceea253a5fed3367d2a6e5307dc32914808146bbb3b1b8f3383f"
+          "sha256": "0ea0b444c09ebcd0956ec208d6c74ebdedde4f884bbfb4cab0543a429323d5ec"
         },
         {
           "path": "apps/studio/src/features/theme-lab/request-builders.ts",
@@ -1847,6 +1889,12 @@
           "sha256": "8cba080e78fdf8febdf3d1899622686870d26ca9fe6936627483b8fa11c34a33"
         },
         {
+          "path": "apps/studio/src/styles/self-theme.css",
+          "size": 2667,
+          "mode": 420,
+          "sha256": "a2e53b7820c8289db5b1eba7ea229c099a8b0829dc5f53b64f0fe78fdede7df0"
+        },
+        {
           "path": "apps/studio/src/styles/studio.css",
           "size": 30891,
           "mode": 420,
@@ -1857,6 +1905,12 @@
           "size": 9015,
           "mode": 420,
           "sha256": "597b8784ed8a08894506ce4f5ae0489713a89e4afc405fa7fd8e884c23b2f35b"
+        },
+        {
+          "path": "apps/studio/src/test/application-theme.studio.tsx",
+          "size": 20162,
+          "mode": 420,
+          "sha256": "8bb64b051b0de86d8ae4540838a69d7e72a10cd04662ba50d849f1a8dd7e87a2"
         },
         {
           "path": "apps/studio/src/test/brand-read-validators.studio.ts",
@@ -1992,9 +2046,9 @@
         },
         {
           "path": "apps/studio/test/solar-sail-prepare.test.mjs",
-          "size": 6270,
+          "size": 10016,
           "mode": 420,
-          "sha256": "63302847fbc33b3e553e4c7e6260ed6af0036b5a5483b0ed0608d17e2b0e9e7f"
+          "sha256": "62b0fe207f6dbbb3aa64e6162bb0788072d55c849c2a7e9328281852e282a984"
         },
         {
           "path": "apps/studio/test/theme-adapter.test.mjs",
@@ -2021,6 +2075,12 @@
           "sha256": "e13a481bbe088599c5cbc15ec54084060a248a9f5f69d54ad86076729440cf91"
         },
         {
+          "path": "apps/studio/tools/app-preview-prepare.mjs",
+          "size": 20380,
+          "mode": 420,
+          "sha256": "b81e0190885eec0c8ae746a57d36177341730c4a3eff528c1057b8bc61764bdd"
+        },
+        {
           "path": "apps/studio/tools/build-app.mjs",
           "size": 3244,
           "mode": 420,
@@ -2028,9 +2088,15 @@
         },
         {
           "path": "apps/studio/tools/gallery-prepare.mjs",
-          "size": 58835,
+          "size": 60324,
           "mode": 420,
-          "sha256": "9457c27c257ae528f4eff1da662ca69d02eed61ba11bca354be726e4fd451d5e"
+          "sha256": "0bda45e02bd3757313d9bd5c5f3c11b30d9fe4d69d7890ff6b3ece83ce301b4d"
+        },
+        {
+          "path": "apps/studio/tools/generate-self-theme.mjs",
+          "size": 2015,
+          "mode": 420,
+          "sha256": "d7888d9ba5e2c2f42162717258f84cc0c79237d1b433a285ac02791679164826"
         },
         {
           "path": "apps/studio/tools/loom-clean.mjs",
@@ -2040,21 +2106,21 @@
         },
         {
           "path": "apps/studio/tools/loom-prepare.mjs",
-          "size": 29204,
+          "size": 29834,
           "mode": 420,
-          "sha256": "709e1c1b9ac74992b5bc432aa06f6efa16d6ada1b8d9020f1857f512b35f8481"
+          "sha256": "ea78181793455ed76ee5973875e49486d915153df82079bc0401cb474d9561da"
         },
         {
           "path": "apps/studio/tools/rc-payloads.mjs",
-          "size": 28390,
+          "size": 30468,
           "mode": 420,
-          "sha256": "1207fdee0b22ead67fb57ac8f3c4abf1257321699c7e58a9e0f14dcb703eabc6"
+          "sha256": "bf4474f85ea7b7f5be2966f0abc9477edf10fb529428fd18559b154026fd3352"
         },
         {
           "path": "apps/studio/tools/release-notices.mjs",
-          "size": 33381,
+          "size": 34092,
           "mode": 420,
-          "sha256": "7d242b4236041efbae8cf3c1954e0d0f7bcf90b9e2a14454567f52b49c76b898"
+          "sha256": "c175adbdad5354476f1a89a6605b4557c6669f84d11f8b898e249b862ceb67ec"
         },
         {
           "path": "apps/studio/tools/scene-batch.js",
@@ -2082,15 +2148,15 @@
         },
         {
           "path": "apps/studio/tools/scene-prepare.mjs",
-          "size": 5163,
+          "size": 5305,
           "mode": 420,
-          "sha256": "ed682045f894c3747b599cc3781dad19ed73233cb5ee3b44244d4e6c6b62728b"
+          "sha256": "e86c007df03d6216449e4ff2ed7eaedf81ae8b769e0334e506475328d3370d76"
         },
         {
           "path": "apps/studio/tools/sidecar-builder-tests.mjs",
-          "size": 27350,
+          "size": 27512,
           "mode": 420,
-          "sha256": "d3611db774bdbbc756ad2172c2e3d9d4459f3e8fe53ca0f42fb91d9c21356904"
+          "sha256": "60b948ffdc2575dd72e5da93828fbe7e091e4a69e3027d1e8bd5b890880b39ca"
         },
         {
           "path": "apps/studio/tools/sidecar-clean.mjs",
@@ -2130,9 +2196,9 @@
         },
         {
           "path": "apps/studio/tools/solar-sail-prepare.mjs",
-          "size": 7098,
+          "size": 11197,
           "mode": 420,
-          "sha256": "86166082a533c5a89104df8811e543b9ae069ad71e259bc182679a4c70461968"
+          "sha256": "180e739fa4dc54d19470a5ec275e6097b0f8cc6f054d99e0281d29e4eadcdf95"
         },
         {
           "path": "apps/studio/tsconfig.json",
@@ -2148,9 +2214,9 @@
         },
         {
           "path": "apps/studio/vite.config.ts",
-          "size": 458,
+          "size": 498,
           "mode": 420,
-          "sha256": "bd4016d4ad463134ed5c536c24fbc35af2b4628079256aa25e4dfeb5cf6a783b"
+          "sha256": "414c5df9b9c1af93bfae5afe5845ea2907ac363849e1872780b81e0a2f08a8ec"
         },
         {
           "path": "docs/architecture/v0.4-brand-systems.md",
@@ -3113,6 +3179,12 @@
           "sha256": "3f13c81782d986fd18fb2041f46bfab8865432e076749c55c5ad4e74ef0caf6c"
         },
         {
+          "path": "packages/stellar-loom/consumer-fixture/src/content/docs/guide.mdx",
+          "size": 487,
+          "mode": 420,
+          "sha256": "218152ff0e092f439d3ada1a20204301ad1610c80b67017e94515aa05519a442"
+        },
+        {
           "path": "packages/stellar-loom/consumer-fixture/src/content/docs/index.mdx",
           "size": 944,
           "mode": 420,
@@ -3135,6 +3207,12 @@
           "size": 1793,
           "mode": 420,
           "sha256": "22489a4718cd02ae63a1b0b1b25698416a005ada5525b0b7cdaf3a62570a8f7b"
+        },
+        {
+          "path": "packages/stellar-loom/examples/forge-console-reading-catalog.json",
+          "size": 11161,
+          "mode": 420,
+          "sha256": "978cad731afeeb381332626e8c0dfa9cbb8ca47580876477aea9c516312e2824"
         },
         {
           "path": "packages/stellar-loom/examples/loom-black-catalog.json",
@@ -4665,6 +4743,12 @@
           "size": 18082,
           "mode": 420,
           "sha256": "19fe276c56a17e604dffdd82df050c52bdbc990377f26a3bfecdfe6814bd35ec"
+        },
+        {
+          "path": "packages/stellar-loom/tools/smoke-reading-consumer.mjs",
+          "size": 25404,
+          "mode": 420,
+          "sha256": "20929c90b8c70309510a8baad241296e2b746ffedc359bee4509fb690ebe537c"
         },
         {
           "path": "packages/stellar-loom/tools/smoke-v2-core.mjs",
@@ -7830,9 +7914,9 @@
         },
         {
           "path": "tools/ci/run-cargo-audit.mjs",
-          "size": 5873,
+          "size": 5893,
           "mode": 420,
-          "sha256": "879fa3e9d7156f6ee9b579f96880d1f9b00bdf6d7dcf39e4cab8f02013d74805"
+          "sha256": "e7af347e8cde27c355f049a2857efa77a6c2ae646277d1b811340c44d46f72fc"
         },
         {
           "path": "tools/ci/run-native-theme-lab-smoke.mjs",
@@ -7842,9 +7926,9 @@
         },
         {
           "path": "tools/ci/run-syft-grype.mjs",
-          "size": 66531,
+          "size": 67463,
           "mode": 420,
-          "sha256": "0780141b04d4f014f6d05392dc4e6ca6a09e8bc7c9a94cd7cdd3565bbaf359dc"
+          "sha256": "70a54627e8f864fd418f0ae8ab30137b1a888afce0a7b4ce646ec58b481d365f"
         },
         {
           "path": "tools/ci/run-workflow-checks.mjs",
@@ -7866,9 +7950,9 @@
         },
         {
           "path": "tools/ci/verify-node-authenticity.mjs",
-          "size": 12892,
+          "size": 13200,
           "mode": 420,
-          "sha256": "d715dc6679156f8c4baa7930b5341839be8a9723eb235901ed5cd63a2f25a8fb"
+          "sha256": "4d80db81d357cf787187c482bb3381fa8f0d13a10d462c1d097c0dc7ed9726ff"
         },
         {
           "path": "tools/generate-design-evidence-v1.mjs",
@@ -7914,9 +7998,9 @@
         },
         {
           "path": "tools/public-composition/compose-nebular-fusion.mjs",
-          "size": 111357,
+          "size": 112878,
           "mode": 420,
-          "sha256": "d54b18b70047ce0befa1b8e5e6ce72ab7603cfb7624199ffa4735ea64e6742b2"
+          "sha256": "5fb545bb6a1fee9963251eb3921922c868571b60ae0458a656a57f38fc140dc5"
         },
         {
           "path": "tools/public-composition/compose-solar-sail.mjs",
@@ -7956,9 +8040,9 @@
         },
         {
           "path": "tools/public-composition/product-membership.json",
-          "size": 273282,
+          "size": 275678,
           "mode": 420,
-          "sha256": "0d9c05fdfe1a42c58635f7563ee0fe9fa814a6ee22cdc17bfdbc55146730a6b7"
+          "sha256": "253403bd31474929f2ea11119bc962f0d8d250af22598f2e96f05dd7973fe717"
         },
         {
           "path": "tools/public-composition/solar-sail-workflow.mjs",

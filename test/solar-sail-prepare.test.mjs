@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
-import { join, resolve, dirname } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile, readFile, cp } from "node:fs/promises";
+import { join, resolve, dirname, basename } from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import {
@@ -11,8 +12,11 @@ import {
   SOLAR_SAIL_RUNTIME_MEMBERS,
   SOLAR_SAIL_DECLARATION_MEMBERS,
   authenticateSolarSailCandidate,
+  prepareSolarSail,
+  extractTarballSafely,
   sha256Hex,
 } from "../tools/solar-sail-prepare.mjs";
+import { existsSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -64,6 +68,9 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
       ) + "\n",
       "utf8"
     );
+    for (const doc of ["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md", "README.md"]) {
+      await writeFile(join(pkgRoot, doc), `mock ${doc}\n`, "utf8");
+    }
 
     return { pkgRoot };
   }
@@ -145,5 +152,73 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     await expect(authenticateSolarSailCandidate(pkgRoot, wrongDigest)).rejects.toThrow(
       /Solar Sail candidate inventory digest mismatch/
     );
+  });
+
+  it("fails closed when extracting a non-tarball or missing archive", () => {
+    const bogus = join(tempDir, "bogus.tgz");
+    expect(() => extractTarballSafely(bogus, join(tempDir, "dest"))).toThrow(
+      /\[SOLAR_SAIL_PREPARE_FAIL\]/
+    );
+  });
+
+  it("extracts and authenticates candidate tarball from .outbox or staged package", async () => {
+    const outboxTarball = resolve(__dirname, "../../../.outbox/knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz");
+    let targetTarball = outboxTarball;
+    if (!existsSync(outboxTarball)) {
+      const realPkg = resolve(__dirname, "../../../packages/solar-sail");
+      targetTarball = join(tempDir, "outbox-fallback.tgz");
+      execFileSync("tar", ["-czf", targetTarball, "-C", dirname(realPkg), basename(realPkg)]);
+    }
+    const scratch = join(tempDir, "candidate-unpack");
+    await mkdir(scratch, { recursive: true });
+    const pkgRoot = extractTarballSafely(targetTarball, scratch);
+    expect(existsSync(join(pkgRoot, "package.json"))).toBe(true);
+
+    const binding = await authenticateSolarSailCandidate(pkgRoot, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    expect(binding.inventoryDigest).toBe(EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    expect(binding.version).toBe(EXPECTED_SOLAR_SAIL_VERSION);
+    expect(binding.name).toBe(EXPECTED_SOLAR_SAIL_NAME);
+  });
+
+  it("fails closed in prepareSolarSail when tarball path is explicitly invalid", async () => {
+    await expect(prepareSolarSail({ tarball: join(tempDir, "nonexistent.tgz") })).rejects.toThrow(
+      /\[SOLAR_SAIL_PREPARE_FAIL\]/
+    );
+  });
+
+  it("fails closed in prepareSolarSail when candidate root is missing or unresolvable", async () => {
+    const unanchoredDir = join(tempDir, "isolated-studio");
+    await mkdir(unanchoredDir, { recursive: true });
+    await expect(prepareSolarSail({ studioRoot: unanchoredDir })).rejects.toThrow(
+      /\[SOLAR_SAIL_PREPARE_FAIL\] No Solar Sail candidate source available in monorepo packages\/solar-sail or authenticated-inputs\/solar-sail-tarball/
+    );
+  });
+
+  it("prepares Solar Sail successfully in composed public layout from authenticated tarball", async () => {
+    const composedDir = join(tempDir, "composed-studio");
+    const authInputsDir = join(composedDir, "authenticated-inputs/solar-sail-tarball");
+    const testPayloadDir = join(tempDir, "test-payload");
+    const testAdapterDir = join(tempDir, "test-adapter");
+    await mkdir(authInputsDir, { recursive: true });
+    await writeFile(join(composedDir, "authenticated-inputs/stellar-binding.json"), "{}");
+
+    const realTarball = resolve(__dirname, "../../../.outbox/knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz");
+    if (existsSync(realTarball)) {
+      await cp(realTarball, join(authInputsDir, "solar-sail.tgz"));
+    } else {
+      const realPkg = resolve(__dirname, "../../../packages/solar-sail");
+      execFileSync("tar", ["-czf", join(authInputsDir, "solar-sail.tgz"), "-C", dirname(realPkg), basename(realPkg)]);
+    }
+
+    const binding = await prepareSolarSail({
+      studioRoot: composedDir,
+      payloadRoot: testPayloadDir,
+      adapterDir: testAdapterDir,
+    });
+
+    expect(binding.inventoryDigest).toBe(EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    expect(existsSync(join(testPayloadDir, "solar-sail-binding.json"))).toBe(true);
+    expect(existsSync(join(testPayloadDir, "dist/index.js"))).toBe(true);
+    expect(existsSync(join(testAdapterDir))).toBe(true);
   });
 });

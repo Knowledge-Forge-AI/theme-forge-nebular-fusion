@@ -33,6 +33,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const studioRoot = resolve(__dirname, "..");
 
+import { repositoryRootForStudio } from "./sidecar-common.mjs";
+
 import {
   EXPECTED_ARCHIVE_SHA256,
   EXPECTED_CONSUMER_LOCK_DIGEST,
@@ -82,6 +84,10 @@ function parseCliArgs() {
       process.env.TFSL_LOOM_TARBALL ||
       process.env.TFSB_STUDIO_LOOM_TARBALL ||
       null,
+    expectedSha256:
+      process.env.TFSL_LOOM_SHA256 ||
+      process.env.TFSB_STUDIO_LOOM_SHA256 ||
+      null,
     outputRoot: resolve(studioRoot, "public/preview/gallery"),
     manifestPath: resolve(studioRoot, "gallery/manifest.json"),
     scratchRoot:
@@ -96,6 +102,8 @@ function parseCliArgs() {
     const arg = args[i];
     if (arg === "--tarball" && args[i + 1]) {
       options.tarball = resolve(args[++i]);
+    } else if (arg === "--expected-sha256" && args[i + 1]) {
+      options.expectedSha256 = args[++i];
     } else if (arg === "--output-root" && args[i + 1]) {
       options.outputRoot = resolve(args[++i]);
     } else if (arg === "--manifest-path" && args[i + 1]) {
@@ -277,9 +285,25 @@ export async function prepareGallery(options = parseCliArgs()) {
   }
   const tarballBytes = await readFile(options.tarball);
   const actualTarballSha256 = sha256(tarballBytes);
-  if (actualTarballSha256 !== EXPECTED_ARCHIVE_SHA256) {
+  let targetSha = options.expectedSha256 || process.env.EXPECTED_LOOM_SHA256 || null;
+  if (!targetSha) {
+    const repoRoot = repositoryRootForStudio(studioRoot);
+    const authBindingPath = resolve(repoRoot, "authenticated-inputs/loom-binding.json");
+    if (existsSync(authBindingPath)) {
+      try {
+        const authBinding = JSON.parse(await readFile(authBindingPath, "utf8"));
+        if (authBinding.sha256 && /^[a-f0-9]{64}$/.test(authBinding.sha256)) {
+          targetSha = authBinding.sha256;
+        }
+      } catch {}
+    }
+  }
+  if (!targetSha) {
+    targetSha = EXPECTED_ARCHIVE_SHA256;
+  }
+  if (actualTarballSha256 !== targetSha) {
     throw new Error(
-      `Candidate Loom archive digest mismatch! Expected: ${EXPECTED_ARCHIVE_SHA256}, Actual: ${actualTarballSha256}`
+      `Candidate Loom archive digest mismatch! Expected: ${targetSha}, Actual: ${actualTarballSha256}`
     );
   }
   console.log(`✓ Authenticated Candidate Loom archive: ${actualTarballSha256} (${tarballBytes.length} bytes)`);
@@ -990,6 +1014,7 @@ export default defineConfig({
             const iframe = document.getElementById("gallery-preview-frame");
             return new Promise((res) => {
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.type === "tfsl:theme-applied") {
                   window.removeEventListener("message", handler);
                   res(e.data);
@@ -1033,6 +1058,7 @@ export default defineConfig({
                   const frame = document.getElementById("gallery-preview-frame");
                   const timer = setTimeout(() => { window.removeEventListener("message", handler); rejectAck(new Error("Layout acknowledgement timeout")); }, 3000);
                   function handler(event) {
+                    if (event.origin !== window.location.origin && event.origin !== "null") return;
                     if (event.source !== frame.contentWindow || event.data?.applicationId !== applicationId) return;
                     clearTimeout(timer); window.removeEventListener("message", handler);
                     if (event.data.type === "tfsl:theme-applied") resolveAck(true); else rejectAck(new Error("Layout application rejected"));
@@ -1057,6 +1083,7 @@ export default defineConfig({
             return new Promise((res) => {
               const timer = setTimeout(() => res("rejected"), 250);
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.revision === 999) {
                   clearTimeout(timer);
                   window.removeEventListener("message", handler);
@@ -1088,6 +1115,7 @@ export default defineConfig({
             return new Promise((res) => {
               const timer = setTimeout(() => res("rejected"), 250);
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.revision === 998) {
                   clearTimeout(timer);
                   window.removeEventListener("message", handler);
@@ -1117,6 +1145,7 @@ export default defineConfig({
             return new Promise((res) => {
               const timer = setTimeout(() => res("rejected"), 250);
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.revision === 100.5) {
                   clearTimeout(timer);
                   window.removeEventListener("message", handler);
@@ -1147,6 +1176,7 @@ export default defineConfig({
             return new Promise((res) => {
               const timer = setTimeout(() => res("rejected"), 250);
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.revision === 997) {
                   clearTimeout(timer);
                   window.removeEventListener("message", handler);
@@ -1177,6 +1207,7 @@ export default defineConfig({
             const iframe = document.getElementById("gallery-preview-frame");
             return new Promise((res) => {
               function handler(e) {
+                if (e.origin !== window.location.origin && e.origin !== "null") return;
                 if (e.data && e.data.type === "tfsl:command-attempt-result") {
                   window.removeEventListener("message", handler);
                   res(e.data);
@@ -1253,9 +1284,10 @@ export default defineConfig({
       sha256: actualTarballSha256,
       size: tarballBytes.length,
     },
-    scenarios: manifestScenarios,
-    coverage: GALLERY_COVERAGE,
-    coverageSourceSha256: sha256(await readFile(resolve(studioRoot, "src/features/theme-lab/gallery-contract.ts"))),
+    coverage: {
+      ...GALLERY_COVERAGE,
+      loomArchiveDigest: actualTarballSha256,
+    },
     bridgeContract: BRIDGE_CONTRACT,
     totalBytes: totalGalleryBytes,
     totalFiles: totalGalleryFiles,
@@ -1329,7 +1361,8 @@ export default defineConfig({
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  prepareGallery().catch((err) => {
+  const expectedSha256 = process.env.EXPECTED_LOOM_SHA256 || null;
+  prepareGallery({ expectedSha256 }).catch((err) => {
     console.error("Gallery preparation failed with error:", err);
     process.exit(1);
   });
