@@ -1,6 +1,5 @@
 // @ts-check
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -356,10 +355,15 @@ export function createBaseline(findings, existingBaseline, description) {
  * @returns {Promise<RatchetBaseline>}
  */
 export async function loadBaseline(baselinePath) {
-  if (!existsSync(baselinePath)) {
-    throw new Error(`[RATCHET_FAIL] Baseline file does not exist: ${baselinePath}`);
+  let content;
+  try {
+    content = await readFile(baselinePath, "utf8");
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code === "ENOENT") {
+      throw new Error(`[RATCHET_FAIL] Baseline file does not exist: ${baselinePath}`);
+    }
+    throw err;
   }
-  const content = await readFile(baselinePath, "utf8");
   let parsed;
   try {
     parsed = JSON.parse(content);
@@ -390,25 +394,30 @@ export async function loadFindingsFromPath(findingsPath, product, tool, isSarif)
     throw new Error("[RATCHET_FAIL] Missing or empty findings path (--findings or --input)");
   }
   let targetPath = findingsPath;
-  if (!existsSync(targetPath)) {
-    // If exact file doesn't exist (e.g. language alias mismatch like c-cpp.sarif vs cpp.sarif),
-    // check if parent directory contains matching SARIF files
+  /** @type {import("node:fs").Stats | undefined} */
+  let st;
+  try {
+    st = await stat(targetPath);
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") throw err;
     const parent = dirname(targetPath);
-    if (existsSync(parent)) {
+    try {
       const parentSt = await stat(parent);
       if (parentSt.isDirectory()) {
         const entries = await readdir(parent);
         const sarifs = entries.filter((name) => name.endsWith(".sarif"));
         if (sarifs.length > 0) {
           targetPath = parent;
+          st = parentSt;
         }
       }
+    } catch {
+      // ignore
     }
   }
-  if (!existsSync(targetPath)) {
+  if (!st) {
     throw new Error(`[RATCHET_FAIL] Findings path does not exist: ${findingsPath}`);
   }
-  const st = await stat(targetPath);
   /** @type {string[]} */
   const filesToProcess = [];
   if (st.isDirectory()) {
@@ -491,8 +500,14 @@ export async function main(args) {
 
   if (mode === "update") {
     let existingBaseline = undefined;
-    if (existsSync(baselinePath)) {
+    try {
       existingBaseline = await loadBaseline(baselinePath);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("[RATCHET_FAIL] Baseline file does not exist")) {
+        existingBaseline = undefined;
+      } else {
+        throw err;
+      }
     }
     const { baseline, unreviewedCount } = createBaseline(
       currentFindings,
