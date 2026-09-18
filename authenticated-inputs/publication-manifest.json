@@ -1,0 +1,69 @@
+{
+  "schema": "tfsb.public-paired-inputs-v1",
+  "stellar": {
+    "status": "release-candidate",
+    "repository": "Knowledge-Forge-AI/theme-forge-stellar-burst",
+    "commit": null,
+    "contentTree": null,
+    "sourceMaterializationSha256": "703d34accad736fa98560c5d4c52cc23ccd042f89f2705b3fff2d0ed8a80f743",
+    "packageSha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e"
+  },
+  "loom": {
+    "status": "release-candidate",
+    "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+    "commit": null,
+    "contentTree": null,
+    "sourceMaterializationSha256": "703d34accad736fa98560c5d4c52cc23ccd042f89f2705b3fff2d0ed8a80f743",
+    "packageSha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0",
+    "catalogBuildEvidenceSha256": "a5f07be4a3c6b01e81ead72dec1d09e1652f08c6319423c23f285f0e9a7868f3",
+    "history": {
+      "schema": "tfsb.released-loom-input-v1",
+      "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
+      "version": "0.1.0",
+      "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.1.0.tgz",
+      "sha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+      "size": 109014,
+      "publicSource": {
+        "status": "published",
+        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+        "commit": "0bd72d6be18c6c1e0e23e6cb29f1e6c738c575dc",
+        "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+        "producerRole": "durable-main"
+      },
+      "testedProducer": {
+        "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
+        "commit": "58ee2de48fd77c6a0d47cdb8c85e5e79bc78a299",
+        "contentTree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+        "packageSha256": "c3a21cdd2b47eee0e125522e0f80deb63fd2571e559f6922a72d112b53846ea8",
+        "producerRole": "merge-candidate",
+        "stagingHead": {
+          "ref": "staging",
+          "commit": "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc",
+          "tree": "8b90a43c9960a8bea94ae9dc6ab1d0c835e80ffa",
+          "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+        },
+        "base": {
+          "ref": "main",
+          "commit": "ff31d83517c7f826acabd465a121e68eb498ced9",
+          "tree": null,
+          "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom"
+        },
+        "parents": [
+          "ff31d83517c7f826acabd465a121e68eb498ced9",
+          "7c06b2dd73483c36a8f3e9c37f96aee8f11747fc"
+        ],
+        "stagingAndMergeTreesEqual": true,
+        "runId": 34247384527,
+        "runAttempt": 1,
+        "jobId": 102132812631,
+        "artifactId": 10064563215,
+        "artifactDigest": "sha256:4cfbf7eeecc97e919b35846636c157ac9f4788e988819c27eaef26d0831d4010",
+        "artifactManifestSha256": "365f2b800bbbeb423913244115e17fee2cc5e5bbd368d36e2252b06bbd71a37c"
+      },
+      "equality": {
+        "durableMainAndTestedProducerTreesEqual": true,
+        "registryAndTestedPackageSha256Equal": true
+      }
+    }
+  }
+}

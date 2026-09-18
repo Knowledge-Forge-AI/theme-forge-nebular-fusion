@@ -1,7 +1,7 @@
 {
-  "fileCount": 4,
-  "totalBytes": 908885,
-  "treeDigest": "684919719df867234d478a91d043a57e64f371482670a7c44b38cf056b95d4f5",
+  "fileCount": 12,
+  "totalBytes": 5946854,
+  "treeDigest": "256a527b7cc828047c7f4f61e125480b96b96b9f98c2fb0f1239ee86ab6bd5a6",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz",
@@ -10,22 +10,70 @@
       "sha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e"
     },
     {
+      "path": "core/package-lock.json",
+      "size": 57198,
+      "mode": 420,
+      "sha256": "046eb46aed69b6457d38e598ffba04276a28e045abed2098ac3b57e26e8d80b3"
+    },
+    {
+      "path": "core/package.json",
+      "size": 2922,
+      "mode": 420,
+      "sha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980"
+    },
+    {
       "path": "loom-binding.json",
-      "size": 794,
-      "mode": 384,
-      "sha256": "a5d5034342b3787316423237c3ca44fb300b825f7168253167e755ffad1637f6"
+      "size": 2496,
+      "mode": 420,
+      "sha256": "a4c9985f1e9fd2af43b3fa01451c13f8969765d24cb7c24a3dd862ff560ecbb4"
     },
     {
       "path": "loom-tarball/knowledge-forge-ai-theme-forge-stellar-loom-0.3.0.tgz",
-      "size": 272555,
+      "size": 272513,
       "mode": 420,
-      "sha256": "a0ad4ddab0cd90d2c1fb9325a7f1a7d9a52ba589560160c63d2afc184b5201c5"
+      "sha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0"
+    },
+    {
+      "path": "publication-manifest.json",
+      "size": 2982,
+      "mode": 420,
+      "sha256": "b8d4cbfe1db2526954fa36c0715f3991adf3a3e737deac1b845d9705daea4b9a"
+    },
+    {
+      "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
+      "size": 20503,
+      "mode": 420,
+      "sha256": "860a3162df7558326e18965503154feab99983130d2775c0d846d8548eab43e3"
+    },
+    {
+      "path": "raster/package-lock.json",
+      "size": 771,
+      "mode": 420,
+      "sha256": "5205e7813a2cdef0ce3d1103b71ab7a6c6931c371c67bcd188a2d7f6d7a1a825"
     },
     {
       "path": "stellar-binding.json",
-      "size": 1459,
-      "mode": 384,
-      "sha256": "05b59aaa81ba8448521508e94b57eb830093dd96f57e97321d234b53a21373e8"
+      "size": 6119,
+      "mode": 420,
+      "sha256": "4b98cda0c9544f37090137037e151e3319142714c654b8328f996a7f10ca4919"
+    },
+    {
+      "path": "tooling-tarball/node-build-types.tgz",
+      "size": 458836,
+      "mode": 420,
+      "sha256": "9f98f80143905c362135624e5dd77588e010a060944dc9263909d34eedbab1e6"
+    },
+    {
+      "path": "tooling-tarball/openpgp-6.3.1.tgz",
+      "size": 4486359,
+      "mode": 420,
+      "sha256": "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b"
+    },
+    {
+      "path": "tooling/binding.json",
+      "size": 2078,
+      "mode": 420,
+      "sha256": "7556406b3025cc809a125341dae333fb6e6d04d9c06937a955f9ed1d5d139f19"
     }
   ]
 }

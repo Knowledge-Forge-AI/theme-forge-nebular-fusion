@@ -6,6 +6,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   readlink,
@@ -99,24 +100,29 @@ async function inspectBinaryCandidate(candidatePath, options) {
     throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary must not be a symlink: ${basename(candidatePath)}`);
   }
 
-  const info = linkInfo.isSymbolicLink() ? await stat(candidatePath) : linkInfo;
-  if (!info.isFile()) {
-    throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is not a regular file: ${basename(candidatePath)}`);
-  }
-  if ((info.mode & 0o111) === 0) {
-    throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is not executable: ${basename(candidatePath)}`);
-  }
+  const handle = await open(candidatePath, "r");
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is not a regular file: ${basename(candidatePath)}`);
+    }
+    if ((info.mode & 0o111) === 0) {
+      throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is not executable: ${basename(candidatePath)}`);
+    }
 
-  const bytes = await readFile(candidatePath);
-  if (isClearlyText(bytes)) {
-    throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is an unauthenticated text file: ${basename(candidatePath)}`);
+    const bytes = await handle.readFile();
+    if (isClearlyText(bytes)) {
+      throw new Error(`[TOOL_BOOTSTRAP_FAIL] ${options.label} binary is an unauthenticated text file: ${basename(candidatePath)}`);
+    }
+    return {
+      path: candidatePath,
+      sha256: sha256Hex(bytes),
+      bytes,
+      symlink: linkInfo.isSymbolicLink()
+    };
+  } finally {
+    await handle.close();
   }
-  return {
-    path: candidatePath,
-    sha256: sha256Hex(bytes),
-    bytes,
-    symlink: linkInfo.isSymbolicLink()
-  };
 }
 
 /**
@@ -162,13 +168,23 @@ async function extractPinnedBinary(archiveBytes, asset, toolName) {
     });
     const extractedPath = resolve(extractionDir, asset.binary_path);
     const extractedInfo = await lstat(extractedPath);
-    if (extractedInfo.isSymbolicLink() || !extractedInfo.isFile()) {
+    if (extractedInfo.isSymbolicLink()) {
       throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive did not contain a regular ${toolName} binary.`);
     }
-    if ((extractedInfo.mode & 0o111) === 0) {
-      throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive ${toolName} binary is not executable.`);
+    const handle = await open(extractedPath, "r");
+    let bytes;
+    try {
+      const handleStat = await handle.stat();
+      if (!handleStat.isFile()) {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive did not contain a regular ${toolName} binary.`);
+      }
+      if ((handleStat.mode & 0o111) === 0) {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive ${toolName} binary is not executable.`);
+      }
+      bytes = await handle.readFile();
+    } finally {
+      await handle.close();
     }
-    const bytes = await readFile(extractedPath);
     if (isClearlyText(bytes)) {
       throw new Error(`[TOOL_BOOTSTRAP_FAIL] Pinned archive ${toolName} binary is text, not an executable release binary.`);
     }
@@ -214,15 +230,32 @@ async function ensureVerifiedArchive(toolsDir, archiveName, expectedDigest, url,
   let source = "cached-verified";
   let bytes;
 
-  if (existsSync(archivePath)) {
+  let handle = null;
+  try {
     const archiveInfo = await lstat(archivePath);
-    if (archiveInfo.isSymbolicLink() || !archiveInfo.isFile()) {
+    if (archiveInfo.isSymbolicLink()) {
       throw new Error(`[TOOL_BOOTSTRAP_FAIL] Cached ${toolName} archive is not a regular file: ${archiveName}`);
     }
-    bytes = await readFile(archivePath);
-    const actualDigest = sha256Hex(bytes);
-    if (actualDigest !== expectedDigest) {
-      throw new Error(`[TOOL_BOOTSTRAP_FAIL] Cached archive integrity mismatch for ${archiveName}: expected ${expectedDigest}, got ${actualDigest}`);
+    handle = await open(archivePath, "r");
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  if (handle) {
+    try {
+      const archiveInfo = await handle.stat();
+      if (!archiveInfo.isFile()) {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] Cached ${toolName} archive is not a regular file: ${archiveName}`);
+      }
+      bytes = await handle.readFile();
+      const actualDigest = sha256Hex(bytes);
+      if (actualDigest !== expectedDigest) {
+        throw new Error(`[TOOL_BOOTSTRAP_FAIL] Cached archive integrity mismatch for ${archiveName}: expected ${expectedDigest}, got ${actualDigest}`);
+      }
+    } finally {
+      await handle.close();
     }
   } else {
     let response;
@@ -382,8 +415,13 @@ async function targetIdentity(targetPath) {
     throw new Error(`[SUPPLY_CHAIN_FAIL] Scan target must not be a symlink: ${basename(targetPath)}`);
   }
   if (info.isFile()) {
-    const bytes = await readFile(targetPath);
-    return { kind: "file", size: bytes.length, fileCount: 1, sha256: sha256Hex(bytes) };
+    const handle = await open(targetPath, "r");
+    try {
+      const bytes = await handle.readFile();
+      return { kind: "file", size: bytes.length, fileCount: 1, sha256: sha256Hex(bytes) };
+    } finally {
+      await handle.close();
+    }
   }
   if (!info.isDirectory()) {
     throw new Error(`[SUPPLY_CHAIN_FAIL] Scan target is not a file or directory: ${basename(targetPath)}`);
@@ -406,7 +444,13 @@ async function targetIdentity(targetPath) {
         hash.update("d\0");
         await visit(childPath, childRelative);
       } else if (childInfo.isFile()) {
-        const bytes = await readFile(childPath);
+        const handle = await open(childPath, "r");
+        let bytes;
+        try {
+          bytes = await handle.readFile();
+        } finally {
+          await handle.close();
+        }
         size += bytes.length;
         fileCount += 1;
         hash.update("f\0");
