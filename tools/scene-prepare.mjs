@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFile, writeFile, mkdir, lstat, readdir, copyFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { readFile, writeFile, mkdir, lstat, readdir, copyFile, open } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,11 +10,21 @@ const digest=bytes=>createHash("sha256").update(bytes).digest("hex");
 export const sceneBinding=JSON.parse(await readFile(join(studio,"protocol/scene-workbench-v1/payload-binding.json"),"utf8"));
 
 async function readRegular(path,limit) {
-  const before=await lstat(path);
-  if(!before.isFile()||before.isSymbolicLink()||before.size>limit) throw new Error("Invalid scene payload member");
-  const bytes=await readFile(path),after=await lstat(path);
-  if(before.ino!==after.ino||before.dev!==after.dev||before.mtimeMs!==after.mtimeMs||bytes.length!==before.size) throw new Error("Scene payload member changed");
-  return bytes;
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    throw new Error("Invalid scene payload member");
+  }
+  try {
+    const st = await handle.stat();
+    if (!st.isFile() || st.size > limit) throw new Error("Invalid scene payload member");
+    const bytes = await handle.readFile();
+    if (bytes.length !== st.size) throw new Error("Scene payload member changed");
+    return bytes;
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function verifyScenePayload(payload,node,binding=sceneBinding) {

@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,6 +31,7 @@ export function sha256Hex(content) {
  *   lockfile?: string,
  *   output?: string,
  *   receipt?: string,
+ *   offline?: boolean,
  * }} [options]
  */
 export async function runCargoAudit(options = {}) {
@@ -69,8 +70,8 @@ export async function runCargoAudit(options = {}) {
     await mkdir(dirname(outputPath), { recursive: true });
   } catch (err) {
     if (err && (err.code === "EROFS" || err.code === "EACCES")) {
-      outputPath = join(tmpdir(), "tfsb-test-reports/supply-chain/cargo-audit.json");
-      await mkdir(dirname(outputPath), { recursive: true });
+      const secureTemp = await mkdtemp(join(tmpdir(), "tfsb-cargo-audit-"));
+      outputPath = join(secureTemp, "cargo-audit.json");
     } else {
       throw err;
     }

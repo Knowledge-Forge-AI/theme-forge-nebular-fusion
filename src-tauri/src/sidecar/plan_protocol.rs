@@ -722,10 +722,10 @@ mod tests {
         assert!(request.as_ref().is_ok_and(|value| value.validate().is_ok()));
         let prepared = request
             .ok()
-            .and_then(|value| value.prepare_create("private-nonce").ok());
+            .and_then(|value| value.prepare_create("test-session-mock-nonce").ok());
         assert!(prepared.as_ref().is_some_and(|(method, params)| {
             *method == BrandPlanMethod::ConsumerInstall
-                && params.get("sessionNonce").and_then(JsonNode::as_str) == Some("private-nonce")
+                && params.get("sessionNonce").and_then(JsonNode::as_str) == Some("test-session-mock-nonce")
                 && params
                     .get("profiles")
                     .and_then(JsonNode::as_array)

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { cp, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -8,7 +8,7 @@ import { repositoryRootForStudio } from "./sidecar-common.mjs";
 import { prepareGallery } from "./gallery-prepare.mjs";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.2.0";
+export const EXPECTED_LOOM_VERSION = "0.3.0";
 export const SUPPORTED_LOOM_VERSIONS = ["0.3.0", "0.2.0", "0.1.1", "0.1.0"];
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
@@ -158,15 +158,26 @@ function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
     }
   }
 
-  const leafStat = lstatSync(current);
-  if (!leafStat.isFile()) {
-    throw new Error(`Non-regular file in member path: '${relPath}'`);
+  let fd;
+  try {
+    fd = openSync(current, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    throw new Error(`Non-regular file or symlink in member path: '${relPath}'`);
   }
-  if (leafStat.size > maxBytes) {
-    throw new Error(`Member file exceeds maximum byte bound: '${relPath}' (${leafStat.size} > ${maxBytes})`);
+  let leafStat;
+  let bytes;
+  try {
+    leafStat = fstatSync(fd);
+    if (!leafStat.isFile()) {
+      throw new Error(`Non-regular file in member path: '${relPath}'`);
+    }
+    if (leafStat.size > maxBytes) {
+      throw new Error(`Member file exceeds maximum byte bound: '${relPath}' (${leafStat.size} > ${maxBytes})`);
+    }
+    bytes = readFileSync(fd);
+  } finally {
+    closeSync(fd);
   }
-
-  const bytes = readFileSync(current);
   if (bytes.length === 0) {
     throw new Error(`Empty member file forbidden: '${relPath}'`);
   }
@@ -328,14 +339,24 @@ function runLocalCommand(command, args, cwd, env) {
 }
 
 async function requireRegular(filePath, maximum = MAX_ARCHIVE_BYTES) {
-  const info = await lstat(filePath);
-  if (info.isSymbolicLink() || !info.isFile()) {
+  let handle;
+  try {
+    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
     throw new Error(`Input is not a regular file: ${basename(filePath)}`);
   }
-  if (info.size > maximum) {
-    throw new Error(`Input exceeds byte limit: ${basename(filePath)}`);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new Error(`Input is not a regular file: ${basename(filePath)}`);
+    }
+    if (info.size > maximum) {
+      throw new Error(`Input exceeds byte limit: ${basename(filePath)}`);
+    }
+    return info;
+  } finally {
+    await handle.close();
   }
-  return info;
 }
 
 async function extractTarballSafely(archivePath, destination) {
@@ -413,11 +434,11 @@ export async function prepareLoom(customOptions = {}) {
   // Check authenticated-inputs/loom-binding.json if present
   let authBinding = null;
   const authBindingPath = resolve(repoRoot, "authenticated-inputs/loom-binding.json");
-  if (existsSync(authBindingPath)) {
-    try {
-      const bindingRaw = await readFile(authBindingPath, "utf8");
-      authBinding = JSON.parse(bindingRaw);
-    } catch {
+  try {
+    const bindingRaw = await readFile(authBindingPath, "utf8");
+    authBinding = JSON.parse(bindingRaw);
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") {
       throw new Error("authenticated-inputs/loom-binding.json is invalid JSON");
     }
   }
@@ -425,6 +446,7 @@ export async function prepareLoom(customOptions = {}) {
   // Determine exact tarball and expected sha256
   let tarballPath = options.tarball || process.env.TFSL_LOOM_TARBALL || process.env.TFSB_STUDIO_LOOM_TARBALL;
   let expectedSha256 = options.sha256 || process.env.TFSL_LOOM_SHA256 || process.env.TFSB_STUDIO_LOOM_SHA256;
+  let actualSha256 = null;
 
   if (!tarballPath && (authBinding?.filename || authBinding?.tarballName)) {
     const bindingName = authBinding.name || authBinding.packageName;
@@ -461,7 +483,7 @@ export async function prepareLoom(customOptions = {}) {
     await requireRegular(tarballPath, MAX_ARCHIVE_BYTES);
 
     const tarballBytes = await readFile(tarballPath);
-    const actualSha256 = sha256(tarballBytes);
+    actualSha256 = sha256(tarballBytes);
 
     if (expectedSha256) {
       if (actualSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
@@ -671,7 +693,8 @@ export async function prepareLoom(customOptions = {}) {
   try {
     await prepareGallery({ tarball: resolve(tarballPath), scratchRoot: galleryScratch,
       outputRoot: resolve(publicPreview, "gallery"),
-      manifestPath: resolve(publicPreview, "gallery/manifest.json"), skipBrowser: true, scenario: null });
+      manifestPath: resolve(publicPreview, "gallery/manifest.json"), skipBrowser: true, scenario: null,
+      expectedSha256: actualSha256 });
   } finally {
     await rm(galleryScratch, { recursive: true, force: true });
   }

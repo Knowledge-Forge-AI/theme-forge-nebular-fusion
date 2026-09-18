@@ -2,9 +2,9 @@
   "schema": "tfsb.gallery-manifest-v1",
   "loomCandidate": {
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
-    "version": "0.1.1",
-    "sha256": "9e1c288e45b296561002db4c23944c5ba2dbd46a83c0700fc9e870d867d0e238",
-    "size": 251620
+    "version": "0.3.0",
+    "sha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0",
+    "size": 147794
   },
   "scenarios": {
     "black-catalog": {
@@ -2073,9 +2073,9 @@
       "arbitrary local fonts"
     ],
     "fixtureLockDigest": "7c3c03ea0b02f2af883e411ba4500d7ef2951a7bd599e452d3bb91e23a8c9bbf",
-    "loomArchiveDigest": "9e1c288e45b296561002db4c23944c5ba2dbd46a83c0700fc9e870d867d0e238"
+    "loomArchiveDigest": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0"
   },
-  "coverageSourceSha256": "b3b283d8a0c2c7fe64a3c652c8b725d7919846e420a7190737007edc9a1d0109",
+  "coverageSourceSha256": "0ea0b444c09ebcd0956ec208d6c74ebdedde4f884bbfb4cab0543a429323d5ec",
   "bridgeContract": {
     "schema": "nebular-gallery-bridge-v1",
     "cssByteCeiling": 524288,

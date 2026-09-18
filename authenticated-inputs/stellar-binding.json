@@ -4,9 +4,9 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "919e5af13b3dd6732ad54b47cfa93fe0226c2aba",
+    "sourceTree": "823c8403e393e5688c038fb60461945717ac4864",
     "sourceRole": "lineage-only",
-    "sourceMaterializationSha256": "703d34accad736fa98560c5d4c52cc23ccd042f89f2705b3fff2d0ed8a80f743",
+    "sourceMaterializationSha256": "2c553e5cd7d9df273bf8cb85f36733c621825f336a55155d70a8812f233c3b43",
     "publicMergeCommit": null,
     "composedTreeDigest": null,
     "packageJsonSha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980",
@@ -136,5 +136,12 @@
     },
     "status": "release-candidate"
   },
-  "canonicalEpochMs": 1704067200000
+  "canonicalEpochMs": 1704067200000,
+  "solarSail": {
+    "name": "@knowledge-forge-ai/theme-forge-solar-sail",
+    "version": "0.1.0",
+    "filename": "knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz",
+    "sha256": "6129ba880ac506024de5d1408aa26447944133de99bded06843825ed3b252bc2",
+    "size": 56524
+  }
 }

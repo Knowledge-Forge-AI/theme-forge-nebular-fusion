@@ -1,7 +1,7 @@
 {
-  "fileCount": 12,
-  "totalBytes": 5946854,
-  "treeDigest": "256a527b7cc828047c7f4f61e125480b96b96b9f98c2fb0f1239ee86ab6bd5a6",
+  "fileCount": 14,
+  "totalBytes": 6006063,
+  "treeDigest": "eeddd5f440c0b5ba4f2834cb1558916083eb884f55459a7caa6773acad62fcda",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz",
@@ -34,10 +34,16 @@
       "sha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0"
     },
     {
+      "path": "manifest.json",
+      "size": 2410,
+      "mode": 420,
+      "sha256": "3e135c5a09098bdff0f64199ea0db319d5eb6c151dc9c20eb15da206d3a9a40b"
+    },
+    {
       "path": "publication-manifest.json",
       "size": 2982,
       "mode": 420,
-      "sha256": "b8d4cbfe1db2526954fa36c0715f3991adf3a3e737deac1b845d9705daea4b9a"
+      "sha256": "d0abb88dbb712d93d2d362fe123ed6ac96ff08382385398cf0a50447fd7ac50a"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -52,10 +58,16 @@
       "sha256": "5205e7813a2cdef0ce3d1103b71ab7a6c6931c371c67bcd188a2d7f6d7a1a825"
     },
     {
-      "path": "stellar-binding.json",
-      "size": 6119,
+      "path": "solar-sail-tarball/knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz",
+      "size": 56524,
       "mode": 420,
-      "sha256": "4b98cda0c9544f37090137037e151e3319142714c654b8328f996a7f10ca4919"
+      "sha256": "6129ba880ac506024de5d1408aa26447944133de99bded06843825ed3b252bc2"
+    },
+    {
+      "path": "stellar-binding.json",
+      "size": 6394,
+      "mode": 420,
+      "sha256": "27731d55cda05f802980736e7810bec61de21580ce23d86a5ff073b8c58ead80"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",
