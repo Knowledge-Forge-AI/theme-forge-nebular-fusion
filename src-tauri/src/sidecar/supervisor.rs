@@ -625,6 +625,7 @@ impl SidecarSupervisor {
             .coordinator
             .begin(id)
             .map_err(|_| StudioReasonCode::SidecarProtocolInvalid)?;
+        let deadline = Instant::now() + timeout;
         if Self::write_message(
             process,
             &RpcRequest {
@@ -639,7 +640,6 @@ impl SidecarSupervisor {
             process.coordinator.abandon(id);
             return Err(StudioReasonCode::SidecarCrashed);
         }
-        let deadline = Instant::now() + timeout;
         loop {
             let now = Instant::now();
             if now >= deadline {

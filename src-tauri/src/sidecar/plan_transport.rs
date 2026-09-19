@@ -41,6 +41,7 @@ pub(crate) fn request<P: Serialize, T: DeserializeOwned>(
         .coordinator
         .begin(id)
         .map_err(|_| error(StudioReasonCode::SidecarProtocolInvalid, false))?;
+    let deadline = Instant::now() + timeout;
     if write_message(
         process,
         &RpcRequest {
@@ -55,7 +56,6 @@ pub(crate) fn request<P: Serialize, T: DeserializeOwned>(
         process.coordinator.abandon(id);
         return Err(error(StudioReasonCode::SidecarCrashed, false));
     }
-    let deadline = Instant::now() + timeout;
     let mut cancellation_sent = false;
     loop {
         if Instant::now() >= deadline {
@@ -94,16 +94,41 @@ pub(crate) fn request<P: Serialize, T: DeserializeOwned>(
         let wait = CANCEL_POLL.min(deadline.saturating_duration_since(Instant::now()));
         match process.receiver.recv_timeout(wait) {
             Ok(ReaderEvent::Frame(frame)) => {
+                if Instant::now() >= deadline {
+                    process
+                        .coordinator
+                        .retire_timeout(id)
+                        .map_err(|_| error(StudioReasonCode::SidecarProtocolInvalid, true))?;
+                    return Err(error(StudioReasonCode::SidecarRequestTimeout, true));
+                }
+                if process.transport_overflowed() {
+                    process.coordinator.abandon(id);
+                    return Err(error(StudioReasonCode::SidecarProtocolInvalid, true));
+                }
                 if let Some(result) = handle_frame(process, id, &frame, events, cancel)? {
                     return Ok(result);
                 }
             }
             Ok(ReaderEvent::Protocol | ReaderEvent::Eof) => {
+                if Instant::now() >= deadline {
+                    process
+                        .coordinator
+                        .retire_timeout(id)
+                        .map_err(|_| error(StudioReasonCode::SidecarProtocolInvalid, true))?;
+                    return Err(error(StudioReasonCode::SidecarRequestTimeout, true));
+                }
                 process.coordinator.abandon(id);
                 return Err(error(StudioReasonCode::SidecarProtocolInvalid, true));
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
+                if Instant::now() >= deadline {
+                    process
+                        .coordinator
+                        .retire_timeout(id)
+                        .map_err(|_| error(StudioReasonCode::SidecarProtocolInvalid, true))?;
+                    return Err(error(StudioReasonCode::SidecarRequestTimeout, true));
+                }
                 process.coordinator.abandon(id);
                 return Err(error(StudioReasonCode::SidecarCrashed, true));
             }
