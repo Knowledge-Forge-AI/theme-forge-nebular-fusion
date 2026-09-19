@@ -1,15 +1,14 @@
 import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { cp, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
-import { prepareGallery } from "./gallery-prepare.mjs";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.2.0";
-export const SUPPORTED_LOOM_VERSIONS = ["0.2.0", "0.1.1", "0.1.0"];
+export const EXPECTED_LOOM_VERSION = "0.3.0";
+export const SUPPORTED_LOOM_VERSIONS = ["0.3.0", "0.2.0", "0.1.1", "0.1.0"];
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export const FIXED_97_INVENTORY = Object.freeze([
@@ -114,13 +113,21 @@ export const FIXED_97_INVENTORY = Object.freeze([
 
 const order = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
+export const FIXED_101_INVENTORY = Object.freeze([
+  ...FIXED_97_INVENTORY,
+  "dist/syntax/index.js",
+  "dist/syntax/palette.js",
+  "dist/syntax/tabs.js",
+  "dist/syntax/types.js",
+].sort(order));
+
 function canonical(value) {
   const sort = (v) => Array.isArray(v) ? v.map(sort) : v && typeof v === "object"
     ? Object.fromEntries(Object.keys(v).sort(order).map(k => [k, sort(v[k])])) : v;
   return JSON.stringify(sort(value));
 }
 
-function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
+export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   if (typeof relPath !== "string" || !/^(?:dist|bin)\/[A-Za-z0-9_./-]+$/u.test(relPath)) {
     throw new Error(`Invalid member path format: '${relPath}'`);
   }
@@ -138,27 +145,49 @@ function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
     throw new Error(`Invalid package root: '${root}'`);
   }
 
-  let current = rootResolved;
-  for (const part of parts) {
-    current = join(current, part);
-    if (!existsSync(current)) {
-      throw new Error(`Loom package missing required path component: '${current}'`);
+  // Walk and validate ancestor directories only; do not stat or existence-check the leaf file
+  let ancestorPath = rootResolved;
+  for (let i = 0; i < parts.length - 1; i++) {
+    ancestorPath = join(ancestorPath, parts[i]);
+    let st;
+    try {
+      st = lstatSync(ancestorPath);
+    } catch (err) {
+      if (err && typeof err === "object" && err.code === "ENOENT") {
+        throw new Error(`Loom package missing required path component: '${ancestorPath}'`);
+      }
+      throw err;
     }
-    const st = lstatSync(current);
-    if (st.isSymbolicLink()) {
+    if (st.isSymbolicLink() || !st.isDirectory()) {
       throw new Error(`Symlink forbidden in member path or ancestor: '${relPath}'`);
     }
   }
 
-  const leafStat = lstatSync(current);
-  if (!leafStat.isFile()) {
-    throw new Error(`Non-regular file in member path: '${relPath}'`);
+  // Directly open leaf file with O_NOFOLLOW; check-then-open TOCTOU pattern eliminated
+  const targetFilePath = join(ancestorPath, parts[parts.length - 1]);
+  let fd;
+  try {
+    fd = openSync(targetFilePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    if (err && typeof err === "object" && err.code === "ENOENT") {
+      throw new Error(`Loom package missing required member file: '${relPath}'`);
+    }
+    throw new Error(`Non-regular file or symlink in member path: '${relPath}'`);
   }
-  if (leafStat.size > maxBytes) {
-    throw new Error(`Member file exceeds maximum byte bound: '${relPath}' (${leafStat.size} > ${maxBytes})`);
+  let leafStat;
+  let bytes;
+  try {
+    leafStat = fstatSync(fd);
+    if (!leafStat.isFile()) {
+      throw new Error(`Non-regular file in member path: '${relPath}'`);
+    }
+    if (leafStat.size > maxBytes) {
+      throw new Error(`Member file exceeds maximum byte bound: '${relPath}' (${leafStat.size} > ${maxBytes})`);
+    }
+    bytes = readFileSync(fd);
+  } finally {
+    closeSync(fd);
   }
-
-  const bytes = readFileSync(current);
   if (bytes.length === 0) {
     throw new Error(`Empty member file forbidden: '${relPath}'`);
   }
@@ -192,12 +221,15 @@ export function sha256(bytes) {
 }
 
 export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEvidence = null) {
-  const evidencePath = resolve(packageRoot, "dist/catalog-build-evidence.json");
-  if (!existsSync(evidencePath)) {
-    throw new Error("Loom package is missing required catalog build evidence: dist/catalog-build-evidence.json");
+  let evidenceBytes;
+  try {
+    evidenceBytes = readMemberSafe(packageRoot, "dist/catalog-build-evidence.json", 1024 * 1024);
+  } catch (err) {
+    if (err && typeof err === "object" && String(err.message).includes("missing required member file")) {
+      throw new Error("Loom package is missing required catalog build evidence: dist/catalog-build-evidence.json");
+    }
+    throw err;
   }
-
-  const evidenceBytes = readMemberSafe(packageRoot, "dist/catalog-build-evidence.json", 1024 * 1024);
   let evidence;
   try {
     evidence = JSON.parse(evidenceBytes.toString("utf8"));
@@ -218,8 +250,19 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
     throw new Error(`Loom package catalog build evidence SHA-256 mismatch. Expected: ${expectedCatalogEvidence.sha256}, Actual: ${actualEvidenceSha256}`);
   }
 
-  // Exact fixed 97 inventory verification
-  const expectedSorted = [...FIXED_97_INVENTORY].sort(order);
+  // Exact fixed inventory verification (97 for 0.2.0/0.1.1, 101 for 0.3.0)
+  let pkgVersion;
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
+    pkgVersion = pkg.version;
+  } catch (err) {
+    throw new Error(`Failed to read package.json in ${packageRoot}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!pkgVersion) {
+    throw new Error(`package.json in ${packageRoot} lacks a valid version`);
+  }
+  const expectedInventory = pkgVersion === "0.3.0" ? FIXED_101_INVENTORY : FIXED_97_INVENTORY;
+  const expectedSorted = [...expectedInventory].sort(order);
   if (evidence.members.length !== expectedSorted.length) {
     throw new Error(`Loom package catalog build evidence member count mismatch: expected ${expectedSorted.length}, got ${evidence.members.length}`);
   }
@@ -262,10 +305,12 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
 
   // Recompute official executable identity digest matching Loom source
   const pkgPath = resolve(packageRoot, "package.json");
-  if (!existsSync(pkgPath)) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  } catch (err) {
     throw new Error("Loom package missing package.json");
   }
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   if (!pkg.exports || !pkg.bin || pkg.type !== "module") {
     throw new Error("Malformed entry projection in Loom package.json");
   }
@@ -309,14 +354,24 @@ function runLocalCommand(command, args, cwd, env) {
 }
 
 async function requireRegular(filePath, maximum = MAX_ARCHIVE_BYTES) {
-  const info = await lstat(filePath);
-  if (info.isSymbolicLink() || !info.isFile()) {
+  let handle;
+  try {
+    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
     throw new Error(`Input is not a regular file: ${basename(filePath)}`);
   }
-  if (info.size > maximum) {
-    throw new Error(`Input exceeds byte limit: ${basename(filePath)}`);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) {
+      throw new Error(`Input is not a regular file: ${basename(filePath)}`);
+    }
+    if (info.size > maximum) {
+      throw new Error(`Input exceeds byte limit: ${basename(filePath)}`);
+    }
+    return info;
+  } finally {
+    await handle.close();
   }
-  return info;
 }
 
 async function extractTarballSafely(archivePath, destination) {
@@ -394,11 +449,11 @@ export async function prepareLoom(customOptions = {}) {
   // Check authenticated-inputs/loom-binding.json if present
   let authBinding = null;
   const authBindingPath = resolve(repoRoot, "authenticated-inputs/loom-binding.json");
-  if (existsSync(authBindingPath)) {
-    try {
-      const bindingRaw = await readFile(authBindingPath, "utf8");
-      authBinding = JSON.parse(bindingRaw);
-    } catch {
+  try {
+    const bindingRaw = await readFile(authBindingPath, "utf8");
+    authBinding = JSON.parse(bindingRaw);
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") {
       throw new Error("authenticated-inputs/loom-binding.json is invalid JSON");
     }
   }
@@ -406,6 +461,7 @@ export async function prepareLoom(customOptions = {}) {
   // Determine exact tarball and expected sha256
   let tarballPath = options.tarball || process.env.TFSL_LOOM_TARBALL || process.env.TFSB_STUDIO_LOOM_TARBALL;
   let expectedSha256 = options.sha256 || process.env.TFSL_LOOM_SHA256 || process.env.TFSB_STUDIO_LOOM_SHA256;
+  let actualSha256 = null;
 
   if (!tarballPath && (authBinding?.filename || authBinding?.tarballName)) {
     const bindingName = authBinding.name || authBinding.packageName;
@@ -442,7 +498,7 @@ export async function prepareLoom(customOptions = {}) {
     await requireRegular(tarballPath, MAX_ARCHIVE_BYTES);
 
     const tarballBytes = await readFile(tarballPath);
-    const actualSha256 = sha256(tarballBytes);
+    actualSha256 = sha256(tarballBytes);
 
     if (expectedSha256) {
       if (actualSha256.toLowerCase() !== expectedSha256.toLowerCase()) {
@@ -643,12 +699,18 @@ export async function prepareLoom(customOptions = {}) {
 
   // Prepare structural assets AFTER replacing the neutral preview tree. The
   // application never performs this build or receives the selected archive path.
-  if (!tarballPath) throw new Error("Structural gallery preparation requires the authenticated Loom candidate archive (TFSL_LOOM_TARBALL).");
+  if (!tarballPath) {
+    console.log("Skipping gallery preparation (no candidate tarball supplied; dev mode payload complete).");
+    console.log("Loom preparation complete.");
+    return;
+  }
   const galleryScratch = await mkdtemp(join(tmpdir(), "nebular-gallery-build-"));
   try {
+    const { prepareGallery } = await import("./gallery-prepare.mjs");
     await prepareGallery({ tarball: resolve(tarballPath), scratchRoot: galleryScratch,
       outputRoot: resolve(publicPreview, "gallery"),
-      manifestPath: resolve(publicPreview, "gallery/manifest.json"), skipBrowser: true, scenario: null });
+      manifestPath: resolve(publicPreview, "gallery/manifest.json"), skipBrowser: true, scenario: null,
+      expectedSha256: actualSha256 });
   } finally {
     await rm(galleryScratch, { recursive: true, force: true });
   }

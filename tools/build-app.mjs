@@ -28,6 +28,7 @@ for (const [source, replacement] of [
   [process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(root, "src-tauri/target"), "/nebular-target"],
 ]) flags.push(`--remap-path-prefix=${source}=${replacement}`);
 const env = { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\u001f") };
+run(process.execPath, [join(root, "tools/loom-prepare.mjs")], env);
 run(process.execPath, [join(root, "tools/release-notices.mjs")], env);
 run(process.execPath, [join(root, "node_modules/@tauri-apps/cli/tauri.js"), "build", "--bundles", "app", "--target", "aarch64-apple-darwin"], env);
 

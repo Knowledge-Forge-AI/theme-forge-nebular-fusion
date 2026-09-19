@@ -14,8 +14,11 @@ import type { StudioHostBridge, StudioHostStateEvent, StudioHostStatus, StudioPr
 import { VectorGraphicsLab } from "../features/vector-graphics";
 import type { VectorGraphicsBridge } from "../features/vector-graphics/types";
 import "../features/vector-graphics/styles.css";
+import { ApplicationThemeLab } from "../features/application-theme";
+import type { AppThemeBridge } from "../features/application-theme/types";
+import "../styles/self-theme.css";
 
-export type Destination = "brand-system" | "vector-graphics" | "starlight-theme";
+export type Destination = "brand-system" | "vector-graphics" | "starlight-theme" | "application-theme";
 
 
 export function App({
@@ -23,11 +26,13 @@ export function App({
   brandReadClient,
   themeLabBridge,
   vectorGraphicsBridge,
+  appThemeBridge,
 }: {
   readonly hostBridge: StudioHostBridge;
   readonly brandReadClient?: StudioBrandReadClient;
   readonly themeLabBridge?: ThemeLabBridge;
   readonly vectorGraphicsBridge?: VectorGraphicsBridge;
+  readonly appThemeBridge?: AppThemeBridge;
 }) {
   const [activeDestination, setActiveDestination] = useState<Destination>("brand-system");
   const [visitedDestinations, setVisitedDestinations] = useState<ReadonlySet<Destination>>(
@@ -130,6 +135,14 @@ export function App({
           >
             Starlight Theme
           </button>
+          <button
+            type="button"
+            className={activeDestination === "application-theme" ? "destination-tab active" : "destination-tab"}
+            onClick={() => selectDestination("application-theme")}
+            aria-pressed={activeDestination === "application-theme"}
+          >
+            Application Theme
+          </button>
         </nav>
       </header>
       <main id="main-content">
@@ -165,6 +178,16 @@ export function App({
             inert={activeDestination !== "starlight-theme" ? true : undefined}
           >
             <ThemeLab bridge={effectiveThemeLabBridge} managed />
+          </div>
+        ) : null}
+        {visitedDestinations.has("application-theme") ? (
+          <div
+            className="work-area work-area-application-theme"
+            data-destination="application-theme"
+            hidden={activeDestination !== "application-theme"}
+            inert={activeDestination !== "application-theme" ? true : undefined}
+          >
+            <ApplicationThemeLab bridge={appThemeBridge} />
           </div>
         ) : null}
       </main>

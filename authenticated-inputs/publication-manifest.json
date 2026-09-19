@@ -5,7 +5,7 @@
     "repository": "Knowledge-Forge-AI/theme-forge-stellar-burst",
     "commit": null,
     "contentTree": null,
-    "sourceMaterializationSha256": "1e3a655472f317b35fef976f523d98a77b26258fcdd4284de2bd06aabdfd66a5",
+    "sourceMaterializationSha256": "c9d196b58768b2571277e62ab780d58e5ab7c98100d78274597c5dcc0bf75a13",
     "packageSha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e"
   },
   "loom": {
@@ -13,9 +13,9 @@
     "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
     "commit": null,
     "contentTree": null,
-    "sourceMaterializationSha256": "1e3a655472f317b35fef976f523d98a77b26258fcdd4284de2bd06aabdfd66a5",
-    "packageSha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34",
-    "catalogBuildEvidenceSha256": "9f4a3ca081d2fdf6c66c9eac2e8996583fe338e223eab5504b986456d925ea48",
+    "sourceMaterializationSha256": "c9d196b58768b2571277e62ab780d58e5ab7c98100d78274597c5dcc0bf75a13",
+    "packageSha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0",
+    "catalogBuildEvidenceSha256": "a5f07be4a3c6b01e81ead72dec1d09e1652f08c6319423c23f285f0e9a7868f3",
     "history": {
       "schema": "tfsb.released-loom-input-v1",
       "name": "@knowledge-forge-ai/theme-forge-stellar-loom",

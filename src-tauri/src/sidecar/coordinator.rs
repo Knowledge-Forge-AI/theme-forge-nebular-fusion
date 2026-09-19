@@ -109,6 +109,25 @@ mod tests {
     }
 
     #[test]
+    fn retired_request_cannot_transition_or_affect_a_new_active_request() {
+        let mut coordinator = RequestCoordinator::default();
+        assert_eq!(coordinator.begin(7), Ok(()));
+        assert_eq!(coordinator.retire_timeout(7), Ok(()));
+        assert_eq!(coordinator.retire_timeout(7), Err(()));
+        assert_eq!(coordinator.complete(7), Err(()));
+        assert_eq!(coordinator.classify(7), IncomingId::Retired);
+
+        assert_eq!(coordinator.begin(8), Ok(()));
+        assert_eq!(coordinator.retire_timeout(7), Err(()));
+        assert_eq!(coordinator.complete(7), Err(()));
+        assert_eq!(coordinator.classify(7), IncomingId::Retired);
+        assert_eq!(coordinator.classify(8), IncomingId::Current);
+        assert_eq!(coordinator.complete(8), Ok(()));
+        assert_eq!(coordinator.classify(8), IncomingId::Completed);
+        assert!(coordinator.is_bounded());
+    }
+
+    #[test]
     fn completed_duplicate_and_current_request_cannot_cross_satisfy() {
         let mut coordinator = RequestCoordinator::default();
         assert_eq!(coordinator.begin(7), Ok(()));

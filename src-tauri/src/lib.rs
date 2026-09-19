@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod app_theme;
 pub mod commands;
 mod design_evidence;
 pub mod errors;
@@ -35,6 +36,30 @@ fn adjust_preview_csp(path: &str, headers: &mut tauri::http::HeaderMap) {
                 "default-src 'none'; {script} tauri://localhost 'wasm-unsafe-eval'; style-src 'self' tauri://localhost 'unsafe-inline'; font-src 'self' tauri://localhost; img-src 'self' tauri://localhost data:; connect-src tauri://localhost; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'"
             );
             if let Ok(value) = tauri::http::HeaderValue::from_str(&gallery) {
+                headers.insert("content-security-policy", value);
+            }
+        }
+        return;
+    }
+    if path.starts_with("/preview/app/") {
+        // Only bundled application preview assets are readable from the scripts-only opaque frame.
+        // This origin has no IPC permission, no unsafe-inline styles or eval, and zero network authority.
+        headers.insert(
+            "access-control-allow-origin",
+            tauri::http::HeaderValue::from_static("*"),
+        );
+        if let Some(value) = headers.get("content-security-policy")
+            && let Ok(policy) = value.to_str()
+        {
+            let script = policy
+                .split(';')
+                .map(str::trim)
+                .find(|part| part.starts_with("script-src "))
+                .unwrap_or("script-src 'self'");
+            let app_csp = format!(
+                "default-src 'none'; {script} tauri://localhost; style-src 'self' tauri://localhost; font-src 'self' tauri://localhost; img-src 'self' tauri://localhost data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'"
+            );
+            if let Ok(value) = tauri::http::HeaderValue::from_str(&app_csp) {
                 headers.insert("content-security-policy", value);
             }
         }
@@ -94,6 +119,10 @@ pub fn run() {
             app.manage(state::scene::SceneState::new(
                 scene::runner::SceneRunner::discover(&resource, &executable),
             ));
+            let app_theme_runner =
+                app_theme::runner::AppThemeRunner::discover(&resource, &executable);
+            let app_theme_state = state::app_theme::AppThemeState::new(app_theme_runner);
+            app.manage(app_theme_state);
 
             let window_config = app
                 .config()
@@ -173,6 +202,13 @@ pub fn run() {
             commands::scene_packet::studio_scene_review_create,
             commands::scene_packet::studio_scene_candidate_verify,
             commands::scene_packet::studio_scene_candidate_adopt,
+            commands::app_theme::studio_app_theme_status,
+            commands::app_theme::studio_app_theme_compile,
+            commands::app_theme::studio_app_theme_paired_compile,
+            commands::app_theme::studio_app_theme_open_profile,
+            commands::app_theme::studio_app_theme_save_profile,
+            commands::app_theme::studio_app_theme_export_package,
+            commands::app_theme::studio_app_theme_reset,
         ])
         .build(tauri::generate_context!());
 
@@ -191,6 +227,7 @@ pub fn run() {
             let theme_lab_state = handle.state::<state::theme_lab::ThemeLabState>();
             theme_lab_state.shutdown();
             handle.state::<state::scene::SceneState>().shutdown();
+            handle.state::<state::app_theme::AppThemeState>().shutdown();
         }
     });
 }
@@ -312,6 +349,30 @@ mod tests {
     }
 
     #[test]
+    fn app_preview_csp_allows_local_scripts_and_forbids_ipc()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut headers = tauri::http::HeaderMap::new();
+        headers.insert(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost"
+                .parse()?,
+        );
+        super::adjust_preview_csp("/preview/app/index.html", &mut headers);
+        let policy = headers["content-security-policy"].to_str()?;
+        assert!(!policy.contains("ipc:"));
+        assert!(!policy.contains("ipc.localhost"));
+        assert!(policy.contains("default-src 'none';"));
+        assert!(policy.contains("connect-src 'none';"));
+        assert!(policy.contains("script-src 'self' tauri://localhost"));
+        assert!(policy.contains("style-src 'self' tauri://localhost;"));
+        assert!(!policy.contains("'unsafe-inline'"));
+        assert!(!policy.contains("'unsafe-eval'"));
+        assert!(policy.contains("frame-ancestors 'self';"));
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        Ok(())
+    }
+
+    #[test]
     fn command_inventory_is_exact() {
         assert_eq!(
             command_inventory::STUDIO_COMMAND_NAMES,
@@ -358,6 +419,13 @@ mod tests {
                 "studio_scene_review_create",
                 "studio_scene_candidate_verify",
                 "studio_scene_candidate_adopt",
+                "studio_app_theme_status",
+                "studio_app_theme_compile",
+                "studio_app_theme_paired_compile",
+                "studio_app_theme_open_profile",
+                "studio_app_theme_save_profile",
+                "studio_app_theme_export_package",
+                "studio_app_theme_reset",
             ]
         );
     }

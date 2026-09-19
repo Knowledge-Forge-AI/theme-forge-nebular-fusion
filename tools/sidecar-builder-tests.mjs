@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
@@ -18,7 +18,20 @@ import {
   verifyDistribution,
 } from "./sidecar-common.mjs";
 
-const root = resolve(import.meta.dirname, `../src-tauri/target/sidecar-builder-tests-${process.pid}`);
+const baseTargetDir = process.env.CARGO_TARGET_DIR
+  ? resolve(process.env.CARGO_TARGET_DIR)
+  : (process.env.TMPDIR
+    ? realpathSync(resolve(process.env.TMPDIR))
+    : resolve(import.meta.dirname, "../src-tauri/target"));
+const root = resolve(baseTargetDir, `sidecar-builder-tests-${process.pid}`);
+
+process.on("exit", () => {
+  try {
+    rmSync(root, { recursive: true, force: true });
+  } catch {
+    // Ignore cleanup error
+  }
+});
 const requiredFiles = [
   ["dist/service-protocol/server-cli.js", "service"],
   ["native/directory-snapshot/prebuilds/darwin-arm64/native-addon-posix-openat-v1.node", "native"],
@@ -138,7 +151,8 @@ test("shared verifier corpus exercises the actual JavaScript verifier", async ()
       case "duplicate-fields": {
         const path = resolve(candidate.payload, "manifest.json");
         const raw = await readFile(path, "utf8");
-        await writeFile(path, raw.replace("{", '{"schemaVersion":1,'));
+        const firstBrace = raw.indexOf("{");
+        await writeFile(path, raw.slice(0, firstBrace) + '{"schemaVersion":1,' + raw.slice(firstBrace + 1));
         break;
       }
       case "noncanonical-manifest": await writeFile(resolve(candidate.payload, "manifest.json"), `${JSON.stringify(candidate.manifest, null, 2)}\n`); break;
@@ -206,7 +220,8 @@ test("unknown, missing, and duplicate manifest fields fail closed", async (conte
     if (kind === "duplicate") {
       const path = resolve(candidate.payload, "manifest.json");
       const raw = await readFile(path, "utf8");
-      await writeFile(path, raw.replace("{", '{"schemaVersion":1,'));
+      const firstBrace = raw.indexOf("{");
+      await writeFile(path, raw.slice(0, firstBrace) + '{"schemaVersion":1,' + raw.slice(firstBrace + 1));
     }
     await assert.rejects(verify(candidate));
   });
