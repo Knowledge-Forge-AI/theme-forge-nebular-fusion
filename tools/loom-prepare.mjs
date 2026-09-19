@@ -5,7 +5,6 @@ import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
-import { prepareGallery } from "./gallery-prepare.mjs";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
 export const EXPECTED_LOOM_VERSION = "0.3.0";
@@ -128,7 +127,7 @@ function canonical(value) {
   return JSON.stringify(sort(value));
 }
 
-function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
+export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   if (typeof relPath !== "string" || !/^(?:dist|bin)\/[A-Za-z0-9_./-]+$/u.test(relPath)) {
     throw new Error(`Invalid member path format: '${relPath}'`);
   }
@@ -146,22 +145,33 @@ function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
     throw new Error(`Invalid package root: '${root}'`);
   }
 
-  let current = rootResolved;
-  for (const part of parts) {
-    current = join(current, part);
-    if (!existsSync(current)) {
-      throw new Error(`Loom package missing required path component: '${current}'`);
+  // Walk and validate ancestor directories only; do not stat or existence-check the leaf file
+  let ancestorPath = rootResolved;
+  for (let i = 0; i < parts.length - 1; i++) {
+    ancestorPath = join(ancestorPath, parts[i]);
+    let st;
+    try {
+      st = lstatSync(ancestorPath);
+    } catch (err) {
+      if (err && typeof err === "object" && err.code === "ENOENT") {
+        throw new Error(`Loom package missing required path component: '${ancestorPath}'`);
+      }
+      throw err;
     }
-    const st = lstatSync(current);
-    if (st.isSymbolicLink()) {
+    if (st.isSymbolicLink() || !st.isDirectory()) {
       throw new Error(`Symlink forbidden in member path or ancestor: '${relPath}'`);
     }
   }
 
+  // Directly open leaf file with O_NOFOLLOW; check-then-open TOCTOU pattern eliminated
+  const targetFilePath = join(ancestorPath, parts[parts.length - 1]);
   let fd;
   try {
-    fd = openSync(current, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(targetFilePath, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (err) {
+    if (err && typeof err === "object" && err.code === "ENOENT") {
+      throw new Error(`Loom package missing required member file: '${relPath}'`);
+    }
     throw new Error(`Non-regular file or symlink in member path: '${relPath}'`);
   }
   let leafStat;
@@ -211,12 +221,15 @@ export function sha256(bytes) {
 }
 
 export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEvidence = null) {
-  const evidencePath = resolve(packageRoot, "dist/catalog-build-evidence.json");
-  if (!existsSync(evidencePath)) {
-    throw new Error("Loom package is missing required catalog build evidence: dist/catalog-build-evidence.json");
+  let evidenceBytes;
+  try {
+    evidenceBytes = readMemberSafe(packageRoot, "dist/catalog-build-evidence.json", 1024 * 1024);
+  } catch (err) {
+    if (err && typeof err === "object" && String(err.message).includes("missing required member file")) {
+      throw new Error("Loom package is missing required catalog build evidence: dist/catalog-build-evidence.json");
+    }
+    throw err;
   }
-
-  const evidenceBytes = readMemberSafe(packageRoot, "dist/catalog-build-evidence.json", 1024 * 1024);
   let evidence;
   try {
     evidence = JSON.parse(evidenceBytes.toString("utf8"));
@@ -292,10 +305,12 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
 
   // Recompute official executable identity digest matching Loom source
   const pkgPath = resolve(packageRoot, "package.json");
-  if (!existsSync(pkgPath)) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  } catch (err) {
     throw new Error("Loom package missing package.json");
   }
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
   if (!pkg.exports || !pkg.bin || pkg.type !== "module") {
     throw new Error("Malformed entry projection in Loom package.json");
   }
@@ -691,6 +706,7 @@ export async function prepareLoom(customOptions = {}) {
   }
   const galleryScratch = await mkdtemp(join(tmpdir(), "nebular-gallery-build-"));
   try {
+    const { prepareGallery } = await import("./gallery-prepare.mjs");
     await prepareGallery({ tarball: resolve(tarballPath), scratchRoot: galleryScratch,
       outputRoot: resolve(publicPreview, "gallery"),
       manifestPath: resolve(publicPreview, "gallery/manifest.json"), skipBrowser: true, scenario: null,

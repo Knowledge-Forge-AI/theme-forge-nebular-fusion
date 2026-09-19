@@ -715,17 +715,29 @@ mod tests {
         })
     }
 
+    fn synthetic_test_nonce(counter: u64) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(b"tfsb-test-session-nonce-seam:");
+        hasher.update(counter.to_le_bytes());
+        let digest = hasher.finalize();
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..32])
+    }
+
     #[test]
     fn command_requests_are_closed_and_translate_only_to_typed_protocol_params() {
         let raw = json!({ "kind": "create-consumer-install", "projectHandle": "project_safe", "sourceHandles": ["source_safe"], "profileIds": ["package/profile"], "parameters": [{ "profileId": "package/profile", "values": [{ "parameter": "theme", "value": "dark" }] }] });
         let request: Result<StudioBrandPlanStartRequest, _> = serde_json::from_value(raw);
         assert!(request.as_ref().is_ok_and(|value| value.validate().is_ok()));
+        let test_nonce = synthetic_test_nonce(1);
         let prepared = request
             .ok()
-            .and_then(|value| value.prepare_create("test-session-mock-nonce").ok());
+            .and_then(|value| value.prepare_create(&test_nonce).ok());
         assert!(prepared.as_ref().is_some_and(|(method, params)| {
             *method == BrandPlanMethod::ConsumerInstall
-                && params.get("sessionNonce").and_then(JsonNode::as_str) == Some("test-session-mock-nonce")
+                && params.get("sessionNonce").and_then(JsonNode::as_str)
+                    == Some(test_nonce.as_str())
                 && params
                     .get("profiles")
                     .and_then(JsonNode::as_array)

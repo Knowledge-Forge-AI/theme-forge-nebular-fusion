@@ -21,5 +21,10 @@ export default defineConfig({
     globals: true,
     restoreMocks: true,
     testTimeout: 30000,
+    server: {
+      deps: {
+        external: [/src-tauri\/loom-payload/],
+      },
+    },
   },
 });

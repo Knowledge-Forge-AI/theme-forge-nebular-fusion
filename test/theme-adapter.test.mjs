@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createThemeCandidateV2, serializeThemeExchangeV2,
@@ -8,7 +9,8 @@ import {
   createThemeCatalogCandidate, serializeThemeCatalogCandidate,
 } from "../src-tauri/loom-payload/dist/index-catalog.js";
 
-const adapter = fileURLToPath(new URL("../src-tauri/loom-adapter/theme-adapter.mjs", import.meta.url));
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const adapter = join(__dirname, "../src-tauri/loom-adapter/theme-adapter.mjs");
 function call(request) {
   const result = spawnSync(process.execPath, [adapter], { input: JSON.stringify(request), encoding: "utf8", timeout: 10_000, maxBuffer: 4 * 1024 * 1024 });
   expect(result.error).toBeUndefined();
@@ -26,7 +28,7 @@ const families = [
 ];
 describe("fixed installed Loom v2 adapter", () => {
   for (const [family, name, create, serialize] of families) {
-    const theme = JSON.parse(readFileSync(new URL(`../src-tauri/loom-payload/examples/${name}`, import.meta.url), "utf8"));
+    const theme = JSON.parse(readFileSync(join(__dirname, `../src-tauri/loom-payload/examples/${name}`), "utf8"));
     const packet = create(theme, { metadata: { name: "@fixture/adapter-theme", version: "1.0.0" } });
     const candidate = serialize(packet);
     it(`strictly parses and locally verifies ${family} with a bound review`, () => {
@@ -47,5 +49,10 @@ describe("fixed installed Loom v2 adapter", () => {
   }
   it("refuses historical packets with injected successor fields", () => {
     expect(call({ action: "exchange-packet-parse-v2", packetJson: JSON.stringify({ schema: "tfsl.theme-candidate", schemaVersion: 1, semanticCompiler: "tfsl.theme-compiler-v2-core-1", catalog: "injected" }) }).valid).toBe(false);
+  });
+  it("verifies COMPILER_VERSION provenance loads without file URL scheme error under test environment", async () => {
+    const { COMPILER_VERSION } = await import("../src-tauri/loom-payload/dist/v2/types.js");
+    expect(typeof COMPILER_VERSION).toBe("string");
+    expect(COMPILER_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });

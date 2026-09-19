@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-app-theme-reset"
+description = "Enables the studio_app_theme_reset command without any pre-configured scope."
+commands.allow = ["studio_app_theme_reset"]
+
+[[permission]]
+identifier = "deny-studio-app-theme-reset"
+description = "Denies the studio_app_theme_reset command without any pre-configured scope."
+commands.deny = ["studio_app_theme_reset"]
