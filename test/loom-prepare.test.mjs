@@ -1,14 +1,18 @@
+// @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile, readFile, cp, symlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
   EXPECTED_LOOM_NAME,
   EXPECTED_LOOM_VERSION,
   SUPPORTED_LOOM_VERSIONS,
   FIXED_97_INVENTORY,
+  FIXED_101_INVENTORY,
   authenticateCatalogEvidence,
+  readMemberSafe,
   sha256,
 } from "../tools/loom-prepare.mjs";
 
@@ -41,7 +45,7 @@ describe("loom-prepare catalog evidence authentication", () => {
     await mkdir(join(pkgRoot, "bin"), { recursive: true });
 
     const members = [];
-    const inventory = options.inventory ?? FIXED_97_INVENTORY;
+    const inventory = options.inventory ?? (options.version === "0.2.0" ? FIXED_97_INVENTORY : FIXED_101_INVENTORY);
     for (const relPath of inventory) {
       const content = `// ${relPath}\nexport const id = ${JSON.stringify(relPath)};\n`;
       const m = createMember(relPath, content);
@@ -84,16 +88,29 @@ describe("loom-prepare catalog evidence authentication", () => {
     return { pkgRoot, members, manifest };
   }
 
-  it("exports expected current candidate identities and fixed 97 inventory", () => {
+  it("exports expected current candidate identities and inventories", () => {
     expect(EXPECTED_LOOM_NAME).toBe("@knowledge-forge-ai/theme-forge-stellar-loom");
-    expect(EXPECTED_LOOM_VERSION).toBe("0.1.1");
+    expect(EXPECTED_LOOM_VERSION).toBe("0.3.0");
+    expect(SUPPORTED_LOOM_VERSIONS).toContain("0.3.0");
+    expect(SUPPORTED_LOOM_VERSIONS).toContain("0.2.0");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.1.1");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.1.0");
     expect(FIXED_97_INVENTORY).toHaveLength(97);
+    expect(FIXED_101_INVENTORY).toHaveLength(101);
   });
 
-  it("successfully authenticates valid catalog build evidence with exact 97 inventory and official digest", async () => {
+  it("successfully authenticates valid catalog build evidence with exact 101 inventory and official digest", async () => {
     const { pkgRoot } = await setupMockLoomPackage();
+    const result = await authenticateCatalogEvidence(pkgRoot);
+    expect(result.schema).toBe("tfsl.catalog-build-evidence-v1");
+    expect(result.memberCount).toBe(101);
+    expect(typeof result.sha256).toBe("string");
+    expect(result.sha256).toHaveLength(64);
+    expect(result.executableIdentityDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("successfully authenticates valid catalog build evidence with exact 97 inventory for 0.2.0", async () => {
+    const { pkgRoot } = await setupMockLoomPackage({ version: "0.2.0" });
     const result = await authenticateCatalogEvidence(pkgRoot);
     expect(result.schema).toBe("tfsl.catalog-build-evidence-v1");
     expect(result.memberCount).toBe(97);
@@ -250,5 +267,36 @@ describe("loom-prepare catalog evidence authentication", () => {
     await expect(authenticateCatalogEvidence(pkgRoot)).rejects.toThrow(
       /member count|inventory/i
     );
+  });
+
+  it("safely reads authentic member bytes through readMemberSafe", async () => {
+    const { pkgRoot } = await setupMockLoomPackage();
+    const content = readMemberSafe(pkgRoot, "dist/index-catalog.js");
+    expect(content).toBeInstanceOf(Buffer);
+    expect(content.toString("utf8")).toContain("dist/index-catalog.js");
+  });
+
+  it("structurally eliminates TOCTOU file system race in readMemberSafe", async () => {
+    const toolSource = await readFile(fileURLToPath(new URL("../tools/loom-prepare.mjs", import.meta.url)), "utf8");
+    const funcMatch = toolSource.match(/export function readMemberSafe[\s\S]*?\n\}/);
+    expect(funcMatch).not.toBeNull();
+    const funcBody = funcMatch[0];
+
+    // Must use handle-based open with O_NOFOLLOW
+    expect(funcBody).toContain("constants.O_RDONLY | constants.O_NOFOLLOW");
+    expect(funcBody).toContain("openSync(targetFilePath, constants.O_RDONLY | constants.O_NOFOLLOW)");
+
+    // Must inspect via file descriptor, not re-stat path
+    expect(funcBody).toContain("fstatSync(fd)");
+    expect(funcBody).toContain("readFileSync(fd)");
+
+    // Must NOT existence-check or lstat the target leaf file before openSync
+    expect(funcBody).not.toMatch(/existsSync\s*\(\s*targetFilePath\s*\)/);
+    expect(funcBody).not.toMatch(/existsSync\s*\(\s*ancestorPath\s*\)/);
+    expect(funcBody).not.toMatch(/lstatSync\s*\(\s*targetFilePath\s*\)/);
+    expect(funcBody).not.toMatch(/statSync\s*\(\s*targetFilePath\s*\)/);
+
+    // Loop over parts must only inspect ancestors (parts.length - 1)
+    expect(funcBody).toContain("parts.length - 1");
   });
 });

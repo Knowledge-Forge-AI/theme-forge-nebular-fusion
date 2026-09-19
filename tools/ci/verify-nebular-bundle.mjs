@@ -7,6 +7,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
+import { OPTIONAL_SCENE_RESOURCE, SOLAR_SAIL_RESOURCE } from "./verify-tauri-resource-closure.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
 
@@ -36,7 +37,7 @@ async function launchAndTerminate(executable) {
   return result;
 }
 
-/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, sourceScenePayloadPath?: string, outputPath: string, launch?: boolean}} options */
+/** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, sourceSolarSailPayloadPath?: string, sourceScenePayloadPath?: string, outputPath: string, launch?: boolean}} options */
 export async function verifyNebularBundle(options) {
   const appPath = resolve(options.appPath), contents = join(appPath, "Contents"), macos = join(contents, "MacOS"), resources = join(contents, "Resources");
   const identifier = execFileSync("plutil", ["-extract", "CFBundleIdentifier", "raw", join(contents, "Info.plist")], { encoding: "utf8" }).trim();
@@ -67,7 +68,7 @@ export async function verifyNebularBundle(options) {
     }
   }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
-  const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.some((/** @type {unknown} */ r) => typeof r === "string" && (r === "scene-payload/**/*" || r.includes("scene-payload")));
+  const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(OPTIONAL_SCENE_RESOURCE);
   const scenePayloadPath = join(resources, "scene-payload");
   const candidateSceneSource = options.sourceScenePayloadPath ? resolve(options.sourceScenePayloadPath) : join(STUDIO_ROOT, "src-tauri/scene-payload");
   let sceneInventory = null;
@@ -92,6 +93,36 @@ export async function verifyNebularBundle(options) {
     if (existsSync(prepareScript)) {
       const { verifyScenePayload } = await import(pathToFileURL(prepareScript).href);
       sceneReceipt = await verifyScenePayload(scenePayloadPath, resolve(options.sourceNodePath));
+    }
+  }
+  const configuredSolarSailResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(SOLAR_SAIL_RESOURCE);
+  const solarSailPayloadPath = join(resources, "solar-sail-payload");
+  const candidateSolarSailSource = options.sourceSolarSailPayloadPath ? resolve(options.sourceSolarSailPayloadPath) : join(STUDIO_ROOT, "src-tauri/solar-sail-payload");
+  let solarSailInventory = null;
+  let solarSailBinding = null;
+  if (configuredSolarSailResource) {
+    if (!existsSync(solarSailPayloadPath) || !existsSync(candidateSolarSailSource)) {
+      throw new Error("Exact prepared and bundled Solar Sail payloads are required when solar-sail resource is configured.");
+    }
+    const [sourceSolarSail, packedSolarSail] = await Promise.all([
+      inventory(candidateSolarSailSource, candidateSolarSailSource),
+      inventory(solarSailPayloadPath, solarSailPayloadPath),
+    ]);
+    if (JSON.stringify(sourceSolarSail) !== JSON.stringify(packedSolarSail)) {
+      throw new Error("Packed Solar Sail payload differs from the prepared Solar Sail payload.");
+    }
+    solarSailInventory = packedSolarSail;
+    const bindingPath = join(solarSailPayloadPath, "solar-sail-binding.json");
+    if (!existsSync(bindingPath)) {
+      throw new Error("Missing solar-sail-binding.json in packed Solar Sail payload.");
+    }
+    solarSailBinding = JSON.parse(await readFile(bindingPath, "utf8"));
+    if (solarSailBinding.name !== "@knowledge-forge-ai/theme-forge-solar-sail" || solarSailBinding.version !== "0.1.0") {
+      throw new Error(`Invalid Solar Sail binding: expected @knowledge-forge-ai/theme-forge-solar-sail@0.1.0, got ${solarSailBinding.name}@${solarSailBinding.version}`);
+    }
+    const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "f5cecdcea0a1c6a58d29b2276dba61c94d06655cdb71f7cc3f04b843da1026f0";
+    if (solarSailBinding.inventoryDigest !== EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST) {
+      throw new Error(`Solar Sail binding inventory digest mismatch: expected ${EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST}, got ${solarSailBinding.inventoryDigest}`);
     }
   }
   const capability = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/capabilities/main.json"), "utf8"));
@@ -126,6 +157,7 @@ export async function verifyNebularBundle(options) {
     executable: { name: executableName, architecture: "arm64", size: executableBytes.byteLength, sha256: sha256Hex(executableBytes) },
     sidecar: { filename: basename(sidecarPath), size: packedNode.byteLength, sha256: sha256Hex(packedNode), payloadFiles: packedPayload.length, payloadEqual: true, reapedAfterLaunches: options.launch ? true : null },
     loomPayload: loomInventory ? { payloadFiles: loomInventory.length, batchExecutable: true, payloadEqual: true } : null,
+    solarSailPayload: solarSailInventory ? { payloadFiles: solarSailInventory.length, payloadEqual: true, binding: solarSailBinding } : null,
     scenePayload: sceneInventory ? { payloadFiles: sceneInventory.length, batchExecutable: true, payloadEqual: true, receipt: sceneReceipt } : null,
     sceneReceipt: sceneReceipt ?? null,
     csp: tauri.app.security.csp,
@@ -149,8 +181,9 @@ if (invokedDirectly) {
   }
   if (typeof parsed.app !== "string" || typeof parsed.node !== "string" || typeof parsed.payload !== "string" || typeof parsed.output !== "string") throw new Error("--app, --node, --payload, and --output are required.");
   const sourceLoomPayloadPath = typeof parsed["loom-payload"] === "string" ? parsed["loom-payload"] : (typeof parsed.loomPayload === "string" ? parsed.loomPayload : undefined);
+  const sourceSolarSailPayloadPath = typeof parsed["solar-sail-payload"] === "string" ? parsed["solar-sail-payload"] : (typeof parsed.solarSailPayload === "string" ? parsed.solarSailPayload : undefined);
   const sourceScenePayloadPath = typeof parsed["scene-payload"] === "string" ? parsed["scene-payload"] : (typeof parsed.scenePayload === "string" ? parsed.scenePayload : undefined);
-  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, sourceLoomPayloadPath, sourceScenePayloadPath, outputPath: parsed.output, launch: parsed.launch === true })
+  verifyNebularBundle({ appPath: parsed.app, sourceNodePath: parsed.node, sourcePayloadPath: parsed.payload, sourceLoomPayloadPath, sourceSolarSailPayloadPath, sourceScenePayloadPath, outputPath: parsed.output, launch: parsed.launch === true })
     .then((receipt) => process.stdout.write(`${JSON.stringify(receipt)}\n`))
     .catch((error) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }

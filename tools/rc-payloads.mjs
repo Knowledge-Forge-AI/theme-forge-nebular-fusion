@@ -19,12 +19,13 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { constants, existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -42,9 +43,9 @@ export const EXPECTED_BURST_SHA256 =
   "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.2.0";
+export const EXPECTED_LOOM_VERSION = "0.3.0";
 export const EXPECTED_LOOM_SHA256 =
-  "cdfb1ada33fb146a89622f32e3d676f581e4972b0b5654171ba0a6f08264cd0f";
+  "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0";
 
 export const EXPECTED_NODE_VERSION = "22.23.2";
 export const EXPECTED_NODE_TARGET = "aarch64-apple-darwin";
@@ -93,9 +94,19 @@ export function sha256Hex(bytes) {
  * Safely validates and extracts a tarball into destination without path traversal or symlinks.
  */
 export async function extractTarballSafely(archivePath, destination) {
-  const st = await lstat(archivePath);
-  if (!st.isFile() || st.isSymbolicLink()) {
+  let handle;
+  try {
+    handle = await open(archivePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
     throw new Error(`Archive is not a regular file: ${archivePath}`);
+  }
+  try {
+    const st = await handle.stat();
+    if (!st.isFile()) {
+      throw new Error(`Archive is not a regular file: ${archivePath}`);
+    }
+  } finally {
+    await handle.close();
   }
 
   // Validate archive listing with tar -tzf
@@ -162,8 +173,20 @@ export async function computeTreeDigest(rootDir) {
       if (entry.isDirectory()) {
         await walk(fullPath);
       } else if (entry.isFile()) {
-        const fileStat = await lstat(fullPath);
-        const bytes = await readFile(fullPath);
+        let handle;
+        try {
+          handle = await open(fullPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        } catch {
+          throw new Error(`Unreadable file at ${relPath}`);
+        }
+        let fileStat;
+        let bytes;
+        try {
+          fileStat = await handle.stat();
+          bytes = await handle.readFile();
+        } finally {
+          await handle.close();
+        }
         const digest = sha256Hex(bytes);
         const mode = fileStat.mode & 0o777;
         files.push({
@@ -526,8 +549,8 @@ export async function inspectLoomRcArtifact(options) {
     }
     await walk(pkgRoot);
 
-    if (files.length !== 322) {
-      throw new Error(`Expected exactly 322 files in Loom 0.2.0 payload binding inventory, got ${files.length}`);
+    if (files.length !== 335) {
+      throw new Error(`Expected exactly 335 files in Loom 0.3.0 payload binding inventory, got ${files.length}`);
     }
 
     const existingThemeLabBinding = JSON.parse(
@@ -557,6 +580,42 @@ export async function inspectLoomRcArtifact(options) {
  * End-to-end execution of RC payload generation and binding update.
  */
 export async function executeRcPayloadGeneration(options = {}) {
+  if (options.updateBindings && options.loomTarball && !options.burstTarball) {
+    console.log("=== TFSB65 Updating Loom bindings from candidate artifact ===");
+    const loomResult = await inspectLoomRcArtifact({
+      loomTarball: options.loomTarball,
+      loomSha256: options.loomSha256 || EXPECTED_LOOM_SHA256,
+      ...options,
+    });
+    const themeLabBindingPath = join(STUDIO_ROOT, "protocol/theme-lab-v2/payload-binding.json");
+    await writeFile(
+      themeLabBindingPath,
+      JSON.stringify(loomResult.themeLabBinding, null, 2) + "\n",
+      "utf8"
+    );
+    console.log(`Updated ${themeLabBindingPath}`);
+
+    const galleryContractPath = join(
+      STUDIO_ROOT,
+      "src/features/theme-lab/gallery-contract.ts"
+    );
+    const contractSource = await readFile(galleryContractPath, "utf8");
+    const updatedContract = contractSource.replace(
+      /export const EXPECTED_ARCHIVE_SHA256 =\s*"[a-f0-9]{64}" as const;/u,
+      `export const EXPECTED_ARCHIVE_SHA256 =\n  "${loomResult.archiveSha256}" as const;`
+    );
+    if (contractSource === updatedContract && !contractSource.includes(loomResult.archiveSha256)) {
+      throw new Error("Failed to update EXPECTED_ARCHIVE_SHA256 in gallery-contract.ts");
+    }
+    await writeFile(galleryContractPath, updatedContract, "utf8");
+    console.log(`Updated ${galleryContractPath}`);
+    return {
+      loomArchiveSha256: loomResult.archiveSha256,
+      loomArchiveSize: loomResult.archiveSize,
+      themeLabBinding: loomResult.themeLabBinding,
+    };
+  }
+
   const burstTarball = options.burstTarball;
   const burstSha256 = options.burstSha256;
   const loomTarball = options.loomTarball;

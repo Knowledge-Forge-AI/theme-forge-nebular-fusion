@@ -22,7 +22,7 @@ const MAX_COMPILE_OUTPUT_BYTES: usize = 2 * 1024 * 1024 + 1024; // 2MB for compi
 const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024; // 16MB for exchange packets
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const COMPILER_VERSION: &str = "0.2.0";
+pub const COMPILER_VERSION: &str = "0.3.0";
 
 #[derive(Debug, Default)]
 struct ExecutionState {

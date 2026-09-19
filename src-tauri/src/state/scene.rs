@@ -980,10 +980,27 @@ mod real_boundary_tests {
     fn real_engine_save_export_stale_plan_and_selected_open()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let state = SceneState::new(SceneRunner::new(
+        let runner = SceneRunner::new(
             root.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
             root.join("scene-payload/bin/scene-batch.js"),
-        ));
+        );
+        if !runner.is_available() {
+            let state = SceneState::new(runner);
+            let result = state.new_draft(SceneNewRequest {
+                expected: None,
+                replacement_intent_id: None,
+                profile: Some(SceneProfile::Diagram),
+                preset: None,
+                artboard: None,
+                title: Some("Native round trip".to_owned()),
+            });
+            assert!(
+                matches!(result, Err(ref error) if error.reason_code() == StudioReasonCode::SidecarArtifactUnavailable),
+                "expected SidecarArtifactUnavailable when scene payload is absent, got: {result:?}"
+            );
+            return Ok(());
+        }
+        let state = SceneState::new(runner);
         let d = state.new_draft(SceneNewRequest {
             expected: None,
             replacement_intent_id: None,
@@ -1212,10 +1229,14 @@ mod real_boundary_tests {
     fn real_engine_open_file_omitted_source_rejection_and_full_binding_success()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let state = SceneState::new(SceneRunner::new(
+        let runner = SceneRunner::new(
             root.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
             root.join("scene-payload/bin/scene-batch.js"),
-        ));
+        );
+        if !runner.is_available() {
+            return Ok(());
+        }
+        let state = SceneState::new(runner);
         let dir = std::env::temp_dir().join(format!(
             "scene-open-binding-{}-{}",
             std::process::id(),
@@ -1330,10 +1351,14 @@ mod real_boundary_tests {
     fn real_engine_open_file_rejection_classification_and_state_preservation()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let state = SceneState::new(SceneRunner::new(
+        let runner = SceneRunner::new(
             root.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
             root.join("scene-payload/bin/scene-batch.js"),
-        ));
+        );
+        if !runner.is_available() {
+            return Ok(());
+        }
+        let state = SceneState::new(runner);
         let dir = std::env::temp_dir().join(format!(
             "scene-open-rejections-{}-{}",
             std::process::id(),

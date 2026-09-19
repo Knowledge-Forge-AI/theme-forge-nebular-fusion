@@ -16,7 +16,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, lstatSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, constants, openSync, fstatSync, closeSync, opendirSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -376,12 +376,10 @@ export function collectNpmDistributedNotices(studioRoot = STUDIO_ROOT, options =
       fileList = mock.files || [];
     } else if (existsSync(pkgDir)) {
       const pkgJsonPath = resolve(pkgDir, "package.json");
-      if (existsSync(pkgJsonPath)) {
-        try {
-          pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
-        } catch {
-          pkgJson = null;
-        }
+      try {
+        pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+      } catch {
+        pkgJson = null;
       }
       try {
         fileList = readdirSync(pkgDir);
@@ -602,9 +600,13 @@ export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
   }
 
   const lockPath = resolve(studioRoot, "src-tauri/Cargo.lock");
-  if (!existsSync(lockPath)) return new Map();
-
-  const content = readFileSync(lockPath, "utf8");
+  let content;
+  try {
+    content = readFileSync(lockPath, "utf8");
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code === "ENOENT") return new Map();
+    throw err;
+  }
   return parseCargoLockChecksums(content);
 }
 
@@ -634,8 +636,12 @@ export async function generateReleaseNotices(options = {}) {
   const checksumMap = loadCargoLockChecksums(studioRoot, options);
   const supplementalRoot = resolve(studioRoot, "legal/supplemental");
   const supplementalManifest = join(supplementalRoot, "manifest.json");
-  const supplements = existsSync(supplementalManifest)
-    ? JSON.parse(readFileSync(supplementalManifest, "utf8")) : { packages: [] };
+  let supplements = { packages: [] };
+  try {
+    supplements = JSON.parse(readFileSync(supplementalManifest, "utf8"));
+  } catch (err) {
+    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") throw err;
+  }
   if (supplements.schema && supplements.schema !== "tfsb.supplemental-license-material-v1") {
     throw new Error("Invalid supplemental license schema");
   }
@@ -670,9 +676,24 @@ export async function generateReleaseNotices(options = {}) {
       }
       for (const record of supplemental.files) {
         const sourcePath = joinSafeRelative(supplementalRoot, record.path);
-        const st = lstatSync(sourcePath);
-        if (!st.isFile() || st.isSymbolicLink() || st.size !== record.size || sha256(readFileSync(sourcePath)) !== record.sha256) {
+        let fd;
+        try {
+          fd = openSync(sourcePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+        } catch {
           throw new Error(`Supplemental license bytes mismatch: ${key}`);
+        }
+        let bytes;
+        try {
+          const st = fstatSync(fd);
+          if (!st.isFile() || st.size !== record.size) {
+            throw new Error(`Supplemental license bytes mismatch: ${key}`);
+          }
+          bytes = readFileSync(fd);
+          if (bytes.length !== record.size || sha256(bytes) !== record.sha256) {
+            throw new Error(`Supplemental license bytes mismatch: ${key}`);
+          }
+        } finally {
+          closeSync(fd);
         }
         files.push({ fileName: basename(record.path), sourcePath,
           relativePath: normalizeSafeRelativePath(`crates/${dirName}/upstream-${basename(record.path)}`) });
@@ -766,14 +787,23 @@ export async function generateReleaseNotices(options = {}) {
       ...(existsSync(supplementalManifest) ? ["supplemental-license-provenance.json"] : []),
     ]);
     const inspectExisting = (directory, prefix = "") => {
-      if (!existsSync(directory)) return;
-      const st = lstatSync(directory);
-      if (!st.isDirectory() || st.isSymbolicLink()) throw new Error("Unsafe notice output directory");
-      for (const entry of readdirSync(directory, { withFileTypes: true })) {
-        const relativePath = prefix + entry.name;
-        if (entry.isSymbolicLink()) throw new Error("Symlink in notice output");
-        if (entry.isDirectory()) inspectExisting(join(directory, entry.name), relativePath + "/");
-        else if (!entry.isFile() || !expectedPaths.has(relativePath)) throw new Error("Unowned file in notice output");
+      let dirHandle;
+      try {
+        dirHandle = opendirSync(directory);
+      } catch (err) {
+        if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return;
+        throw err;
+      }
+      try {
+        let entry;
+        while ((entry = dirHandle.readSync()) !== null) {
+          const relativePath = prefix + entry.name;
+          if (entry.isSymbolicLink()) throw new Error("Symlink in notice output");
+          if (entry.isDirectory()) inspectExisting(join(directory, entry.name), relativePath + "/");
+          else if (!entry.isFile() || !expectedPaths.has(relativePath)) throw new Error("Unowned file in notice output");
+        }
+      } finally {
+        dirHandle.closeSync();
       }
     };
     inspectExisting(outDir);

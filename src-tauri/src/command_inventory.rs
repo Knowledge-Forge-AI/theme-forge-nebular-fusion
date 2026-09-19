@@ -41,4 +41,11 @@ pub(crate) static STUDIO_COMMAND_NAMES: &[&str] = &[
     "studio_scene_review_create",
     "studio_scene_candidate_verify",
     "studio_scene_candidate_adopt",
+    "studio_app_theme_status",
+    "studio_app_theme_compile",
+    "studio_app_theme_paired_compile",
+    "studio_app_theme_open_profile",
+    "studio_app_theme_save_profile",
+    "studio_app_theme_export_package",
+    "studio_app_theme_reset",
 ];

@@ -4,9 +4,9 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "ce48907e930ea2f4581baf30d7bc2c88a7fec162",
+    "sourceTree": "f31a76e47afc968218662199c0b49206bf606a85",
     "sourceRole": "lineage-only",
-    "sourceMaterializationSha256": "1e3a655472f317b35fef976f523d98a77b26258fcdd4284de2bd06aabdfd66a5",
+    "sourceMaterializationSha256": "c9d196b58768b2571277e62ab780d58e5ab7c98100d78274597c5dcc0bf75a13",
     "publicMergeCommit": null,
     "composedTreeDigest": null,
     "packageJsonSha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980",
@@ -76,14 +76,14 @@
   },
   "loom": {
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
-    "version": "0.2.0",
-    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.2.0.tgz",
-    "sha256": "4ec53cfe3c48a1d5b44e5fc695fe8c07b4f72dc4076a91ae10efa7d579818b34",
-    "size": 252529,
+    "version": "0.3.0",
+    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.3.0.tgz",
+    "sha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0",
+    "size": 272513,
     "catalogBuildEvidence": {
       "schema": "tfsl.catalog-build-evidence-v1",
-      "sha256": "9f4a3ca081d2fdf6c66c9eac2e8996583fe338e223eab5504b986456d925ea48",
-      "memberCount": 97
+      "sha256": "a5f07be4a3c6b01e81ead72dec1d09e1652f08c6319423c23f285f0e9a7868f3",
+      "memberCount": 101
     },
     "history": {
       "schema": "tfsb.released-loom-input-v1",
@@ -138,9 +138,13 @@
   },
   "canonicalEpochMs": 1704067200000,
   "scene": {
-    "filename": "scene-input.tgz",
-    "sha256": "013dc18c13b0e6d3abc82bb9f2c22af091b4af1a6321a0cf425c0a3978ab5709",
-    "bytes": 211242,
-    "sourceTreeDigest": "964775fc674636e296d8a343272b0984f4f18c185f4434880b53bff5ce85ef48"
+    "status": "omitted-by-contract"
+  },
+  "solarSail": {
+    "name": "@knowledge-forge-ai/theme-forge-solar-sail",
+    "version": "0.1.0",
+    "filename": "knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz",
+    "sha256": "6129ba880ac506024de5d1408aa26447944133de99bded06843825ed3b252bc2",
+    "size": 56524
   }
 }

@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "tf-paired-profile-v1",
+  "name": "forge-console",
+  "version": "0.1.0",
+  "description": "Forge Console paired application and documentation design profile",
+  "palette": {
+    "light": {
+      "background": "#fff8f0",
+      "foreground": "#1c1917",
+      "card": "#ffffff",
+      "cardForeground": "#1c1917",
+      "popover": "#ffffff",
+      "popoverForeground": "#1c1917",
+      "primary": "#126475",
+      "primaryForeground": "#ffffff",
+      "secondary": "#e7e5e4",
+      "secondaryForeground": "#1c1917",
+      "muted": "#f5f5f4",
+      "mutedForeground": "#78716c",
+      "accent": "#ff8a3d",
+      "accentForeground": "#1c1917",
+      "destructive": "#ef4444",
+      "destructiveForeground": "#ffffff",
+      "border": "#e7e5e4",
+      "input": "#e7e5e4",
+      "ring": "#126475"
+    },
+    "dark": {
+      "background": "#111318",
+      "foreground": "#f2f2f2",
+      "card": "#181b22",
+      "cardForeground": "#f2f2f2",
+      "popover": "#181b22",
+      "popoverForeground": "#f2f2f2",
+      "primary": "#69d3e4",
+      "primaryForeground": "#111318",
+      "secondary": "#27272a",
+      "secondaryForeground": "#f2f2f2",
+      "muted": "#27272a",
+      "mutedForeground": "#a1a1aa",
+      "accent": "#ff8a3d",
+      "accentForeground": "#111318",
+      "destructive": "#7f1d1d",
+      "destructiveForeground": "#f2f2f2",
+      "border": "#27272a",
+      "input": "#27272a",
+      "ring": "#69d3e4"
+    }
+  },
+  "surfaces": {
+    "radius": "0.5rem",
+    "content": 704
+  },
+  "typography": {
+    "fontSans": "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    "fontHeading": "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    "fontMono": "'JetBrains Mono', ui-monospace, monospace"
+  }
+}

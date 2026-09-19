@@ -16,6 +16,8 @@ import candidateBExample from "../protocol/tfsb-design-evidence-v1/examples/cand
 import reviewExample from "../protocol/tfsb-design-evidence-v1/examples/review.json";
 import { ThemeLab } from "./features/theme-lab/ThemeLab";
 import { MockThemeLabBridge } from "./features/theme-lab/test/mock-bridge";
+import { ApplicationThemeLab } from "./features/application-theme/ApplicationThemeLab";
+import { MockAppThemeBridge } from "./features/application-theme/app-theme-bridge";
 import "./styles/studio.css";
 
 const sha = (digit: string): Sha256Digest => `sha256:${digit.repeat(64)}` as Sha256Digest;
@@ -88,6 +90,14 @@ const planClient: StudioBrandPlanClient = {
 const root = document.getElementById("root"); if (!root) throw new Error("fixture root missing");
 if (scenario === "themelab") {
   createRoot(root).render(<ThemeLab bridge={new MockThemeLabBridge()} />);
+} else if (scenario.startsWith("app-theme") || scenario === "application-theme") {
+  const degraded = new URLSearchParams(location.search).get("degraded");
+  const bridge = new MockAppThemeBridge({
+    available: degraded !== "compiler",
+    ...(degraded === "compiler" ? { message: "Solar Sail compiler backend is offline. Preview and fallback self-theme remain active." } : {}),
+    ...(degraded === "loom" ? { loomError: "Stellar Loom compiler is unavailable (code 1)" } : {}),
+  });
+  createRoot(root).render(<ApplicationThemeLab bridge={bridge} />);
 } else {
   createRoot(root).render(<><BrandWorkbench client={client} planClient={planClient} host={host} project={project} source={source} sources={[source]}/>{scenario.startsWith("exchange") ? <DesignExchange host={host} project={packetProject} sources={[source]} readClient={client} packetClient={packetClient} onProposalPrefill={() => undefined} /> : null}</>);
 }

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../app/App";
 import { FixtureStudioHostBridge } from "../host/studio-host-bridge";
 import { MockThemeLabBridge } from "../features/theme-lab/test/mock-bridge";
+import { MockAppThemeBridge } from "../features/application-theme/app-theme-bridge";
 import type { StudioHostBridge } from "../protocol/contracts";
 
 const fixtureHostBridge = new FixtureStudioHostBridge();
@@ -45,9 +46,16 @@ describe("TFSB47I sidecar host workbench", () => {
     expect(screen.queryAllByRole("article")).toHaveLength(0);
   });
 
-  it("switches destination view among Brand / System, Vector / Graphics, and Starlight Theme", async () => {
+  it("switches destination view among Brand / System, Vector / Graphics, Starlight Theme, and Application Theme", async () => {
     const mockThemeBridge = new MockThemeLabBridge();
-    render(<App hostBridge={fixtureHostBridge} themeLabBridge={mockThemeBridge} />);
+    const mockAppThemeBridge = new MockAppThemeBridge();
+    render(
+      <App
+        hostBridge={fixtureHostBridge}
+        themeLabBridge={mockThemeBridge}
+        appThemeBridge={mockAppThemeBridge}
+      />,
+    );
 
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeTruthy();
 
@@ -62,9 +70,17 @@ describe("TFSB47I sidecar host workbench", () => {
     expect(screen.queryByRole("heading", { name: "Vector / Graphics" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
 
+    const appThemeBtn = screen.getByRole("button", { name: "Application Theme" });
+    fireEvent.click(appThemeBtn);
+    expect(await screen.findByRole("heading", { name: "Application Theme Lab" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Theme Lab" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Vector / Graphics" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
+
     const brandBtn = screen.getByRole("button", { name: "Brand / System" });
     fireEvent.click(brandBtn);
     expect(await screen.findByRole("heading", { name: "Diagnostics" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Application Theme Lab" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Theme Lab" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Vector / Graphics" })).toBeNull();
   });

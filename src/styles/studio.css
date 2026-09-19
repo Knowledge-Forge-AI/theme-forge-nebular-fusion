@@ -1128,3 +1128,49 @@ footer { padding: 3rem 0 1rem; color: #a89eb9; text-align: center; }
     grid-template-columns: 1fr;
   }
 }
+
+.app-theme-lab-workspace {
+  margin-top: 1.5rem;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 2rem;
+}
+
+@media (max-width: 960px) {
+  .app-theme-lab-workspace {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+}
+
+.theme-lab-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-badge, .meta-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid #433567;
+  background: #241a3a;
+  color: #d5c8ef;
+}
+
+.status-badge.success, .meta-badge.success {
+  border-color: #059669;
+  background: #064e3b;
+  color: #a7f3d0;
+}
+
+.status-badge.warning, .meta-badge.warning {
+  border-color: #d97706;
+  background: #78350f;
+  color: #fde68a;
+}
+

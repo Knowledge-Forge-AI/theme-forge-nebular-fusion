@@ -12,9 +12,19 @@ export default defineConfig({
     sourcemap: false,
   },
   test: {
-    include: ["src/test/**/*.studio.{ts,tsx}"],
+    include: [
+      "src/test/**/*.studio.{ts,tsx}",
+      "src/features/**/test/*.test.{ts,tsx}",
+      "test/**/*.test.{ts,tsx,mjs,js}",
+    ],
     environment: "jsdom",
     globals: true,
     restoreMocks: true,
+    testTimeout: 30000,
+    server: {
+      deps: {
+        external: [/src-tauri\/loom-payload/],
+      },
+    },
   },
 });
