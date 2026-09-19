@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile, readFile, cp } from "node:fs/promises";
 import { join, resolve, dirname, basename } from "node:path";
@@ -16,7 +17,8 @@ import {
   extractTarballSafely,
   sha256Hex,
 } from "../tools/solar-sail-prepare.mjs";
-import { existsSync } from "node:fs";
+import { repositoryRootForStudio } from "../tools/sidecar-common.mjs";
+import { existsSync, readdirSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -131,8 +133,45 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     expect(binding1.inventoryDigest).not.toBe(binding2.inventoryDigest);
   });
 
+  function findCandidateTarball() {
+    const currentStudioRoot = resolve(__dirname, "..");
+    const currentRepoRoot = repositoryRootForStudio(currentStudioRoot);
+
+    // 1. Check authenticated-inputs in composed tree or monorepo
+    const authDir = join(currentRepoRoot, "authenticated-inputs/solar-sail-tarball");
+    if (existsSync(authDir)) {
+      const files = readdirSync(authDir).filter((f) => f.endsWith(".tgz"));
+      if (files.length > 0) {
+        return resolve(authDir, files[0]);
+      }
+    }
+
+    // 2. Check .outbox in monorepo
+    const outboxDir = join(currentRepoRoot, ".outbox");
+    if (existsSync(outboxDir)) {
+      const files = readdirSync(outboxDir).filter((f) => f.includes("solar-sail") && f.endsWith(".tgz"));
+      if (files.length > 0) {
+        return resolve(outboxDir, files[0]);
+      }
+    }
+
+    throw new Error(`[SOLAR_SAIL_TEST_FAIL] No Solar Sail candidate tarball found in ${authDir} or ${outboxDir}`);
+  }
+
   it("authenticates the authentic Solar Sail payload in apps/studio/src-tauri against expected digest", async () => {
-    const realPayload = resolve(__dirname, "../src-tauri/solar-sail-payload");
+    let realPayload = resolve(__dirname, "../src-tauri/solar-sail-payload");
+    if (!existsSync(join(realPayload, "package.json"))) {
+      const candidateTarball = findCandidateTarball();
+      const fixturePayload = join(tempDir, "fixture-solar-sail-payload");
+      const fixtureAdapter = join(tempDir, "fixture-solar-sail-adapter");
+      await prepareSolarSail({
+        studioRoot: resolve(__dirname, ".."),
+        tarball: candidateTarball,
+        payloadRoot: fixturePayload,
+        adapterDir: fixtureAdapter,
+      });
+      realPayload = fixturePayload;
+    }
     const binding = await authenticateSolarSailCandidate(realPayload, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 
     expect(binding.schema).toBe("tfsb.solar-sail-binding-v1");
@@ -162,13 +201,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
   });
 
   it("extracts and authenticates candidate tarball from .outbox or staged package", async () => {
-    const outboxTarball = resolve(__dirname, "../../../.outbox/knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz");
-    let targetTarball = outboxTarball;
-    if (!existsSync(outboxTarball)) {
-      const realPkg = resolve(__dirname, "../../../packages/solar-sail");
-      targetTarball = join(tempDir, "outbox-fallback.tgz");
-      execFileSync("tar", ["-czf", targetTarball, "-C", dirname(realPkg), basename(realPkg)]);
-    }
+    const targetTarball = findCandidateTarball();
     const scratch = join(tempDir, "candidate-unpack");
     await mkdir(scratch, { recursive: true });
     const pkgRoot = extractTarballSafely(targetTarball, scratch);
@@ -202,13 +235,8 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     await mkdir(authInputsDir, { recursive: true });
     await writeFile(join(composedDir, "authenticated-inputs/stellar-binding.json"), "{}");
 
-    const realTarball = resolve(__dirname, "../../../.outbox/knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz");
-    if (existsSync(realTarball)) {
-      await cp(realTarball, join(authInputsDir, "solar-sail.tgz"));
-    } else {
-      const realPkg = resolve(__dirname, "../../../packages/solar-sail");
-      execFileSync("tar", ["-czf", join(authInputsDir, "solar-sail.tgz"), "-C", dirname(realPkg), basename(realPkg)]);
-    }
+    const realTarball = findCandidateTarball();
+    await cp(realTarball, join(authInputsDir, "solar-sail.tgz"));
 
     const binding = await prepareSolarSail({
       studioRoot: composedDir,

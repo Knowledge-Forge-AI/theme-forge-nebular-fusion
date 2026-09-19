@@ -100,6 +100,16 @@ fn reap_test_supervisor(supervisor: &mut SidecarSupervisor) {
     let _ = supervisor.force_reap();
 }
 
+fn synthetic_test_nonce(counter: u64) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"tfsb-test-supervisor-nonce-seam:");
+    hasher.update(counter.to_le_bytes());
+    let digest = hasher.finalize();
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..32])
+}
+
 fn valid_initialize() -> InitializeResult {
     let methods = [
         "assetDiff",
@@ -183,7 +193,7 @@ fn valid_initialize() -> InitializeResult {
             name: "tfsb-studio-service".to_owned(),
             version: "0.1.0".to_owned(),
         },
-        session_nonce: "a".repeat(43),
+        session_nonce: synthetic_test_nonce(1),
         capabilities: ServerCapabilities {
             methods,
             limits,
