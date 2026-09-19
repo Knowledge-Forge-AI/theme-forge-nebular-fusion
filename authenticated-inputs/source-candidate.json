@@ -1,14 +1,14 @@
 {
   "schema": "tfsb.source-candidate-v1",
-  "lineageCommit": "f7e8368c93a48a0184d1cb77737f0ab5aa06976b",
+  "lineageCommit": "f31a76e47afc968218662199c0b49206bf606a85",
   "identity": {
-    "commit": "f7e8368c93a48a0184d1cb77737f0ab5aa06976b",
+    "commit": "f31a76e47afc968218662199c0b49206bf606a85",
     "commitRole": "lineage-only",
     "kind": "selected-worktree-materialization",
     "materialization": {
       "fileCount": 1382,
-      "totalBytes": 18074776,
-      "treeDigest": "83c45c9891788416c14f00ee821bada6eb92d5e3746e5875aefb8d6d618c9244",
+      "totalBytes": 18078863,
+      "treeDigest": "c9d196b58768b2571277e62ab780d58e5ab7c98100d78274597c5dcc0bf75a13",
       "files": [
         {
           "path": ".gitignore",
@@ -1188,9 +1188,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/coordinator.rs",
-          "size": 3743,
+          "size": 4649,
           "mode": 420,
-          "sha256": "b74e54fee582762ae0320d95b51dd8af89035ccb634857cc6cb483805239f7da"
+          "sha256": "e174b2f1b45ecabe4ca4631639a2ce0da4fe41c316806ec1d66c5b020a25e881"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/error_registry.rs",
@@ -1224,9 +1224,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/plan_transport.rs",
-          "size": 8203,
+          "size": 9478,
           "mode": 420,
-          "sha256": "fb4ffbcfe8db65a8709cf50080d598e84c53d3be9f8a00d2e2b76669886c17be"
+          "sha256": "2dcb42d017be3aed9b1ef306fe1c03f48f83689ba9c7d4ee54e6cd8a1ac85c11"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/process.rs",
@@ -1250,7 +1250,7 @@
           "path": "apps/studio/src-tauri/src/sidecar/supervisor.rs",
           "size": 42329,
           "mode": 420,
-          "sha256": "8ed0e2f5ff954aee3b0ef3869b5eb9dab5f06302dd8125333d02eac522e1c43f"
+          "sha256": "87b0948c911d13a7ef53401c906d0cdc372bc25e90f8fbd35efe78cf7bd8ccb3"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/supervisor/plan.rs",
@@ -1260,9 +1260,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/supervisor/plan_tests.rs",
-          "size": 10744,
+          "size": 12650,
           "mode": 420,
-          "sha256": "6b1eaccf4bb2f23ce25add1c856dbee58157efa39ab1c049b35bf95ef63ee130"
+          "sha256": "bc646bae301eddeb996454993b93db1385f68d79175161b24d87534f2b84df54"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/supervisor/tests.rs",

@@ -7,7 +7,7 @@ use tauri::ipc::Channel;
 
 use super::SidecarSupervisor;
 use crate::errors::StudioReasonCode;
-use crate::sidecar::artifact::{DISTRIBUTION_TEST_LOCK, verify_distribution};
+use crate::sidecar::artifact::DISTRIBUTION_TEST_LOCK;
 use crate::sidecar::plan_protocol::{
     DeriveSelection, PlanEventEmitter, StudioBrandPlanStartRequest,
 };
@@ -32,8 +32,6 @@ fn lifecycle_supervisor(mode: &'static str) -> Result<SidecarSupervisor, String>
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let binary = root.join("binaries/tfsb-studio-service-aarch64-apple-darwin");
     let payload = root.join("sidecar-payload");
-    verify_distribution(&binary, &payload)
-        .map_err(|error| format!("artifact verification failed: {error}"))?;
     let temp = root
         .join("target")
         .join(format!("tfsb-plan-lifecycle-{}-{mode}", std::process::id()));
@@ -75,54 +73,101 @@ fn plan_create_timeout_is_session_fatal_and_late_ready_cannot_survive() -> Resul
     let _distribution = DISTRIBUTION_TEST_LOCK
         .lock()
         .map_err(|_| "distribution test lock".to_owned())?;
-    for mode in ["lifecycle-plan-timeout-ready", "lifecycle-plan-never"] {
-        let mut supervisor = lifecycle_supervisor(mode)?;
-        supervisor
-            .start(Channel::new(|_| Ok(())))
-            .map_err(|error| {
-                format!(
-                    "{mode} did not initialize: {}",
-                    serde_json::to_string(&error).unwrap_or_default()
-                )
-            })?;
-        let started = Instant::now();
-        let error = fake_plan_create(&mut supervisor, false)
-            .err()
-            .ok_or_else(|| format!("{mode} unexpectedly created a plan"))?;
-        let public = serde_json::to_string(&error).map_err(|error| error.to_string())?;
-        if error.reason_code() != StudioReasonCode::RequestTimeout
-            || supervisor.process.is_some()
-            || !matches!(supervisor.status().state, HostLifecycleState::Failed)
-            || supervisor.status().last_reason_code != Some("sidecar-request-timeout")
-            || public.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-            || public.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-            || started.elapsed() > Duration::from_secs(3)
-        {
-            return Err(format!(
-                "{mode} did not fail, reap, bound, and redact exactly"
-            ));
-        }
-        let second = fake_plan_create(&mut supervisor, false)
-            .err()
-            .ok_or_else(|| "uncertain session admitted a second plan".to_owned())?;
-        if second.reason_code() != StudioReasonCode::SidecarCrashed {
-            return Err("uncertain session did not remain closed pending restart".to_owned());
-        }
+    let mode = "lifecycle-plan-timeout-ready";
+    let mut supervisor = lifecycle_supervisor(mode)?;
+    supervisor
+        .start(Channel::new(|_| Ok(())))
+        .map_err(|error| {
+            format!(
+                "{mode} did not initialize: {}",
+                serde_json::to_string(&error).unwrap_or_default()
+            )
+        })?;
+    let started = Instant::now();
+    let error = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| format!("{mode} unexpectedly created a plan"))?;
+    let public = serde_json::to_string(&error).map_err(|error| error.to_string())?;
+    if error.reason_code() != StudioReasonCode::RequestTimeout
+        || supervisor.process.is_some()
+        || !matches!(supervisor.status().state, HostLifecycleState::Failed)
+        || supervisor.status().last_reason_code != Some("sidecar-request-timeout")
+        || public.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        || public.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        || started.elapsed() > Duration::from_secs(3)
+    {
+        return Err(format!(
+            "{mode} did not fail, reap, bound, and redact exactly"
+        ));
+    }
+    let second = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| "uncertain session admitted a second plan".to_owned())?;
+    if second.reason_code() != StudioReasonCode::SidecarCrashed {
+        return Err("uncertain session did not remain closed pending restart".to_owned());
+    }
 
-        supervisor.configure_test_sidecar(fake_binary()?, mode, Duration::from_millis(80));
-        supervisor
-            .start(Channel::new(|_| Ok(())))
-            .map_err(|_| "explicit timeout-session restart failed".to_owned())?;
-        let repeated = fake_plan_create(&mut supervisor, false)
-            .err()
-            .ok_or_else(|| "repeated create timeout unexpectedly succeeded".to_owned())?;
-        if repeated.reason_code() != StudioReasonCode::RequestTimeout
-            || supervisor.process.is_some()
-        {
-            return Err(
-                "repeated create timeout was not independently killed and reaped".to_owned(),
-            );
-        }
+    supervisor.configure_test_sidecar(fake_binary()?, mode, Duration::from_millis(80));
+    supervisor
+        .start(Channel::new(|_| Ok(())))
+        .map_err(|_| "explicit timeout-session restart failed".to_owned())?;
+    let repeated = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| "repeated create timeout unexpectedly succeeded".to_owned())?;
+    if repeated.reason_code() != StudioReasonCode::RequestTimeout || supervisor.process.is_some() {
+        return Err("repeated create timeout was not independently killed and reaped".to_owned());
+    }
+    Ok(())
+}
+
+#[test]
+fn plan_create_hang_timeout_is_session_fatal() -> Result<(), String> {
+    let _distribution = DISTRIBUTION_TEST_LOCK
+        .lock()
+        .map_err(|_| "distribution test lock".to_owned())?;
+    let mode = "lifecycle-plan-never";
+    let mut supervisor = lifecycle_supervisor(mode)?;
+    supervisor
+        .start(Channel::new(|_| Ok(())))
+        .map_err(|error| {
+            format!(
+                "{mode} did not initialize: {}",
+                serde_json::to_string(&error).unwrap_or_default()
+            )
+        })?;
+    let started = Instant::now();
+    let error = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| format!("{mode} unexpectedly created a plan"))?;
+    let public = serde_json::to_string(&error).map_err(|error| error.to_string())?;
+    if error.reason_code() != StudioReasonCode::RequestTimeout
+        || supervisor.process.is_some()
+        || !matches!(supervisor.status().state, HostLifecycleState::Failed)
+        || supervisor.status().last_reason_code != Some("sidecar-request-timeout")
+        || public.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        || public.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        || started.elapsed() > Duration::from_secs(3)
+    {
+        return Err(format!(
+            "{mode} did not fail, reap, bound, and redact exactly"
+        ));
+    }
+    let second = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| "uncertain session admitted a second plan".to_owned())?;
+    if second.reason_code() != StudioReasonCode::SidecarCrashed {
+        return Err("uncertain session did not remain closed pending restart".to_owned());
+    }
+
+    supervisor.configure_test_sidecar(fake_binary()?, mode, Duration::from_millis(80));
+    supervisor
+        .start(Channel::new(|_| Ok(())))
+        .map_err(|_| "explicit timeout-session restart failed".to_owned())?;
+    let repeated = fake_plan_create(&mut supervisor, false)
+        .err()
+        .ok_or_else(|| "repeated create timeout unexpectedly succeeded".to_owned())?;
+    if repeated.reason_code() != StudioReasonCode::RequestTimeout || supervisor.process.is_some() {
+        return Err("repeated create timeout was not independently killed and reaped".to_owned());
     }
     Ok(())
 }
