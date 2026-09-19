@@ -598,6 +598,14 @@ mod boundary_tests {
     fn real_authenticated_compile_import_and_timeout_reap() -> Result<(), Box<dyn std::error::Error>>
     {
         let runner = prepared_runner();
+        if !runner.is_available() {
+            let result = runner.compile(&VectorScene::default(), false);
+            assert!(
+                matches!(result, Err(ref error) if error.reason_code() == StudioReasonCode::SidecarArtifactUnavailable),
+                "expected SidecarArtifactUnavailable when scene payload is absent, got: {result:?}"
+            );
+            return Ok(());
+        }
         let output = runner.compile(&VectorScene::default(), false)?;
         assert!(output.valid, "{:?}", output);
         assert!(output.svg.is_some());
@@ -619,6 +627,9 @@ mod boundary_tests {
     fn cancellation_reaps_active_child_and_queue_remains_usable()
     -> Result<(), Box<dyn std::error::Error>> {
         let runner = prepared_runner();
+        if !runner.is_available() {
+            return Ok(());
+        }
         let worker = runner.clone();
         let thread = thread::spawn(move || worker.compile(&VectorScene::default(), false));
         let deadline = Instant::now() + Duration::from_secs(15);

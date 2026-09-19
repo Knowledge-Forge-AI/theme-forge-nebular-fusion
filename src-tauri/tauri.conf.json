@@ -39,7 +39,6 @@
       "loom-adapter/**/*",
       "solar-sail-payload/**/*",
       "solar-sail-adapter/**/*",
-      "scene-payload/**/*",
       "release-notices/**/*"
     ],
     "targets": [

@@ -1,14 +1,14 @@
 {
   "schema": "tfsb.source-candidate-v1",
-  "lineageCommit": "0b6002defc78738271ef498ef3309a499576f577",
+  "lineageCommit": "f7e8368c93a48a0184d1cb77737f0ab5aa06976b",
   "identity": {
-    "commit": "0b6002defc78738271ef498ef3309a499576f577",
+    "commit": "f7e8368c93a48a0184d1cb77737f0ab5aa06976b",
     "commitRole": "lineage-only",
     "kind": "selected-worktree-materialization",
     "materialization": {
-      "fileCount": 1381,
-      "totalBytes": 18052835,
-      "treeDigest": "03f576aa9b4439740d1fbfc6be90703b8faa9e93af647a466eb18317f3605991",
+      "fileCount": 1382,
+      "totalBytes": 18074776,
+      "treeDigest": "83c45c9891788416c14f00ee821bada6eb92d5e3746e5875aefb8d6d618c9244",
       "files": [
         {
           "path": ".gitignore",
@@ -1092,9 +1092,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/scene/runner.rs",
-          "size": 23422,
+          "size": 23898,
           "mode": 420,
-          "sha256": "fca16947a71944164b71a1c12a5eb97ee739f4bdc6be1099f5728f442104334e"
+          "sha256": "c76e4ba0ac9aa093d128a000f17b8222fc8033551f15bfe7559cdd28d297d7fa"
         },
         {
           "path": "apps/studio/src-tauri/src/scene/session.rs",
@@ -1266,9 +1266,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/supervisor/tests.rs",
-          "size": 64060,
+          "size": 64252,
           "mode": 420,
-          "sha256": "2210fc8b6a7f624d6b491b9c08fb1dbe12d5ee3ec3b7d52666aa2dbe5ff48725"
+          "sha256": "26f67fc28d15b6ca73eed067efeba3139466569c3908bcb4f920773161580693"
         },
         {
           "path": "apps/studio/src-tauri/src/sidecar/visual_evidence.rs",
@@ -1314,9 +1314,9 @@
         },
         {
           "path": "apps/studio/src-tauri/src/state/scene.rs",
-          "size": 61191,
+          "size": 62132,
           "mode": 420,
-          "sha256": "11ae53ac9b149ef6eed4615dd6f7f16ad23dacdecd60396a521efc9d06ec68c5"
+          "sha256": "46bc3addcd03d454d39e40d1080440f543eaf31ea54e28fed4202d6752b0a469"
         },
         {
           "path": "apps/studio/src-tauri/src/state/scene_tokens.rs",
@@ -8028,15 +8028,21 @@
         },
         {
           "path": "tools/ci/verify-nebular-bundle.mjs",
-          "size": 15024,
+          "size": 14936,
           "mode": 420,
-          "sha256": "e4800467dc99893631aa3f843656268e055b9d71b738c213a4cf44316dd0769e"
+          "sha256": "4d22af53dd93911b6f3fe69cffcb2d6ad70e3aa687f7434a3610d3031a97586f"
         },
         {
           "path": "tools/ci/verify-node-authenticity.mjs",
           "size": 13200,
           "mode": 420,
           "sha256": "4d80db81d357cf787187c482bb3381fa8f0d13a10d462c1d097c0dc7ed9726ff"
+        },
+        {
+          "path": "tools/ci/verify-tauri-resource-closure.mjs",
+          "size": 17946,
+          "mode": 420,
+          "sha256": "994936eddc43266e74bf91c4d910839a8ecbebdf214f077afdbbeb09456eeff9"
         },
         {
           "path": "tools/generate-design-evidence-v1.mjs",
@@ -8082,9 +8088,9 @@
         },
         {
           "path": "tools/public-composition/compose-nebular-fusion.mjs",
-          "size": 112878,
+          "size": 115076,
           "mode": 420,
-          "sha256": "5fb545bb6a1fee9963251eb3921922c868571b60ae0458a656a57f38fc140dc5"
+          "sha256": "9ef804554a6b3f77ae69d1efb768496cf9eb30a03a41f79c75a5bf14f73ed4d9"
         },
         {
           "path": "tools/public-composition/compose-solar-sail.mjs",
@@ -8118,15 +8124,15 @@
         },
         {
           "path": "tools/public-composition/nebular-fusion-workflow.mjs",
-          "size": 27877,
+          "size": 27996,
           "mode": 420,
-          "sha256": "bc7141c28a0e091e85b38f85e19ec3c89772a80534755f843d99624422c2fb76"
+          "sha256": "5204e7fc88c4ce228137ebef66a9410d7a6b8ffbcb602d5f95e51f299918f511"
         },
         {
           "path": "tools/public-composition/product-membership.json",
-          "size": 278328,
+          "size": 278485,
           "mode": 420,
-          "sha256": "1cb9602b3b6e40c299cb213c8b628b9eb5cbdeff76656630eb27c576c98499ce"
+          "sha256": "d8057d84747123f974506b83d10077bcdcae4b96b4b6d7eb95b56f027c88c782"
         },
         {
           "path": "tools/public-composition/solar-sail-workflow.mjs",

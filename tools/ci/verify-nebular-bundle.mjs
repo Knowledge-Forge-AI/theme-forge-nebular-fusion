@@ -7,6 +7,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
+import { OPTIONAL_SCENE_RESOURCE, SOLAR_SAIL_RESOURCE } from "./verify-tauri-resource-closure.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
 
@@ -67,7 +68,7 @@ export async function verifyNebularBundle(options) {
     }
   }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
-  const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.some((/** @type {unknown} */ r) => typeof r === "string" && (r === "scene-payload/**/*" || r.includes("scene-payload")));
+  const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(OPTIONAL_SCENE_RESOURCE);
   const scenePayloadPath = join(resources, "scene-payload");
   const candidateSceneSource = options.sourceScenePayloadPath ? resolve(options.sourceScenePayloadPath) : join(STUDIO_ROOT, "src-tauri/scene-payload");
   let sceneInventory = null;
@@ -94,7 +95,7 @@ export async function verifyNebularBundle(options) {
       sceneReceipt = await verifyScenePayload(scenePayloadPath, resolve(options.sourceNodePath));
     }
   }
-  const configuredSolarSailResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.some((/** @type {unknown} */ r) => typeof r === "string" && (r === "solar-sail-payload/**/*" || r.includes("solar-sail-payload")));
+  const configuredSolarSailResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(SOLAR_SAIL_RESOURCE);
   const solarSailPayloadPath = join(resources, "solar-sail-payload");
   const candidateSolarSailSource = options.sourceSolarSailPayloadPath ? resolve(options.sourceSolarSailPayloadPath) : join(STUDIO_ROOT, "src-tauri/solar-sail-payload");
   let solarSailInventory = null;

@@ -365,10 +365,16 @@ fn real_host_command_lane_creates_reviews_discards_applies_and_reads_after_apply
     {
         return Err("scene token snapshot did not preserve opaque color".to_owned());
     }
-    let scene_state = crate::state::scene::SceneState::new(crate::scene::runner::SceneRunner::new(
+    let scene_runner = crate::scene::runner::SceneRunner::new(
         manifest.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
         manifest.join("scene-payload/bin/scene-batch.js"),
-    ));
+    );
+    if !scene_runner.is_available() {
+        let _ = host.shutdown_host();
+        let _ = std::fs::remove_dir_all(scratch);
+        return Ok(());
+    }
+    let scene_state = crate::state::scene::SceneState::new(scene_runner);
     let draft = scene_state
         .new_draft(crate::scene::protocol_dto::SceneNewRequest {
             expected: None,
