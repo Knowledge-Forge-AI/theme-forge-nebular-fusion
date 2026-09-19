@@ -3,7 +3,7 @@
 Theme Forge Nebular Fusion is a local, evidence-bound desktop workbench for reviewing, inspecting, and managing Theme Forge brand systems and artifacts. This candidate tree represents unreleased 0.4 development with metadata 0.4.0.
 
 It provides three persistent work areas: **Brand/System**, **Vector/Graphics**, and **Starlight Theme**.
-The Scene workbench produces SVG. Distributed PNG and remote resource ingestion are not supported.
+The Scene workbench requires a separately authenticated candidate and is not bundled with this distribution. When enabled, it produces SVG. Distributed PNG and remote resource ingestion are not supported.
 
 - Package version: `0.4.0` (unreleased 0.4 release candidate)
 - Public repository: `Knowledge-Forge-AI/theme-forge-nebular-fusion`
@@ -18,6 +18,8 @@ The Scene workbench produces SVG. Distributed PNG and remote resource ingestion 
 The macOS-arm64 application is an ad-hoc-signed, unnotarized developer distribution. Verify its supplied checksum before opening it. Homebrew cask distribution is WITHHELD pending Developer ID signing and notarization. The source and developer app distribution carries no published claim; this application is not published on npm. No hosted npm provenance or Developer ID identity is claimed. The input manifests bind the exact Node (v22.23.2), Stellar Burst 0.5.0, and Stellar Loom 0.3.0 release-candidate packages included in the app.
 
 The optional raster capability is bundled from the authenticated companion archive and lock under `authenticated-inputs/`. The companion remains `@knowledge-forge-ai/tfsb-raster-resvg@0.0.0-tfsb47f`; it is not a separate npm registry product. Its AGPL/commercial, MPL and third-party notices travel with the distribution. No embedded model or provider is included.
+
+The optional Scene capability requires a separately authenticated candidate and is not bundled with this distribution.
 
 ## Development
 

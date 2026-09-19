@@ -218,6 +218,8 @@ jobs:
           cargo fetch --locked --target aarch64-apple-darwin
       - name: Generate and validate mandatory release notices
         run: node tools/release-notices.mjs
+      - name: Verify Tauri resource closure
+        run: node tools/ci/verify-tauri-resource-closure.mjs --build-ready
       - name: Rust qualification gates
         working-directory: src-tauri
         run: |
