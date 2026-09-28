@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { test } from "node:test";
@@ -541,7 +542,7 @@ test("multi-target sidecar manifest and addon derivation for Linux targets", asy
 
 test("production AMD64 identity accepts ADDON1 and rejects stale or altered pins", async () => {
   const { manifest } = await fixture("production-amd64-addon1");
-  const repo = resolve(import.meta.dirname, "../../..");
+  const repo = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
   manifest.target = manifest.runtime.target = manifest.native.target = "x86_64-unknown-linux-gnu";
   manifest.core.name = "@knowledge-forge-ai/theme-forge-stellar-burst";
   manifest.core.version = "0.5.0";
@@ -553,7 +554,16 @@ test("production AMD64 identity accepts ADDON1 and rejects stale or altered pins
       manifest.protocol[version][key] = sha256(await readFile(resolve(repo, "protocol/tfsb-studio-v1", file)));
     }
   }
-  const addon = await readFile(resolve(repo, "native/directory-snapshot/prebuilds/linux-x64-gnu/native-addon-posix-openat-v1.node"));
+  const member = "native/directory-snapshot/prebuilds/linux-x64-gnu/native-addon-posix-openat-v1.node";
+  let addon;
+  if (existsSync(resolve(repo, "authenticated-inputs/stellar-binding.json"))) {
+    const binding = validateStellarBinding(JSON.parse(await readFile(resolve(repo, "authenticated-inputs/stellar-binding.json"), "utf8")));
+    const archive = resolve(repo, "authenticated-inputs/core-tarball", binding.package.filename);
+    assert.equal(sha256(await readFile(archive)), binding.package.sha256);
+    addon = execFileSync("tar", ["-xOf", archive, `package/${member}`]);
+  } else {
+    addon = await readFile(resolve(repo, member));
+  }
   manifest.native.sha256 = sha256(addon);
   manifest.native.size = addon.length;
   assert.equal(validateManifestShape(manifest), manifest);
