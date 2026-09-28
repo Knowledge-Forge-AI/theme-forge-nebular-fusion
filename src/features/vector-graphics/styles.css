@@ -9,6 +9,19 @@
 }
 
 /* Action Toolbar */
+/* The vector workbench uses a dark palette independently of the system theme.
+   Let native selects/popups use that palette too. Keep forced colors UA-owned. */
+@media (forced-colors: none) {
+  .vector-graphics-lab select {
+    color-scheme: dark;
+  }
+
+  .vector-graphics-lab select option {
+    color: #f7f5ff;
+    background-color: #241a3a;
+  }
+}
+
 .action-toolbar {
   display: flex;
   flex-wrap: wrap;

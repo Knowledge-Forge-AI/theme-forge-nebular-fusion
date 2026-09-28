@@ -5,6 +5,7 @@ import type {
   ProjectOpenMode, SourceSelectKind, StudioHostBridge, StudioHostState, StudioHostStateEvent,
   StudioHostCapabilitySummary, StudioHostStatus, StudioProjectOpen, StudioProjectSelectResult, StudioSourceOpen, StudioSourceSelectResult,
 } from "../protocol/contracts";
+import packageJson from "../../package.json";
 
 export const STUDIO_HOST_COMMANDS = {
   brandRead: "studio_brand_read",
@@ -68,7 +69,7 @@ export function validateHostEvent(value: unknown): StudioHostStateEvent {
 export function validateHostStatus(value: unknown): StudioHostStatus {
   const item = record(value, ["capabilities", "lastReasonCode", "manifestDigest", "methods", "projectOpenCount", "raster", "schemaVersion", "selectedProtocolVersion", "serverVersion", "sourceOpenCount", "state", "studioVersion"]);
   const raster = record(item.raster, ["available", "qualificationIdentity"]);
-  if (item.schemaVersion !== 1 || item.studioVersion !== "0.1.0" || !states.includes(item.state as StudioHostState) || !Array.isArray(item.methods) || item.methods.length > 64 || !item.methods.every((method) => typeof method === "string" && method.length > 0 && method.length <= 64) || typeof raster.available !== "boolean") throw new StudioHostValidationError();
+  if (item.schemaVersion !== 1 || item.studioVersion !== packageJson.version || !states.includes(item.state as StudioHostState) || !Array.isArray(item.methods) || item.methods.length > 64 || !item.methods.every((method) => typeof method === "string" && method.length > 0 && method.length <= 64) || typeof raster.available !== "boolean") throw new StudioHostValidationError();
   const selected = item.selectedProtocolVersion === null ? null : item.selectedProtocolVersion === "1.2" ? "1.2" : (() => { throw new StudioHostValidationError(); })();
   const qualificationIdentity = nullableString(raster.qualificationIdentity, 71, publicDigest);
   if ((raster.available && qualificationIdentity !== `sha256:${"4bb08e677b87ef1ca74c35c5c22f547cebef4c22a1f98a08a9246fd9397d0f11"}`) || (!raster.available && qualificationIdentity !== null)) throw new StudioHostValidationError();
@@ -115,7 +116,7 @@ export function validateHostStatus(value: unknown): StudioHostStatus {
     throw new StudioHostValidationError();
   }
   return {
-    schemaVersion: 1, studioVersion: "0.1.0",
+    schemaVersion: 1, studioVersion: packageJson.version,
     manifestDigest: nullableString(item.manifestDigest, 64, digest), state: item.state as StudioHostState,
     selectedProtocolVersion: selected, serverVersion, methods: [...item.methods] as string[], capabilities,
     raster: { available: raster.available, qualificationIdentity },
@@ -178,7 +179,7 @@ export class TauriStudioHostBridge implements StudioHostBridge {
   close() { if (this.#channel) this.#channel.onmessage = () => undefined; if (this.#planChannel) this.#planChannel.onmessage = () => undefined; this.#channel = undefined; this.#planChannel = undefined; }
 }
 
-const fixtureStatus: StudioHostStatus = { schemaVersion: 1, studioVersion: "0.1.0", manifestDigest: null, state: "not-started", selectedProtocolVersion: null, serverVersion: null, methods: [], capabilities: null, raster: { available: false, qualificationIdentity: null }, projectOpenCount: 0, sourceOpenCount: 0, lastReasonCode: null };
+const fixtureStatus: StudioHostStatus = { schemaVersion: 1, studioVersion: packageJson.version, manifestDigest: null, state: "not-started", selectedProtocolVersion: null, serverVersion: null, methods: [], capabilities: null, raster: { available: false, qualificationIdentity: null }, projectOpenCount: 0, sourceOpenCount: 0, lastReasonCode: null };
 const fixtureCapabilities: StudioHostCapabilitySummary = {
   baseMethods: [...baseMethods], brandReads: [...brandReads], brandSourcePurposes: [...brandSourcePurposes],
   limits: { assetPageSizeDefault: 64, assetPageSizeMax: 128, assetPageSizeMin: 1, brandPageSizeDefault: 64, brandPageSizeMax: 128, brandPageSizeMin: 1, maxDiffResultBytes: 16_777_216, maxFrameBytes: 16_777_216, maxQaResultBytes: 16_777_216 },

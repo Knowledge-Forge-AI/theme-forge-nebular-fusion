@@ -153,7 +153,7 @@ fn sample_specification() -> ThemeSpecificationDto {
         surfaces: SurfacesDto {
             radius: "0.5rem".to_string(),
             border_width: Some("1px".to_string()),
-            content: Some(704),
+            content: None,
         },
         typography: TypographyDto {
             font_sans: "Inter, sans-serif".to_string(),
@@ -417,6 +417,32 @@ fn real_package_export_via_runner() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(e.reason_code(), StudioReasonCode::SidecarProtocolInvalid);
         }
     }
+
+    Ok(())
+}
+
+#[test]
+fn compile_strips_surfaces_content_on_plain_theme_path() -> Result<(), Box<dyn std::error::Error>> {
+    let node_path = match find_node() {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+    let adapter_path = match find_real_adapter() {
+        Ok(p) => p,
+        Err(_) => return Ok(()),
+    };
+
+    let runner = AppThemeRunner::new(node_path, adapter_path);
+
+    // Specification has surfaces.content set, which is valid on paired profiles
+    // but forbidden by tfss.theme-v1 closed validation. AppThemeRunner::compile normalizes it.
+    let mut spec = sample_specification();
+    spec.surfaces.content = Some(704);
+
+    let result = runner.compile(spec, Some(1))?;
+    assert!(result.valid, "compile should succeed after runner normalizes surfaces.content: {:?}", result.error);
+    assert!(result.compiled_css.is_some());
+    assert_eq!(result.ui_revision, 1);
 
     Ok(())
 }

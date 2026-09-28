@@ -117,10 +117,18 @@ export async function verifyNebularBundle(options) {
       throw new Error("Missing solar-sail-binding.json in packed Solar Sail payload.");
     }
     solarSailBinding = JSON.parse(await readFile(bindingPath, "utf8"));
-    if (solarSailBinding.name !== "@knowledge-forge-ai/theme-forge-solar-sail" || solarSailBinding.version !== "0.1.0") {
-      throw new Error(`Invalid Solar Sail binding: expected @knowledge-forge-ai/theme-forge-solar-sail@0.1.0, got ${solarSailBinding.name}@${solarSailBinding.version}`);
+    const solarPrepareScript = join(STUDIO_ROOT, "tools/solar-sail-prepare.mjs");
+    if (!existsSync(solarPrepareScript)) {
+      throw new Error(`Maintained Solar Sail preparer missing at ${solarPrepareScript}`);
     }
-    const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "f5cecdcea0a1c6a58d29b2276dba61c94d06655cdb71f7cc3f04b843da1026f0";
+    const {
+      EXPECTED_SOLAR_SAIL_NAME,
+      EXPECTED_SOLAR_SAIL_VERSION,
+      EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST,
+    } = await import(pathToFileURL(solarPrepareScript).href);
+    if (solarSailBinding.name !== EXPECTED_SOLAR_SAIL_NAME || solarSailBinding.version !== EXPECTED_SOLAR_SAIL_VERSION) {
+      throw new Error(`Invalid Solar Sail binding: expected ${EXPECTED_SOLAR_SAIL_NAME}@${EXPECTED_SOLAR_SAIL_VERSION}, got ${solarSailBinding.name}@${solarSailBinding.version}`);
+    }
     if (solarSailBinding.inventoryDigest !== EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST) {
       throw new Error(`Solar Sail binding inventory digest mismatch: expected ${EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST}, got ${solarSailBinding.inventoryDigest}`);
     }

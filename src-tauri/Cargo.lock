@@ -2516,6 +2516,9 @@ checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
 dependencies = [
  "block2",
  "dispatch2",
+ "glib-sys",
+ "gobject-sys",
+ "gtk-sys",
  "js-sys",
  "log",
  "objc2",
@@ -3354,7 +3357,7 @@ dependencies = [
 
 [[package]]
 name = "theme-forge-nebular-fusion"
-version = "0.4.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "serde",

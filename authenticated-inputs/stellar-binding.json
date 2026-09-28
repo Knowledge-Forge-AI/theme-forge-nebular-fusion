@@ -4,19 +4,19 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "f31a76e47afc968218662199c0b49206bf606a85",
+    "sourceTree": "7071bc86dcd6a08f8f8f7945f550138c339b5224",
     "sourceRole": "lineage-only",
-    "sourceMaterializationSha256": "c9d196b58768b2571277e62ab780d58e5ab7c98100d78274597c5dcc0bf75a13",
+    "sourceMaterializationSha256": "28c3abe0debb48fd7455f261d44c31aa195ccbafa1502528d3edac668fc76203",
     "publicMergeCommit": null,
     "composedTreeDigest": null,
-    "packageJsonSha256": "0279614887fe400abaae06ce02cb8d3dba3317b52ebdf0d9c4006d4c6a793980",
-    "packageLockSha256": "046eb46aed69b6457d38e598ffba04276a28e045abed2098ac3b57e26e8d80b3",
+    "packageJsonSha256": "6f218fc2c7c61b9b29bebef2b393d5d6863a66140c5dcc005deb232f667fdbf5",
+    "packageLockSha256": "ae3cf92c17329ee025d2c4f18eebe3f50073fa68b2c96384f8da807fcccd05a9",
     "provenance": "exact-private-burst-rc-artifact; standalone-source-qualified"
   },
   "package": {
-    "filename": "knowledge-forge-ai-theme-forge-stellar-burst-0.5.0.tgz",
-    "sha256": "1222b613b119f785061ac61e25eccf3af9810f2b118a4669481c23cd390c661e",
-    "size": 634077
+    "filename": "knowledge-forge-ai-theme-forge-stellar-burst-0.6.0.tgz",
+    "sha256": "e6437f520745d54e461c51afcc77b1a457363237d3e7f788ed14f0c26c66a4a4",
+    "size": 665842
   },
   "raster": {
     "filename": "knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -76,10 +76,10 @@
   },
   "loom": {
     "name": "@knowledge-forge-ai/theme-forge-stellar-loom",
-    "version": "0.3.0",
-    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.3.0.tgz",
-    "sha256": "a1363ad628c2e9dc73c8a44f5d841d18ea44fd4d27217dbe4711b3a2e491aaf0",
-    "size": 272513,
+    "version": "0.4.0",
+    "filename": "knowledge-forge-ai-theme-forge-stellar-loom-0.4.0.tgz",
+    "sha256": "4550314d9a6eb9a016c8637eb2a0a98e9a410210ad6546642dfce31c7402c9ec",
+    "size": 273462,
     "catalogBuildEvidence": {
       "schema": "tfsl.catalog-build-evidence-v1",
       "sha256": "a5f07be4a3c6b01e81ead72dec1d09e1652f08c6319423c23f285f0e9a7868f3",
@@ -138,13 +138,17 @@
   },
   "canonicalEpochMs": 1704067200000,
   "scene": {
-    "status": "omitted-by-contract"
+    "status": "included-authenticated",
+    "filename": "scene-input.tgz",
+    "sha256": "842fbf29a7ea0a715503a50aa5dd860b6dcaef953b8c6d9030450e76a1732df5",
+    "bytes": 211244,
+    "sourceTreeDigest": "5867d66fa55fba4989628ffb4e4e446cfd6b25911b8928e500ab6a847dd2c2dd"
   },
   "solarSail": {
     "name": "@knowledge-forge-ai/theme-forge-solar-sail",
-    "version": "0.1.0",
-    "filename": "knowledge-forge-ai-theme-forge-solar-sail-0.1.0.tgz",
-    "sha256": "6129ba880ac506024de5d1408aa26447944133de99bded06843825ed3b252bc2",
-    "size": 56524
+    "version": "0.2.0",
+    "filename": "knowledge-forge-ai-theme-forge-solar-sail-0.2.0.tgz",
+    "sha256": "1a5e948d6970022f57ecde0ec1d9138650f2b78c7fafc0224f63e4ec8c223454",
+    "size": 109981
   }
 }

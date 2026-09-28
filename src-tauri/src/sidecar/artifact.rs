@@ -12,19 +12,17 @@ pub(crate) static DISTRIBUTION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mute
 
 use crate::sidecar::framing::validate_strict_object;
 
-const O_NOFOLLOW: i32 = 0x0000_0100;
+use crate::platform::O_NOFOLLOW;
 const MAX_AGGREGATE_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILES: usize = 10_000;
 const MAX_MANIFEST_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 512;
-const NATIVE_PATH: &str =
-    "native/directory-snapshot/prebuilds/darwin-arm64/native-addon-posix-openat-v1.node";
 const RASTER_PACKAGE_PATH: &str = "node_modules/@knowledge-forge-ai/tfsb-raster-resvg/package.json";
 const WASM_PATH: &str = "node_modules/@resvg/resvg-wasm/index_bg.wasm";
 const ENTRYPOINT: &str = "dist/service-protocol/server-cli.js";
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Manifest {
     core: CoreIdentity,
@@ -44,15 +42,16 @@ struct Manifest {
     totals: Totals,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct CoreIdentity {
     name: String,
-    tarball: TarballIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tarball: Option<TarballIdentity>,
     version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct TarballIdentity {
     sha1: String,
@@ -61,7 +60,7 @@ struct TarballIdentity {
     sri: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RuntimeIdentity {
     mode: u32,
@@ -72,15 +71,18 @@ struct RuntimeIdentity {
     version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SourceIdentity {
     actual_input_digest: String,
-    base_commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_commit: Option<String>,
     model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_candidate: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProtocolIdentity {
     inventory_sha256: String,
@@ -88,7 +90,7 @@ struct ProtocolIdentity {
     results_sha256: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct NativeIdentity {
     abi: u8,
@@ -98,7 +100,7 @@ struct NativeIdentity {
     target: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RasterIdentity {
     name: String,
@@ -106,7 +108,7 @@ struct RasterIdentity {
     version: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ResvgIdentity {
     name: String,
@@ -124,7 +126,7 @@ struct ManifestFile {
     size: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Totals {
     bytes: u64,
@@ -135,7 +137,8 @@ struct Totals {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ActualInputIdentity<'a> {
-    core_tarball: &'a TarballIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    core_tarball: Option<&'a TarballIdentity>,
     files: &'a [ManifestFile],
 }
 
@@ -487,6 +490,7 @@ fn valid_hex(value: &str, length: usize) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+#[cfg(not(nebular_source_build))]
 fn valid_sri(value: &str) -> bool {
     let Some(encoded) = value.strip_prefix("sha512-") else {
         return false;
@@ -520,6 +524,50 @@ fn protocol_file(version: &str, kind: &str) -> String {
     format!("protocol/tfsb-studio-v1/{kind}{suffix}{schema}.json")
 }
 
+fn native_path_for_target(target: &str) -> io::Result<String> {
+    let addon = match target {
+        "aarch64-apple-darwin" => "darwin-arm64",
+        "aarch64-unknown-linux-gnu" => "linux-arm64-gnu",
+        "x86_64-unknown-linux-gnu" => "linux-x64-gnu",
+        _ => return Err(io::Error::other("unsupported target triple")),
+    };
+    Ok(format!(
+        "native/directory-snapshot/prebuilds/{addon}/native-addon-posix-openat-v1.node"
+    ))
+}
+
+#[cfg(nebular_source_build)]
+static SOURCE_PINS_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/source-build-pins.json"));
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct CompiledPins {
+    source_candidate: String,
+    target: String,
+    sidecar_manifest: Manifest,
+    scene: PinnedEngineBinding,
+    loom: PinnedEngineBinding,
+}
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct PinnedEngineBinding {
+    node: PinnedRuntimeIdentity,
+    files: serde::de::IgnoredAny,
+}
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PinnedRuntimeIdentity {
+    sha256: String,
+    bytes: u64,
+}
+
 fn verify_manifest(
     manifest: &Manifest,
     raw: &str,
@@ -530,47 +578,96 @@ fn verify_manifest(
         != raw
         || !verify_self_digest(raw, &manifest.manifest_digest)
         || manifest.schema != "tfsb.studio-sidecar-distribution"
-        || manifest.schema_version != 1
-        || manifest.target != "aarch64-apple-darwin"
-        || manifest.runtime_kind != "node-runtime-payload-v1"
         || manifest.entrypoint != ENTRYPOINT
-        || manifest.source.model != "closed-input-digest-v1"
-        || !valid_hex(&manifest.source.base_commit, 40)
+        || manifest.runtime_kind != "node-runtime-payload-v1"
+        || manifest.core.name != "@knowledge-forge-ai/theme-forge-stellar-burst"
+        || (manifest.core.version != "0.5.0" && manifest.core.version != "0.6.0")
         || !valid_hex(&manifest.source.actual_input_digest, 64)
     {
         return Err(io::Error::other("manifest identity"));
     }
-    if manifest.core.name != "@knowledge-forge-ai/theme-forge-stellar-burst"
-        || manifest.core.version != "0.5.0"
-        || !valid_hex(&manifest.core.tarball.sha1, 40)
-        || !valid_hex(&manifest.core.tarball.sha256, 64)
-        || manifest.core.tarball.size > MAX_FILE_BYTES
-        || !valid_sri(&manifest.core.tarball.sri)
-        || manifest.runtime.version != "22.23.2"
-        || manifest.runtime.v8 != "12.4.254.21-node.56"
-        || manifest.runtime.target != "aarch64-apple-darwin"
-        || manifest.runtime.mode != 0o755
-        || manifest.runtime.sha256
-            != "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572"
-        || manifest.runtime.size != 112_937_728
-        || manifest.native.backend != "native-addon-posix-openat-v1"
-        || manifest.native.abi != 1
-        || manifest.native.target != "aarch64-apple-darwin"
-        || manifest.native.sha256
-            != "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8"
-        || manifest.native.size != 53_344
-        || manifest.raster.name != "@knowledge-forge-ai/tfsb-raster-resvg"
-        || manifest.raster.version != "0.0.0-tfsb47f"
-        || manifest.raster.package_json_sha256
-            != "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
-        || manifest.resvg.name != "@resvg/resvg-wasm"
-        || manifest.resvg.version != "2.6.2"
-        || manifest.resvg.wasm_sha256
-            != "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70"
-        || manifest.resvg.wasm_size != 2_478_606
+
+    #[cfg(nebular_source_build)]
     {
-        return Err(io::Error::other("manifest nested identity"));
+        if manifest.schema_version != 2
+            || manifest.source.model != "source-candidate-v2"
+            || manifest.source.base_commit.is_some()
+            || manifest.core.tarball.is_some()
+            || manifest.runtime.target != manifest.target
+            || manifest.native.target != manifest.target
+            || manifest.native.backend != "native-addon-posix-openat-v1"
+            || manifest.native.abi != 1
+            || manifest.runtime.mode != 0o755
+        {
+            return Err(io::Error::other("manifest identity"));
+        }
+        let pins: CompiledPins = serde_json::from_str(SOURCE_PINS_JSON)
+            .map_err(|_| io::Error::other("compiled pins deserialization"))?;
+        if !valid_hex(&pins.source_candidate, 64)
+            || manifest.source.source_candidate.as_deref() != Some(&pins.source_candidate)
+            || manifest.target != pins.target
+            || manifest != &pins.sidecar_manifest
+            || pins.scene.node.sha256 != manifest.runtime.sha256
+            || pins.scene.node.bytes != manifest.runtime.size
+            || pins.loom.node.sha256 != manifest.runtime.sha256
+            || pins.loom.node.bytes != manifest.runtime.size
+        {
+            return Err(io::Error::other(
+                "manifest does not match compiled source pins",
+            ));
+        }
     }
+
+    #[cfg(not(nebular_source_build))]
+    {
+        if manifest.schema_version != 1
+            || manifest.target != "aarch64-apple-darwin"
+            || manifest.source.model != "closed-input-digest-v1"
+            || manifest.source.source_candidate.is_some()
+            || manifest
+                .source
+                .base_commit
+                .as_ref()
+                .is_none_or(|c| !valid_hex(c, 40))
+        {
+            return Err(io::Error::other("manifest identity"));
+        }
+        let tarball = manifest
+            .core
+            .tarball
+            .as_ref()
+            .ok_or_else(|| io::Error::other("manifest core tarball"))?;
+        if !valid_hex(&tarball.sha1, 40)
+            || !valid_hex(&tarball.sha256, 64)
+            || tarball.size > MAX_FILE_BYTES
+            || !valid_sri(&tarball.sri)
+            || manifest.runtime.version != "22.23.2"
+            || manifest.runtime.v8 != "12.4.254.21-node.56"
+            || manifest.runtime.target != "aarch64-apple-darwin"
+            || manifest.runtime.mode != 0o755
+            || manifest.runtime.sha256
+                != "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572"
+            || manifest.runtime.size != 112_937_728
+            || manifest.native.backend != "native-addon-posix-openat-v1"
+            || manifest.native.abi != 1
+            || manifest.native.target != "aarch64-apple-darwin"
+            || manifest.native.sha256
+                != "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8"
+            || manifest.native.size != 53_344
+            || manifest.raster.name != "@knowledge-forge-ai/tfsb-raster-resvg"
+            || manifest.raster.version != "0.0.0-tfsb47f"
+            || manifest.raster.package_json_sha256
+                != "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
+            || manifest.resvg.name != "@resvg/resvg-wasm"
+            || manifest.resvg.version != "2.6.2"
+            || manifest.resvg.wasm_sha256
+                != "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70"
+            || manifest.resvg.wasm_size != 2_478_606
+        {
+            return Err(io::Error::other("manifest nested identity"));
+        }
+    }
+
     if manifest.files.len() > MAX_FILES || manifest.files.len() != actual.len() {
         return Err(io::Error::other("payload file count"));
     }
@@ -612,7 +709,7 @@ fn verify_manifest(
     let inventory = serde_json::to_string(&manifest.files)
         .map_err(|_| io::Error::other("payload inventory serialization"))?;
     let actual_input = serde_json::to_string(&ActualInputIdentity {
-        core_tarball: &manifest.core.tarball,
+        core_tarball: manifest.core.tarball.as_ref(),
         files: &manifest.files,
     })
     .map_err(|_| io::Error::other("actual input serialization"))?;
@@ -624,7 +721,8 @@ fn verify_manifest(
     {
         return Err(io::Error::other("payload totals"));
     }
-    let native = required(&by_path, NATIVE_PATH)?;
+    let native_path = native_path_for_target(&manifest.target)?;
+    let native = required(&by_path, &native_path)?;
     let raster = required(&by_path, RASTER_PACKAGE_PATH)?;
     let wasm = required(&by_path, WASM_PATH)?;
     required(&by_path, ENTRYPOINT)?;
@@ -874,7 +972,7 @@ mod tests {
     ) -> io::Result<()> {
         if !preserve_actual_input {
             let actual = serde_json::to_string(&ActualInputIdentity {
-                core_tarball: &manifest.core.tarball,
+                core_tarball: manifest.core.tarball.as_ref(),
                 files: &manifest.files,
             })
             .map_err(|_| io::Error::other("test actual input serialization"))?;
@@ -1075,7 +1173,7 @@ mod tests {
                     )?;
                 }
                 "source-identity" => {
-                    manifest.source.base_commit = "wrong".to_owned();
+                    manifest.source.base_commit = Some("wrong".to_owned());
                     write_closed_manifest(&payload, &mut manifest, false)?;
                 }
                 "core-identity" => {
@@ -1149,6 +1247,60 @@ mod tests {
             }
             fs::remove_dir_all(root)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn source_candidate_v2_manifest_roundtrip_and_actual_input() -> io::Result<()> {
+        let manifest_str = r#"{"core":{"name":"@knowledge-forge-ai/theme-forge-stellar-burst","version":"0.5.0"},"entrypoint":"dist/service-protocol/server-cli.js","files":[],"manifestDigest":"0000000000000000000000000000000000000000000000000000000000000000","native":{"abi":1,"backend":"native-addon-posix-openat-v1","sha256":"2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8","size":53344,"target":"aarch64-apple-darwin"},"protocol":{},"raster":{"name":"@knowledge-forge-ai/tfsb-raster-resvg","packageJsonSha256":"14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12","version":"0.0.0-tfsb47f"},"resvg":{"name":"@resvg/resvg-wasm","version":"2.6.2","wasmSha256":"22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70","wasmSize":2478606},"runtime":{"mode":493,"sha256":"18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572","size":112937728,"target":"aarch64-apple-darwin","v8":"12.4.254.21-node.56","version":"22.23.2"},"runtimeKind":"node-runtime-payload-v1","schema":"tfsb.studio-sidecar-distribution","schemaVersion":2,"source":{"actualInputDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","model":"source-candidate-v2","sourceCandidate":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"target":"aarch64-apple-darwin","totals":{"bytes":0,"fileCount":0,"inventoryDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}"#;
+        let manifest: Manifest =
+            serde_json::from_str(manifest_str).map_err(|e| io::Error::other(e.to_string()))?;
+        if manifest.schema_version != 2
+            || manifest.source.model != "source-candidate-v2"
+            || manifest.source.base_commit.is_some()
+            || manifest.source.source_candidate.as_deref()
+                != Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            || manifest.core.tarball.is_some()
+        {
+            return Err(io::Error::other("unexpected manifest fields"));
+        }
+        let serialized =
+            serde_json::to_string(&manifest).map_err(|e| io::Error::other(e.to_string()))?;
+        if serialized != manifest_str {
+            return Err(io::Error::other("serialization mismatch"));
+        }
+        let actual_input = serde_json::to_string(&ActualInputIdentity {
+            core_tarball: manifest.core.tarball.as_ref(),
+            files: &manifest.files,
+        })
+        .map_err(|e| io::Error::other(e.to_string()))?;
+        if actual_input != r#"{"files":[]}"# {
+            return Err(io::Error::other("actual input mismatch"));
+        }
+        Ok(())
+    }
+
+    #[cfg(nebular_source_build)]
+    #[test]
+    fn source_build_compiled_pins_reject_resealed_native_identity() -> io::Result<()> {
+        let _guard = super::DISTRIBUTION_TEST_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("distribution test lock"))?;
+        let (root, binary, payload) = copied_fixture("source-pins")?;
+        verify_distribution(&binary, &payload)?;
+        let pins: super::CompiledPins = serde_json::from_str(super::SOURCE_PINS_JSON)
+            .map_err(io::Error::other)?;
+        let mut manifest: Manifest = serde_json::from_slice(&fs::read(payload.join("manifest.json"))?)
+            .map_err(io::Error::other)?;
+        assert_eq!(manifest, pins.sidecar_manifest);
+        manifest.native.sha256 = "0".repeat(64);
+        write_closed_manifest(&payload, &mut manifest, false)?;
+        assert!(verify_distribution(&binary, &payload).is_err());
+        let mut manifest = pins.sidecar_manifest;
+        manifest.core.version = "0.5.0".into();
+        write_closed_manifest(&payload, &mut manifest, false)?;
+        assert!(verify_distribution(&binary, &payload).is_err());
+        fs::remove_dir_all(root)?;
         Ok(())
     }
 }

@@ -4,6 +4,7 @@ pub mod app_theme;
 pub mod commands;
 mod design_evidence;
 pub mod errors;
+mod platform;
 pub mod scene;
 mod sidecar;
 pub mod state;
@@ -92,10 +93,9 @@ pub fn run() {
                 .parent()
                 .ok_or_else(|| "application executable has no parent".to_owned())?
                 .join("tfsb-studio-service");
-            let resource = app
-                .path()
-                .resource_dir()
-                .map_err(|error| error.to_string())?;
+            let resource = platform::resource_dir(&executable, || {
+                app.path().resource_dir().map_err(|error| error.to_string())
+            })?;
             let temp = app
                 .path()
                 .app_cache_dir()

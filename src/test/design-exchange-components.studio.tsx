@@ -15,6 +15,7 @@ import { AnnotationEditor } from "../features/design-exchange/AnnotationEditor";
 import { BriefBuilder, type BriefTargetOption } from "../features/design-exchange/BriefBuilder";
 import { DesignExchange, resolveBriefTargetEvidence } from "../features/design-exchange/DesignExchange";
 import { designSessionReducer, initialDesignSession } from "../features/design-exchange/design-session-state";
+import packageJson from "../../package.json";
 
 const candidate = JSON.parse(readFileSync(resolve("protocol/tfsb-design-evidence-v1/examples/candidate-a.json"), "utf8")) as CandidatePacket;
 const digest = (suffix: number) => `sha256:${suffix.toString(16).padStart(64, "0")}` as CandidatePacket["candidateDigest"];
@@ -97,7 +98,7 @@ function createMockClients(brief: BriefPacket, overrides?: { brandStatus?: Parti
 
 const mockHostStatus = {
   schemaVersion: 1 as const,
-  studioVersion: "0.1.0" as const,
+  studioVersion: packageJson.version,
   manifestDigest: "a".repeat(64),
   state: "ready" as const,
   selectedProtocolVersion: "1.2" as const,
@@ -251,7 +252,7 @@ describe("complete design-exchange controls", () => {
 
     const hostStatus = {
       schemaVersion: 1 as const,
-      studioVersion: "0.1.0" as const,
+      studioVersion: packageJson.version,
       manifestDigest: "a".repeat(64),
       state: "ready" as const,
       selectedProtocolVersion: "1.2" as const,

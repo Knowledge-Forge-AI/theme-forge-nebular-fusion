@@ -205,7 +205,7 @@ impl SidecarSupervisor {
             };
         StudioHostStatus {
             schema_version: 1,
-            studio_version: "0.1.0",
+            studio_version: env!("CARGO_PKG_VERSION"),
             manifest_digest: self.manifest_digest.clone(),
             state: self.state.clone(),
             selected_protocol_version: matches!(self.state, HostLifecycleState::Ready)

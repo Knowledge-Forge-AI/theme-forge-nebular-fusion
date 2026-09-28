@@ -49,11 +49,13 @@ async function loadOpenpgp() {
 }
 
 
-export const EXPECTED_NODE_VERSION = "22.23.2";
+import { NODE_RELEASE_IDENTITY } from "./ci-contract.mjs";
+
+export const EXPECTED_NODE_VERSION = NODE_RELEASE_IDENTITY.version;
 export const EXPECTED_TARBALL_NAME = `node-v${EXPECTED_NODE_VERSION}-darwin-arm64.tar.gz`;
-export const EXPECTED_TARBALL_SHA256 = "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6";
-export const EXPECTED_EXECUTABLE_SHA256 = "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572";
-export const EXPECTED_EXECUTABLE_SIZE = 112_937_728;
+export const EXPECTED_TARBALL_SHA256 = NODE_RELEASE_IDENTITY.darwinArm64TarballSha256;
+export const EXPECTED_EXECUTABLE_SHA256 = NODE_RELEASE_IDENTITY.nodeExecutableSha256;
+export const EXPECTED_EXECUTABLE_SIZE = NODE_RELEASE_IDENTITY.nodeExecutableSize;
 
 /** @type {Record<string, string>} */
 export const OFFICIAL_RELEASERS = {

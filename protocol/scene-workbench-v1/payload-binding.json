@@ -1,13 +1,13 @@
 {
-  "sha256": "013dc18c13b0e6d3abc82bb9f2c22af091b4af1a6321a0cf425c0a3978ab5709",
-  "bytes": 211242,
-  "sourceTreeDigest": "964775fc674636e296d8a343272b0984f4f18c185f4434880b53bff5ce85ef48",
+  "sha256": "842fbf29a7ea0a715503a50aa5dd860b6dcaef953b8c6d9030450e76a1732df5",
+  "bytes": 211244,
+  "sourceTreeDigest": "5867d66fa55fba4989628ffb4e4e446cfd6b25911b8928e500ab6a847dd2c2dd",
   "executableFiles": 39,
   "schema": "tfsb.nebular-scene-binding-v1",
   "engineSchema": "tfsb.vector-scene-v1",
   "compatibility": 1,
   "compilerLevel": 1,
-  "metadataVersion": "0.5.0",
+  "metadataVersion": "0.6.0",
   "capability": "0.5-development",
   "node": {
     "version": "22.23.2",
@@ -145,7 +145,7 @@
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/package.json",
       "bytes": 170,
-      "sha256": "752c20a23486c64adcf697246370cb5162d83306d90b58ba166eb0ba4523b343"
+      "sha256": "1639f1951c07f2af5c8219e89f1b475feb390c6bf4ee8d17fbff820f3124a3ab"
     },
     {
       "path": "node_modules/@xmldom/xmldom/CHANGELOG.md",
@@ -325,7 +325,7 @@
     {
       "path": "scene-input.json",
       "bytes": 8363,
-      "sha256": "f84ccf13d315ddf8daf3634bc20b0ed38eb25960bf7d9e888866cdeab5a62b00"
+      "sha256": "c90a2c8a71913c2864f5afda0bdddf11977dd7f73978b077e60fc0464aa8344e"
     }
   ]
 }

@@ -18,6 +18,11 @@ import { ThemeLab } from "./features/theme-lab/ThemeLab";
 import { MockThemeLabBridge } from "./features/theme-lab/test/mock-bridge";
 import { ApplicationThemeLab } from "./features/application-theme/ApplicationThemeLab";
 import { MockAppThemeBridge } from "./features/application-theme/app-theme-bridge";
+import { VectorGraphicsLab } from "./features/vector-graphics/components/VectorGraphicsLab";
+import { MockVectorGraphicsBridge } from "./features/vector-graphics/mock-bridge";
+import packageJson from "../package.json";
+import "./features/vector-graphics/styles.css";
+import "./styles/self-theme.css";
 import "./styles/studio.css";
 
 const sha = (digit: string): Sha256Digest => `sha256:${digit.repeat(64)}` as Sha256Digest;
@@ -57,7 +62,7 @@ const client: StudioBrandReadClient = {
   async getConsumerLockStatus() { return consumerLock; }, async getExportCapability() { return scenario === "unavailable" ? { available: false } : exportCapability; },
   async listExportStatus() { if (scenario === "error") return domainError(); return scenario === "empty" ? empty() : exportStatus; }, async getVisualEvidence(request) { return evidence(request); },
 };
-const host: StudioHostStatus = { schemaVersion: 1, studioVersion: "0.1.0", manifestDigest: "a".repeat(64), state: "ready", selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: [], capabilities: null, raster: { available: scenario !== "unavailable", qualificationIdentity: scenario === "unavailable" ? null : sha("4") }, projectOpenCount: 1, sourceOpenCount: 1, lastReasonCode: null };
+const host: StudioHostStatus = { schemaVersion: 1, studioVersion: packageJson.version, manifestDigest: "a".repeat(64), state: "ready", selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: [], capabilities: null, raster: { available: scenario !== "unavailable", qualificationIdentity: scenario === "unavailable" ? null : sha("4") }, projectOpenCount: 1, sourceOpenCount: 1, lastReasonCode: null };
 const project: StudioProjectOpen = { projectHandle: "project_fixture", rootKind: "project", schemaVersion: 2, name: "Terminal Nova", canonicalDigest: sha("3"), assetCount: 2, companionCount: 0, state: null };
 const source: StudioSourceOpen = { sourceHandle: "source_fixture", rootKind: "source", sourceKind: null, authorityKind: "brand-bundle", digest: sha("4"), packageId: "terminal-nova", brandVersion: "1.0.0", brandSystemDigest: sha("5"), candidateCount: null, profileCount: 1, assetCount: 2, companionCount: 0 };
 const packetProject: StudioProjectOpen = scenario.startsWith("exchange") ? { ...project, canonicalDigest: sha("0") } : project;
@@ -88,7 +93,9 @@ const planClient: StudioBrandPlanClient = {
   async cancelPlanOperation() { return { accepted: true }; },
 };
 const root = document.getElementById("root"); if (!root) throw new Error("fixture root missing");
-if (scenario === "themelab") {
+if (scenario === "vector") {
+  createRoot(root).render(<VectorGraphicsLab bridge={new MockVectorGraphicsBridge()} />);
+} else if (scenario === "themelab") {
   createRoot(root).render(<ThemeLab bridge={new MockThemeLabBridge()} />);
 } else if (scenario.startsWith("app-theme") || scenario === "application-theme") {
   const degraded = new URLSearchParams(location.search).get("degraded");
