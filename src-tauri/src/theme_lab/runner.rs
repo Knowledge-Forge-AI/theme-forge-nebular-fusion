@@ -22,7 +22,7 @@ const MAX_COMPILE_OUTPUT_BYTES: usize = 2 * 1024 * 1024 + 1024; // 2MB for compi
 const MAX_PACKET_BYTES: usize = 16 * 1024 * 1024; // 16MB for exchange packets
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const COMPILER_VERSION: &str = "0.3.0";
+pub const COMPILER_VERSION: &str = "0.4.0";
 
 #[derive(Debug, Default)]
 struct ExecutionState {
@@ -127,14 +127,7 @@ impl ThemeLabRunner {
     }
 
     pub fn is_packaged_bundle(current_exe: &Path) -> bool {
-        if !tauri::is_dev() {
-            return true;
-        }
-        current_exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.file_name())
-            .is_some_and(|name| name == "Contents")
+        crate::platform::is_packaged_bundle(current_exe)
     }
 
     pub fn discover(resource_dir: &Path, current_exe: &Path) -> Self {
@@ -146,11 +139,12 @@ impl ThemeLabRunner {
     }
 
     pub fn discover_with_mode(resource_dir: &Path, current_exe: &Path, packaged: bool) -> Self {
+        let node_binary = crate::platform::select_runtime(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            current_exe,
+            packaged,
+        );
         if packaged || !cfg!(debug_assertions) {
-            let bundled_node = current_exe
-                .parent()
-                .map(|parent| parent.join("tfsb-studio-service"))
-                .unwrap_or_else(|| PathBuf::from("/nonexistent/tfsb-studio-service"));
             let bundled_adapter = if resource_dir.join("bin").join("tfsl-batch.js").is_file() {
                 resource_dir.join("bin").join("tfsl-batch.js")
             } else {
@@ -161,7 +155,7 @@ impl ThemeLabRunner {
             };
             let bundled_v2 = resource_dir.join("loom-adapter").join("theme-adapter.mjs");
             Self {
-                node_binary: bundled_node,
+                node_binary,
                 batch_adapter: bundled_adapter,
                 v2_adapter: Some(bundled_v2),
                 controller: Arc::new(ExecutionController::default()),
@@ -169,21 +163,6 @@ impl ThemeLabRunner {
             }
         } else {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            let node_binary = if let Ok(path) = std::env::var("TFSB_STUDIO_NODE_BINARY") {
-                PathBuf::from(path)
-            } else if let Some(parent) = current_exe.parent()
-                && let candidate = parent.join("tfsb-studio-service")
-                && candidate.is_file()
-            {
-                candidate
-            } else if root
-                .join("binaries/tfsb-studio-service-aarch64-apple-darwin")
-                .is_file()
-            {
-                root.join("binaries/tfsb-studio-service-aarch64-apple-darwin")
-            } else {
-                PathBuf::from("node")
-            };
 
             let bundled_adapter = if resource_dir.join("bin").join("tfsl-batch.js").is_file() {
                 resource_dir.join("bin").join("tfsl-batch.js")
@@ -214,7 +193,7 @@ impl ThemeLabRunner {
     }
 
     pub fn is_available(&self) -> bool {
-        let node_ok = self.node_binary.is_file() || self.node_binary == Path::new("node");
+        let node_ok = self.node_binary.is_file();
         let batch_ok = self.batch_adapter.is_file();
         let v2_ok = self
             .v2_adapter

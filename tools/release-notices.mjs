@@ -17,15 +17,16 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, lstatSync, constants, openSync, fstatSync, closeSync, opendirSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { targetForHost, readCandidateVersion, requireCandidateVersion } from "./platform-targets.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const STUDIO_ROOT = resolve(__dirname, "..");
 export const DEFAULT_OUTPUT_DIR = resolve(STUDIO_ROOT, "src-tauri/release-notices");
-export const TARGET_PLATFORM = "aarch64-apple-darwin";
+export const TARGET_PLATFORM = targetForHost().triple;
 export const CARGO_METADATA_FORMAT = "1";
 
 const MAX_PATH_BYTES = 512;
@@ -424,7 +425,7 @@ export function renderThirdPartyNoticesJson(manifestData) {
     targetPlatform: TARGET_PLATFORM,
     root: {
       name: manifestData.root?.name || "@knowledge-forge-ai/theme-forge-nebular-fusion",
-      version: manifestData.root?.version || "0.3.0",
+      version: requireCandidateVersion(manifestData.root?.version),
       license: manifestData.root?.license || "AGPL-3.0-or-later",
       files: (manifestData.root?.files || []).map((f) => normalizeSafeRelativePath(f)).sort(),
     },
@@ -478,7 +479,7 @@ export function renderThirdPartyNoticesMarkdown(manifestData) {
     "## Application",
     "",
     `- **Package:** ${manifestData.root?.name || "@knowledge-forge-ai/theme-forge-nebular-fusion"}`,
-    `- **Version:** ${manifestData.root?.version || "0.3.0"}`,
+    `- **Version:** ${requireCandidateVersion(manifestData.root?.version)}`,
     `- **Primary License:** ${manifestData.root?.license || "AGPL-3.0-or-later"}`,
     `- **Commercial Terms:** Available under separate commercial agreement (see \`root/COMMERCIAL-LICENSE.md\`).`,
     "",
@@ -621,6 +622,7 @@ export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
  */
 export async function generateReleaseNotices(options = {}) {
   const studioRoot = resolve(options.studioRoot || STUDIO_ROOT);
+  const candidateVersion = readCandidateVersion(studioRoot);
   const outDir = resolve(options.outDir || DEFAULT_OUTPUT_DIR);
   const writeFiles = options.writeFiles !== false;
   const failOnMissing = options.failOnMissing !== false; // Default true: strict check
@@ -745,7 +747,7 @@ export async function generateReleaseNotices(options = {}) {
   const manifestData = {
     root: {
       name: "@knowledge-forge-ai/theme-forge-nebular-fusion",
-      version: "0.3.0",
+      version: candidateVersion,
       license: "AGPL-3.0-or-later",
       files: rootNotices.map((n) => n.relativePath),
     },
@@ -827,6 +829,7 @@ export async function generateReleaseNotices(options = {}) {
         const dest = joinSafeRelative(outDir, notice.relativePath);
         await mkdir(dirname(dest), { recursive: true });
         await cp(notice.sourcePath, dest);
+        await chmod(dest, 0o644);
         writtenFiles.push(notice.relativePath);
       }
     }
@@ -838,6 +841,7 @@ export async function generateReleaseNotices(options = {}) {
           const dest = joinSafeRelative(outDir, file.relativePath);
           await mkdir(dirname(dest), { recursive: true });
           await cp(file.sourcePath, dest);
+          await chmod(dest, 0o644);
           writtenFiles.push(file.relativePath);
         }
       }
@@ -850,6 +854,7 @@ export async function generateReleaseNotices(options = {}) {
           const dest = joinSafeRelative(outDir, file.relativePath);
           await mkdir(dirname(dest), { recursive: true });
           await cp(file.sourcePath, dest);
+          await chmod(dest, 0o644);
           writtenFiles.push(file.relativePath);
         }
       }

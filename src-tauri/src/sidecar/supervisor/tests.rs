@@ -1675,3 +1675,16 @@ fn idle_crash_saturation_restart_shutdown_and_drop_are_bounded() -> Result<(), S
     drop(dropped);
     Ok(())
 }
+
+#[test]
+fn status_reports_package_version() {
+    let mut supervisor = SidecarSupervisor::new(
+        PathBuf::from("/any/binary"),
+        PathBuf::from("/any/payload"),
+        PathBuf::from("/any/temp"),
+    );
+    let status = supervisor.status();
+    assert_eq!(status.studio_version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(status.server_version, None);
+    assert_eq!(status.selected_protocol_version, None);
+}

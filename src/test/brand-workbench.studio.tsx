@@ -11,6 +11,7 @@ import type {
 import { validateAssetIdentity, validateFamilyPage, validateVisualEvidence } from "../brand-read/validators";
 import { BrandWorkbench } from "../features/brand-workbench/BrandWorkbench";
 import type { StudioHostStatus, StudioProjectOpen, StudioSourceOpen } from "../protocol/contracts";
+import packageJson from "../../package.json";
 
 const sha = (digit: string): Sha256Digest => `sha256:${digit.repeat(64)}` as Sha256Digest;
 const emptyPage = <T,>(items: readonly T[] = []) => ({ page: { size: 64, count: items.length, items, nextCursor: null }, viewDigest: sha("9") });
@@ -44,7 +45,7 @@ const client: StudioBrandReadClient = {
   async getVisualEvidence() { throw new Error("raster unavailable"); },
 };
 
-const host: StudioHostStatus = { schemaVersion: 1, studioVersion: "0.1.0", manifestDigest: "a".repeat(64), state: "ready", selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: [], capabilities: null, raster: { available: false, qualificationIdentity: null }, projectOpenCount: 1, sourceOpenCount: 1, lastReasonCode: null };
+const host: StudioHostStatus = { schemaVersion: 1, studioVersion: packageJson.version, manifestDigest: "a".repeat(64), state: "ready", selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: [], capabilities: null, raster: { available: false, qualificationIdentity: null }, projectOpenCount: 1, sourceOpenCount: 1, lastReasonCode: null };
 const project: StudioProjectOpen = { projectHandle: "project_opaque", rootKind: "project", schemaVersion: 2, name: "Terminal Nova", canonicalDigest: sha("3"), assetCount: 1, companionCount: 0, state: null };
 const source: StudioSourceOpen = { sourceHandle: "source_opaque", rootKind: "source", sourceKind: null, authorityKind: "brand-bundle", digest: sha("4"), packageId: "vendor", brandVersion: "1.0.0", brandSystemDigest: sha("5"), candidateCount: null, profileCount: 1, assetCount: 1, companionCount: 0 };
 

@@ -19,7 +19,7 @@ const MAX_COMPILE_OUTPUT_BYTES: usize = 2 * 1024 * 1024 + 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const COMPILER_VERSION: &str = "0.1.0";
+pub const COMPILER_VERSION: &str = "0.2.0";
 
 pub(crate) const SOLAR_SAIL_ADAPTER_BYTES: &[u8] =
     include_bytes!("../../solar-sail-adapter/solar-sail-adapter.mjs");
@@ -111,14 +111,7 @@ impl<'a> Drop for ChildProcessGuard<'a> {
 
 impl AppThemeRunner {
     pub fn is_packaged_bundle(current_exe: &Path) -> bool {
-        if !tauri::is_dev() {
-            return true;
-        }
-        current_exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.file_name())
-            .is_some_and(|name| name == "Contents")
+        crate::platform::is_packaged_bundle(current_exe)
     }
 
     pub fn discover(resource: &Path, executable: &Path) -> Self {
@@ -135,11 +128,12 @@ impl AppThemeRunner {
     }
 
     pub fn discover_with_mode(resource: &Path, executable: &Path, packaged: bool) -> Self {
+        let node_binary = crate::platform::select_runtime(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            executable,
+            packaged,
+        );
         if packaged || !cfg!(debug_assertions) {
-            let node_binary = executable
-                .parent()
-                .map(|p| p.join("tfsb-studio-service"))
-                .unwrap_or_else(|| PathBuf::from("/nonexistent/tfsb-studio-service"));
             let adapter_path = resource.join("solar-sail-adapter/solar-sail-adapter.mjs");
             Self {
                 node_binary,
@@ -149,23 +143,6 @@ impl AppThemeRunner {
             }
         } else {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            let node_binary = if let Ok(custom) = std::env::var("TFSB_STUDIO_NODE_BINARY")
-                .or_else(|_| std::env::var("TFSB_NODE_BINARY"))
-            {
-                PathBuf::from(custom)
-            } else if let Some(parent) = executable.parent()
-                && let candidate = parent.join("tfsb-studio-service")
-                && candidate.is_file()
-            {
-                candidate
-            } else if root
-                .join("binaries/tfsb-studio-service-aarch64-apple-darwin")
-                .is_file()
-            {
-                root.join("binaries/tfsb-studio-service-aarch64-apple-darwin")
-            } else {
-                PathBuf::from("node")
-            };
 
             let adapter_path = if resource
                 .join("solar-sail-adapter/solar-sail-adapter.mjs")
@@ -186,15 +163,7 @@ impl AppThemeRunner {
     }
 
     pub fn is_available(&self) -> bool {
-        let node_ok = if self.node_binary == Path::new("node") {
-            Command::new("node")
-                .arg("--version")
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        } else {
-            self.node_binary.is_file()
-        };
+        let node_ok = self.node_binary.is_file();
         let adapter_ok = if self.authenticate_payload {
             authenticate_solar_sail_adapter(&self.adapter_path).is_ok()
         } else {
@@ -497,9 +466,16 @@ impl AppThemeRunner {
         ui_revision: Option<u64>,
     ) -> StudioResult<AppThemeCompileResponse> {
         let rev = ui_revision.unwrap_or(0);
+        // tfss.theme-v1 is a closed schema whose surfaces config only admits radius and borderWidth.
+        // Studio's SurfacesDto retains content: Option<u32> for paired profiles (tf-paired-profile-v1).
+        // Normalize surfaces.content to None on the plain-theme compile path so unknown fields are not sent.
+        let mut clean_spec = specification;
+        if clean_spec.schema_version == "tfss.theme-v1" {
+            clean_spec.surfaces.content = None;
+        }
         let req = AdapterSubprocessRequest {
             action: "compile".to_owned(),
-            specification: Some(specification),
+            specification: Some(clean_spec),
             profile: None,
             destination: None,
             language: None,

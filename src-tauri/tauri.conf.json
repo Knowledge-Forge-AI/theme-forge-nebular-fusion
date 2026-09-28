@@ -1,6 +1,6 @@
 {
   "productName": "Theme Forge Nebular Fusion",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -39,6 +39,7 @@
       "loom-adapter/**/*",
       "solar-sail-payload/**/*",
       "solar-sail-adapter/**/*",
+      "scene-payload/**/*",
       "release-notices/**/*"
     ],
     "targets": [

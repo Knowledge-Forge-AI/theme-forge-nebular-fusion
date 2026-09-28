@@ -55,11 +55,11 @@ describe("Studio package and authority isolation", () => {
     const tauriConfig = JSON.parse(await text("src-tauri/tauri.conf.json")) as { version: string };
     const cargo = await text("src-tauri/Cargo.toml");
 
-    expect(appPackage.version).toBe("0.4.0");
+    expect(appPackage.version).toBe("0.6.0");
     expect(appPackage.private).toBe(true);
-    expect(rootPackage.version).toBe("0.5.0");
-    expect(tauriConfig.version).toBe("0.4.0");
-    expect(cargo).toContain('version = "0.4.0"');
+    expect(rootPackage.version).toBe("0.6.0");
+    expect(tauriConfig.version).toBe(appPackage.version);
+    expect(cargo).toContain(`version = "${appPackage.version}"`);
     for (const group of [appPackage.dependencies, appPackage.devDependencies] as Array<Record<string, string>>) {
       for (const version of Object.values(group)) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
     }

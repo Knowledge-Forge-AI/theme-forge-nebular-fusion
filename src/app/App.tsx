@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { version as applicationVersion } from "../../package.json";
 import type { StudioBrandReadClient } from "../brand-read/StudioBrandReadClient";
 import type { StudioBrandPlanClient } from "../brand-plans/StudioBrandPlanClient";
 import { TauriStudioBrandReadClient } from "../brand-read/tauri-brand-read-client";
@@ -98,7 +99,7 @@ export function App({
     if (!result.cancelled) {
       const duplicate = sources.some((entry) => entry.sourceHandle === result.source.sourceHandle || (entry.packageId && entry.packageId === result.source.packageId));
       if (!duplicate && sources.length < 8) { setSources((current) => [...current, result.source]); setSource(result.source); setSelectionStatus(`Source opened: ${result.source.packageId ?? result.source.authorityKind ?? "content source"}.`); }
-      else setSelectionStatus(duplicate ? "That verified package identity is already open." : "Studio v0.1 retains at most eight verified brand sources.");
+      else setSelectionStatus(duplicate ? "That verified package identity is already open." : "Studio retains at most eight verified brand sources.");
     }
     else setSelectionStatus("Source selection cancelled.");
     setStatus(await hostBridge.getStatus());
@@ -191,7 +192,7 @@ export function App({
           </div>
         ) : null}
       </main>
-      <footer>Nebular Fusion 0.2.0 · Studio protocol 1.2 live reads and typed plans · explicit human confirmation · no embedded model</footer>
+      <footer>Nebular Fusion {applicationVersion} · Studio protocol 1.2 live reads and typed plans · explicit human confirmation · no embedded model</footer>
     </div>
   );
 }

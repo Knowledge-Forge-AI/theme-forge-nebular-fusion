@@ -66,6 +66,7 @@ export const SOLAR_SAIL_PUBLIC_REQUIRED_JOBS = Object.freeze([
 
 export const NATIVE_SNAPSHOT_REQUIRED_TUPLES = Object.freeze([
   "darwin-arm64",
+  "linux-arm64-gnu",
   "linux-x64-gnu",
 ]);
 
@@ -221,6 +222,10 @@ export const NODE_RELEASE_IDENTITY = Object.freeze({
   darwinArm64TarballSha256: "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
   nodeExecutableSha256: "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572",
   nodeExecutableSize: 112_937_728,
+  v8: "12.4.254.21-node.56",
+  target: "aarch64-apple-darwin",
+  tarballName: "node-v22.23.2-darwin-arm64.tar.gz",
+  archiveUrl: "https://nodejs.org/download/release/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz",
   signingKeyFingerprint: "CC68F5A3106FF448322E48ED27F5E38D5B0A215F", // betterleaks:allow -- public Node.js release signing-key fingerprint
   signingKeyReleaser: "Marco Ippolito <marcoippolito54@gmail.com>",
 });

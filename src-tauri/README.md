@@ -1,6 +1,9 @@
 # Rust host checks
 
-The crate is the macOS-arm64 native Tauri bootstrap. It owns the fixed,
+The qualified baseline is the macOS-arm64 native Tauri bootstrap. P4 adds
+three-target prepared-runtime paths and target-specific no-follow flags, but
+Linux runtime authentication and GUI qualification remain incomplete; see
+`../../../docs/evaluations/tfsb71p4-nebular-platforms.md`. The crate owns the fixed,
 authenticated sidecar process and packet/host boundary, including native
 dialog/path mediation, packet I/O, and host/plan state. Native paths remain in
 fixed Rust adapters; the crate exposes no generic filesystem, network, shell,

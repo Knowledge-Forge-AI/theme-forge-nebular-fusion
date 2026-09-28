@@ -13,9 +13,10 @@ import {
   STUDIO_HOST_COMMANDS, StudioHostValidationError, TauriStudioHostBridge,
   validateHostEvent, validateHostStatus, validateProjectResult, validateSourceResult,
 } from "../host/studio-host-bridge";
+import packageJson from "../../package.json";
 
 const status = {
-  schemaVersion: 1, studioVersion: "0.1.0", manifestDigest: "a".repeat(64), state: "ready",
+  schemaVersion: 1, studioVersion: packageJson.version, manifestDigest: "a".repeat(64), state: "ready",
   selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: ["assetDiff", "assetGet", "assetList", "assetValidate", "cancellation", "mutationPlans", "planApply", "previewStatus", "progress", "projectList", "projectOpen", "sourceAnalyze", "sourceOpen", "workspaceOpen", "workspaceStatus"],
   capabilities: {
     baseMethods: ["assetDiff", "assetGet", "assetList", "assetValidate", "cancellation", "mutationPlans", "planApply", "previewStatus", "progress", "projectList", "projectOpen", "sourceAnalyze", "sourceOpen", "workspaceOpen", "workspaceStatus"],
@@ -58,11 +59,16 @@ describe("closed Tauri Studio host bridge", () => {
 
   it("runtime-validates dynamic DTOs, exact keys, handles, and digests", () => {
     expect(validateHostStatus(status).manifestDigest).toBe("a".repeat(64));
+    expect(validateHostStatus(status).studioVersion).toBe(packageJson.version);
     expect(validateHostEvent({ schemaVersion: 1, sequence: 3, state: "crashed", reasonCode: "sidecar-crashed" }).state).toBe("crashed");
     expect(validateProjectResult({ cancelled: false, project: { projectHandle: "project_safe", rootKind: "project", schemaVersion: 1, name: "Demo", canonicalDigest: `sha256:${"b".repeat(64)}`, assetCount: 2, companionCount: 0, state: null } }).cancelled).toBe(false);
     expect(validateSourceResult({ cancelled: false, source: { sourceHandle: "source_safe", rootKind: "source", sourceKind: null, authorityKind: "brand-bundle", digest: null, packageId: "brand", brandVersion: "1.0.0", brandSystemDigest: `sha256:${"c".repeat(64)}`, candidateCount: null, profileCount: 1, assetCount: 2, companionCount: 0 } }).cancelled).toBe(false);
     expect(() => validateHostStatus({ ...status, extra: true })).toThrow(StudioHostValidationError);
     expect(() => validateHostStatus({ ...status, selectedProtocolVersion: "1.0" })).toThrow(StudioHostValidationError);
+    expect(() => validateHostStatus({ ...status, studioVersion: "0.1.0" })).toThrow(StudioHostValidationError);
+    expect(() => validateHostStatus({ ...status, studioVersion: "0.4.0" })).toThrow(StudioHostValidationError);
+    expect(() => validateHostStatus({ ...status, studioVersion: "1.0.0" })).toThrow(StudioHostValidationError);
+    expect(() => validateHostStatus({ ...status, studioVersion: "" })).toThrow(StudioHostValidationError);
     expect(() => validateProjectResult({ cancelled: false, project: { projectHandle: "/private/path" } })).toThrow(StudioHostValidationError);
   });
 
@@ -84,6 +90,7 @@ describe("closed Tauri Studio host bridge", () => {
     expect(validateHostStatus({ ...unavailable, state: "failed", lastReasonCode: "sidecar-artifact-invalid" }).state).toBe("failed");
     for (const candidate of [
       { ...status, serverVersion: "0.2.0" },
+      { ...status, studioVersion: "0.1.0" },
       { ...status, methods: [...status.methods].reverse() },
       { ...status, methods: [...status.methods, status.methods[0]] },
       { ...status, lastReasonCode: "sidecar-crashed" },
@@ -92,6 +99,7 @@ describe("closed Tauri Studio host bridge", () => {
       { ...unavailable, state: "failed", lastReasonCode: null },
       { ...unavailable, state: "crashed", lastReasonCode: "sidecar-request-timeout" },
       { ...unavailable, state: "not-started", raster: status.raster },
+      { ...unavailable, studioVersion: "9.9.9" },
     ]) expect(() => validateHostStatus(candidate)).toThrow(StudioHostValidationError);
   });
 

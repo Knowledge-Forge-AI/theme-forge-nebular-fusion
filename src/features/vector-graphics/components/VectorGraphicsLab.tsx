@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   Artboard,
   ElementType,
@@ -51,6 +51,25 @@ function sanitizeErrorMessage(err: unknown, fallback = "An unexpected error occu
     return `Scene operation failed (${err.reasonCode}): ${SAFE_SCENE_REASON_MESSAGES[err.reasonCode]}`;
   }
   return fallback;
+}
+
+const DEFAULT_INIT_ERROR = "Vector Graphics initialization failed. Please retry or restart the application.";
+
+function formatSceneInitError(err: unknown): string {
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    Reflect.ownKeys(err).length === 3 &&
+    ["schemaVersion", "reasonCode", "message"].every((key) => Object.hasOwn(err, key)) &&
+    "schemaVersion" in err &&
+    err.schemaVersion === 1 &&
+    "reasonCode" in err &&
+    typeof err.reasonCode === "string" &&
+    Object.hasOwn(SAFE_SCENE_REASON_MESSAGES, err.reasonCode)
+  ) {
+    return `Scene initialization failed (${err.reasonCode}): ${SAFE_SCENE_REASON_MESSAGES[err.reasonCode]}`;
+  }
+  return DEFAULT_INIT_ERROR;
 }
 
 const SAFE_REASON_MESSAGES: Record<string, string> = {
@@ -151,6 +170,20 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
   // Navigation
   const [activeTab, setActiveTab] = useState<ActiveTab>("canvas");
 
+  // Initialization State
+  type InitStatus = "pending" | "success" | "failed";
+  const [initStatus, setInitStatus] = useState<InitStatus>("pending");
+  const [initError, setInitError] = useState<string | null>(null);
+  const [initAttempt, setInitAttempt] = useState<number>(0);
+  const isInitializingRef = useRef<boolean>(false);
+
+  const handleRetryInit = useCallback(() => {
+    if (isInitializingRef.current) return;
+    setInitStatus("pending");
+    setInitError(null);
+    setInitAttempt((prev) => prev + 1);
+  }, []);
+
   // Edit Queue and Blob Preview refs
   const editQueueRef = useRef<SerializedEditQueue | null>(null);
   const blobPreviewRef = useRef<BlobPreviewManager>(new BlobPreviewManager());
@@ -159,12 +192,14 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
   const latestRevisionRef = useRef<number>(1);
   latestRevisionRef.current = revision;
 
-  // Initialize draft on mount
+  // Initialize draft on mount or retry
   useEffect(() => {
     isMountedRef.current = true;
     const blobManager = blobPreviewRef.current;
 
     async function initSession() {
+      if (isInitializingRef.current) return;
+      isInitializingRef.current = true;
       try {
         let status: SceneStatusResponse | null = null;
         try {
@@ -183,6 +218,8 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
           setSourceId(status.sourceId);
           setDirty(status.dirty);
           setScene(status.scene);
+          setInitStatus("success");
+          setInitError(null);
 
           const restoredDraft: SceneDraftResponse = {
             sessionId: status.sessionId,
@@ -196,7 +233,12 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
             diagnostics: [],
           };
           editQueueRef.current = new SerializedEditQueue(bridge, restoredDraft);
-          await triggerCompile();
+          try {
+            await triggerCompile();
+          } catch (compileErr) {
+            if (!isMountedRef.current) return;
+            setCompileError(sanitizeErrorMessage(compileErr));
+          }
           return;
         }
 
@@ -214,15 +256,25 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
         setSourceId(initialDraft.sourceId);
         setDirty(initialDraft.dirty);
         setScene(initialDraft.scene);
+        setInitStatus("success");
+        setInitError(null);
 
         // Initialize serialized edit queue
         editQueueRef.current = new SerializedEditQueue(bridge, initialDraft);
 
         // Trigger compile for initial SVG blob
-        await triggerCompile();
+        try {
+          await triggerCompile();
+        } catch (compileErr) {
+          if (!isMountedRef.current) return;
+          setCompileError(sanitizeErrorMessage(compileErr));
+        }
       } catch (err) {
         if (!isMountedRef.current) return;
-        setCompileError(sanitizeErrorMessage(err));
+        setInitStatus("failed");
+        setInitError(formatSceneInitError(err));
+      } finally {
+        isInitializingRef.current = false;
       }
     }
 
@@ -232,7 +284,7 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
       isMountedRef.current = false;
       blobManager.dispose();
     };
-  }, [bridge]);
+  }, [bridge, initAttempt]);
 
   useEffect(() => {
     let active = true;
@@ -1002,6 +1054,21 @@ export function VectorGraphicsLab({ bridge: bridgeProp, projectHandle }: VectorG
               />
             )}
           </>
+        ) : initStatus === "failed" ? (
+          <div className="vector-graphics-init-error" data-testid="vector-graphics-init-error">
+            <div className="init-error-content">
+              <h3>Vector Graphics Initialization Failed</h3>
+              <p>{initError || DEFAULT_INIT_ERROR}</p>
+              <button
+                type="button"
+                className="btn-retry"
+                data-testid="vector-graphics-init-retry"
+                onClick={handleRetryInit}
+              >
+                Retry Initialization
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="loading-state">
             <p>Initializing Vector Graphics Lab…</p>
