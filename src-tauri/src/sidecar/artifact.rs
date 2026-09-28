@@ -1288,10 +1288,11 @@ mod tests {
             .map_err(|_| io::Error::other("distribution test lock"))?;
         let (root, binary, payload) = copied_fixture("source-pins")?;
         verify_distribution(&binary, &payload)?;
-        let pins: super::CompiledPins = serde_json::from_str(super::SOURCE_PINS_JSON)
-            .map_err(io::Error::other)?;
-        let mut manifest: Manifest = serde_json::from_slice(&fs::read(payload.join("manifest.json"))?)
-            .map_err(io::Error::other)?;
+        let pins: super::CompiledPins =
+            serde_json::from_str(super::SOURCE_PINS_JSON).map_err(io::Error::other)?;
+        let mut manifest: Manifest =
+            serde_json::from_slice(&fs::read(payload.join("manifest.json"))?)
+                .map_err(io::Error::other)?;
         assert_eq!(manifest, pins.sidecar_manifest);
         manifest.native.sha256 = "0".repeat(64);
         write_closed_manifest(&payload, &mut manifest, false)?;

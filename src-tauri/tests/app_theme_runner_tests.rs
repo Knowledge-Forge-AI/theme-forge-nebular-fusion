@@ -440,7 +440,11 @@ fn compile_strips_surfaces_content_on_plain_theme_path() -> Result<(), Box<dyn s
     spec.surfaces.content = Some(704);
 
     let result = runner.compile(spec, Some(1))?;
-    assert!(result.valid, "compile should succeed after runner normalizes surfaces.content: {:?}", result.error);
+    assert!(
+        result.valid,
+        "compile should succeed after runner normalizes surfaces.content: {:?}",
+        result.error
+    );
     assert!(result.compiled_css.is_some());
     assert_eq!(result.ui_revision, 1);
 

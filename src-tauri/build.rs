@@ -76,7 +76,9 @@ fn validate_source_build_pins(content: &str, target_env: &str) -> Result<(), io:
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| io::Error::other("missing sidecarManifest runtime size"))?;
     if !valid_hex_64(runtime_sha) {
-        return Err(io::Error::other("invalid sidecarManifest runtime sha256 hex"));
+        return Err(io::Error::other(
+            "invalid sidecarManifest runtime sha256 hex",
+        ));
     }
 
     let scene_node = root
