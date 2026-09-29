@@ -134,8 +134,18 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      - run: npm audit
-      - run: npm audit --prefix loom-preview-source
+      - name: Run npm audit with a retained structured report
+        run: |
+          status=0
+          npm audit --json > .test-reports/frontend/npm-audit.json || status=$?
+          node -e 'const a = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(JSON.stringify((a.metadata && a.metadata.vulnerabilities) || a.error || a)); for (const [name, v] of Object.entries(a.vulnerabilities || {})) console.log(name, v.severity, v.range, (v.via || []).map((x) => typeof x === "string" ? x : x.url).join(" "));' .test-reports/frontend/npm-audit.json
+          exit "$status"
+      - name: Run Loom preview npm audit with a retained structured report
+        run: |
+          status=0
+          npm audit --prefix loom-preview-source --json > .test-reports/frontend/npm-audit-loom-preview.json || status=$?
+          node -e 'const a = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); console.log(JSON.stringify((a.metadata && a.metadata.vulnerabilities) || a.error || a)); for (const [name, v] of Object.entries(a.vulnerabilities || {})) console.log(name, v.severity, v.range, (v.via || []).map((x) => typeof x === "string" ? x : x.url).join(" "));' .test-reports/frontend/npm-audit-loom-preview.json
+          exit "$status"
       - run: npm run sidecar:test
       - name: Archive frontend release surface
         run: tar -czf .test-reports/frontend/frontend-dist.tar.gz -C dist .
@@ -147,6 +157,14 @@ jobs:
           name: frontend-artifacts
           path: .test-reports/frontend/
           if-no-files-found: error
+          retention-days: 14
+      - name: Retain frontend audit reports after failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: frontend-audit-${{ github.run_attempt }}
+          path: .test-reports/frontend/npm-audit*.json
+          if-no-files-found: warn
           retention-days: 14
 
   macos-arm64:
@@ -232,7 +250,12 @@ jobs:
           cargo test --locked --doc
           RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps
       - name: Build macOS Tauri application
-        run: npm run tauri:build
+        env:
+          TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
+        run: |
+          node --input-type=module -e 'import { createHash } from "node:crypto"; import { readFileSync } from "node:fs"; import { EXPECTED_EXECUTABLE_SHA256 } from "./tools/node-runtime-authority.mjs"; if (createHash("sha256").update(readFileSync(process.env.TFSB_STUDIO_NODE_BINARY)).digest("hex") !== EXPECTED_EXECUTABLE_SHA256) throw new Error("[NODE_AUTH_FAIL] Authenticated Node runtime changed before the Tauri build");'
+          # Apple ld records rustup std rlib paths (under the runner home) in its debug map; strip that prefix so build-app's home-path hygiene check applies to real leaks.
+          CARGO_ENCODED_RUSTFLAGS="-Clink-arg=-Wl,-oso_prefix,$(rustup show home)/" npm run tauri:build
       - name: Verify application bundle and security ACL
         run: |
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Theme Forge Nebular Fusion.app"
@@ -436,9 +459,10 @@ jobs:
       - name: Run selected workflow and secret checks
         run: node tools/ci/run-workflow-checks.mjs --root . --output-dir .test-reports/workflow-checks
       - name: Retain workflow and secret check outputs
+        if: ${{ !cancelled() }}
         run: |
           rm -rf .test-reports/supply-chain/workflow-checks
-          mv .test-reports/workflow-checks .test-reports/supply-chain/workflow-checks
+          if [ -d .test-reports/workflow-checks ]; then mv .test-reports/workflow-checks .test-reports/supply-chain/workflow-checks; fi
           find .test-reports/supply-chain -type f -size 0 -delete
       - name: Run Cargo audit
         run: node tools/ci/run-cargo-audit.mjs --lockfile src-tauri/Cargo.lock --output .test-reports/supply-chain/cargo-audit.json
