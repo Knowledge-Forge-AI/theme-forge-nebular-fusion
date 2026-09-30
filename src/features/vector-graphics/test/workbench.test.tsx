@@ -552,4 +552,103 @@ describe("Vector Graphics Workbench (VectorGraphicsLab)", () => {
       expect(screen.getByText(/Group Children \(1\)/)).toBeTruthy();
     });
   });
+
+  describe("Vector Graphics Initialization Lifecycle and Error Boundaries", () => {
+    it("1. displays pending loading state while initialization is unresolved", async () => {
+      const bridge = new MockVectorGraphicsBridge();
+      bridge.newScene = () => new Promise(() => {});
+      bridge.getStatus = () => Promise.resolve(null as any);
+      render(<VectorGraphicsLab bridge={bridge} />);
+
+      expect(screen.getByText("Initializing Vector Graphics Lab…")).toBeTruthy();
+      expect(screen.queryByTestId("vector-graphics-init-error")).toBeNull();
+      expect(screen.queryByTestId("inert-blob-img")).toBeNull();
+    });
+
+    it("2. renders full workspace and preview upon successful initialization", async () => {
+      const bridge = new MockVectorGraphicsBridge();
+      render(<VectorGraphicsLab bridge={bridge} />);
+
+      expect(await screen.findByRole("heading", { name: "Vector Graphics Lab" })).toBeTruthy();
+      expect(await screen.findByTestId("inert-blob-img")).toBeTruthy();
+      expect(screen.queryByTestId("vector-graphics-init-error")).toBeNull();
+    });
+
+    it("3. renders bounded native initialization failure container when newScene fails", async () => {
+      const bridge = new MockVectorGraphicsBridge();
+      bridge.getStatus = () => Promise.resolve(null as any);
+      bridge.newScene = () => Promise.reject({
+        schemaVersion: 1,
+        reasonCode: "sidecar-crashed",
+        message: "raw crash text that must never be echoed",
+      });
+      render(<VectorGraphicsLab bridge={bridge} />);
+
+      const errorContainer = await screen.findByTestId("vector-graphics-init-error");
+      expect(errorContainer).toBeTruthy();
+      expect(screen.getByText(/Scene initialization failed \(sidecar-crashed\):/)).toBeTruthy();
+      expect(screen.queryByText(/raw crash text/)).toBeNull();
+      expect(screen.getByRole("button", { name: "Retry Initialization" })).toBeTruthy();
+    });
+
+    it("4. suppresses raw Error and raw string containing private paths, mapping to safe fallback", async () => {
+      const bridge = new MockVectorGraphicsBridge();
+      bridge.getStatus = () => Promise.resolve(null as any);
+
+      // Raw Error with private path
+      bridge.newScene = () => Promise.reject(new Error("/Users/private-user/private/node binary rejected with status 101"));
+      const { unmount } = render(<VectorGraphicsLab bridge={bridge} />);
+
+      const errorContainer = await screen.findByTestId("vector-graphics-init-error");
+      expect(errorContainer).toBeTruthy();
+      expect(screen.getByText("Vector Graphics initialization failed. Please retry or restart the application.")).toBeTruthy();
+      expect(screen.queryByText(/private-user/)).toBeNull();
+      expect(screen.queryByText(/\/Users\//)).toBeNull();
+      expect(screen.queryByText(/private/)).toBeNull();
+
+      unmount();
+
+      // Raw string with private path
+      const bridge2 = new MockVectorGraphicsBridge();
+      bridge2.getStatus = () => Promise.resolve(null as any);
+      bridge2.newScene = () => Promise.reject("/System/Library/PrivateFrameworks/leak.dylib error");
+      render(<VectorGraphicsLab bridge={bridge2} />);
+
+      const errorContainer2 = await screen.findByTestId("vector-graphics-init-error");
+      expect(errorContainer2).toBeTruthy();
+      expect(screen.getByText("Vector Graphics initialization failed. Please retry or restart the application.")).toBeTruthy();
+      expect(screen.queryByText(/leak\.dylib/)).toBeNull();
+    });
+
+    it("5. successfully recovers workspace when retry is clicked after initial failure", async () => {
+      const bridge = new MockVectorGraphicsBridge();
+      bridge.getStatus = () => Promise.resolve(null as any);
+      let failed = true;
+      const originalNewScene = bridge.newScene.bind(bridge);
+      bridge.newScene = (req) => {
+        if (failed) {
+          return Promise.reject({
+            schemaVersion: 1,
+            reasonCode: "protocol-invalid",
+            message: "invalid request",
+          });
+        }
+        return originalNewScene(req);
+      };
+
+      render(<VectorGraphicsLab bridge={bridge} />);
+
+      await screen.findByTestId("vector-graphics-init-error");
+      expect(screen.getByText(/protocol-invalid/)).toBeTruthy();
+
+      // Now heal the failure and click Retry
+      failed = false;
+      fireEvent.click(screen.getByRole("button", { name: "Retry Initialization" }));
+
+      // Workspace should recover
+      expect(await screen.findByRole("heading", { name: "Vector Graphics Lab" })).toBeTruthy();
+      expect(await screen.findByTestId("inert-blob-img")).toBeTruthy();
+      expect(screen.queryByTestId("vector-graphics-init-error")).toBeNull();
+    });
+  });
 });

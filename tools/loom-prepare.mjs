@@ -5,10 +5,11 @@ import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
+import { reindexPagefindSite } from "./pagefind-index.mjs";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.3.0";
-export const SUPPORTED_LOOM_VERSIONS = ["0.3.0", "0.2.0", "0.1.1", "0.1.0"];
+export const EXPECTED_LOOM_VERSION = "0.4.0";
+export const SUPPORTED_LOOM_VERSIONS = ["0.4.0", "0.3.0", "0.2.0", "0.1.1", "0.1.0"];
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export const FIXED_97_INVENTORY = Object.freeze([
@@ -261,7 +262,7 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
   if (!pkgVersion) {
     throw new Error(`package.json in ${packageRoot} lacks a valid version`);
   }
-  const expectedInventory = pkgVersion === "0.3.0" ? FIXED_101_INVENTORY : FIXED_97_INVENTORY;
+  const expectedInventory = (pkgVersion === "0.4.0" || pkgVersion === "0.3.0") ? FIXED_101_INVENTORY : FIXED_97_INVENTORY;
   const expectedSorted = [...expectedInventory].sort(order);
   if (evidence.members.length !== expectedSorted.length) {
     throw new Error(`Loom package catalog build evidence member count mismatch: expected ${expectedSorted.length}, got ${evidence.members.length}`);
@@ -405,6 +406,7 @@ export function parseLoomPrepareArgs(argv) {
   const options = {
     tarball: undefined,
     sha256: undefined,
+    packageRoot: undefined,
     release: false,
     dev: false,
     instrumented: false,
@@ -417,6 +419,8 @@ export function parseLoomPrepareArgs(argv) {
       options.tarball = argv[++i];
     } else if (arg === "--sha256" || arg === "--loom-sha256") {
       options.sha256 = argv[++i];
+    } else if (arg === "--package-root" || arg === "--loom-package-root") {
+      options.packageRoot = argv[++i];
     } else if (arg === "--preview-dist") {
       options.previewDist = argv[++i];
     } else if (arg === "--release") {
@@ -436,13 +440,120 @@ export async function prepareLoom(customOptions = {}) {
   const options = { ...cliOptions, ...customOptions };
 
   const studioRoot = options.studioRoot ? resolve(options.studioRoot) : resolve(import.meta.dirname, "..");
-  const repoRoot = repositoryRootForStudio(studioRoot);
-  const loomRoot = resolve(repoRoot, "packages/stellar-loom");
-  const fixtureRoot = resolve(loomRoot, "fixture");
-
   const isRelease = options.release || process.env.TFSL_RELEASE === "1" || process.env.NODE_ENV === "production";
   const isInstrumented = options.instrumented || process.argv.includes("--instrumented") || process.env.TFSL_INSTRUMENTED_PREVIEW === "1";
   const isDev = options.dev && !isRelease;
+
+  const explicitPackageRoot = options.packageRoot || options["package-root"];
+  if (explicitPackageRoot) {
+    let packageRoot = resolve(explicitPackageRoot);
+    const nestedNix = resolve(packageRoot, "lib/node_modules/@knowledge-forge-ai/theme-forge-stellar-loom");
+    if (existsSync(resolve(nestedNix, "package.json"))) {
+      packageRoot = nestedNix;
+    }
+
+    console.log(`Consuming explicit source-built Loom package root: ${packageRoot}`);
+    const pkgPath = resolve(packageRoot, "package.json");
+    if (!existsSync(pkgPath)) {
+      throw new Error(`[LOOM_PREPARE_FAIL] Missing package.json in Loom package root: ${packageRoot}`);
+    }
+    let pkg;
+    try {
+      pkg = JSON.parse(await readFile(pkgPath, "utf8"));
+    } catch (err) {
+      throw new Error(`[LOOM_PREPARE_FAIL] Failed to read package.json in ${packageRoot}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (pkg.name !== EXPECTED_LOOM_NAME) {
+      throw new Error(`[LOOM_PREPARE_FAIL] Loom package name mismatch: expected '${EXPECTED_LOOM_NAME}', got '${pkg.name}'`);
+    }
+    if (!SUPPORTED_LOOM_VERSIONS.includes(pkg.version)) {
+      throw new Error(`[LOOM_PREPARE_FAIL] Unsupported Loom version '${pkg.version}'; expected one of ${SUPPORTED_LOOM_VERSIONS.join(", ")}`);
+    }
+
+    const requiredArtifacts = [
+      resolve(packageRoot, "dist/batch.js"),
+      resolve(packageRoot, "dist/index.js"),
+      resolve(packageRoot, "bin/tfsl-batch.js"),
+      resolve(packageRoot, "dist/catalog-build-evidence.json"),
+    ];
+    for (const artifact of requiredArtifacts) {
+      if (!existsSync(artifact)) {
+        throw new Error(`[LOOM_PREPARE_FAIL] Loom package missing required artifact: ${basename(artifact)}`);
+      }
+    }
+
+    // Catalog evidence verification without private/authenticated/monorepo lookup
+    const catalogEvidence = await authenticateCatalogEvidence(packageRoot);
+
+    // Populate src-tauri/loom-payload
+    const payloadRoot = resolve(studioRoot, "src-tauri/loom-payload");
+    await rm(payloadRoot, { recursive: true, force: true });
+    await mkdir(payloadRoot, { recursive: true, mode: 0o755 });
+
+    await cp(resolve(packageRoot, "dist"), resolve(payloadRoot, "dist"), { recursive: true });
+    await cp(resolve(packageRoot, "bin"), resolve(payloadRoot, "bin"), { recursive: true });
+    await cp(resolve(packageRoot, "package.json"), resolve(payloadRoot, "package.json"));
+
+    if (existsSync(resolve(packageRoot, "examples"))) {
+      await cp(resolve(packageRoot, "examples"), resolve(payloadRoot, "examples"), { recursive: true });
+    }
+    if (existsSync(resolve(packageRoot, "protocol"))) {
+      await cp(resolve(packageRoot, "protocol"), resolve(payloadRoot, "protocol"), { recursive: true });
+    }
+    for (const legalFile of ["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md", "README.md"]) {
+      const src = resolve(packageRoot, legalFile);
+      if (existsSync(src)) {
+        await cp(src, resolve(payloadRoot, legalFile));
+      }
+    }
+
+    // Preview: studio-owned loom-preview-source ONLY, do not silently skip preview
+    const publicPreview = resolve(studioRoot, "public/preview");
+    const loomPreviewSource = resolve(studioRoot, "loom-preview-source");
+
+    if (!existsSync(loomPreviewSource)) {
+      throw new Error(`[LOOM_PREPARE_FAIL] Missing required studio-owned loom-preview-source at ${loomPreviewSource}`);
+    }
+    const previewPkgPath = resolve(loomPreviewSource, "package.json");
+    if (!existsSync(previewPkgPath)) {
+      throw new Error(`[LOOM_PREPARE_FAIL] loom-preview-source directory is missing its owning package.json at ${previewPkgPath}`);
+    }
+
+    console.log(`Preparing preview from owned projection path loom-preview-source (instrumented: ${isInstrumented})...`);
+    const neutralDist = resolve(loomPreviewSource, "dist/neutral");
+    if (!existsSync(resolve(neutralDist, "index.html"))) {
+      console.log(`Building neutral Starlight fixture in loom-preview-source (instrumented: ${isInstrumented})...`);
+      const fixtureEnv = {
+        ...process.env,
+        ...(isInstrumented ? { TFSL_INSTRUMENTED_PREVIEW: "1" } : { TFSL_INSTRUMENTED_PREVIEW: "0" }),
+      };
+      if (!options.npmPath) throw new Error("Source-built preview requires explicit npm CLI");
+      const buildResult = spawnSync(options.nodePath, [options.npmPath, "run", "build:neutral"], { cwd: loomPreviewSource, env: fixtureEnv, stdio: "inherit", timeout: 300_000 });
+      if (buildResult.status !== 0 || !existsSync(resolve(neutralDist, "index.html"))) {
+        throw new Error(`Failed to build preview from loom-preview-source (exit code: ${buildResult.status})`);
+      }
+      reindexPagefindSite(neutralDist, { nodeModules: resolve(loomPreviewSource, "node_modules") });
+    }
+
+    await rm(publicPreview, { recursive: true, force: true });
+    await mkdir(publicPreview, { recursive: true, mode: 0o755 });
+    await cp(neutralDist, publicPreview, { recursive: true });
+
+    console.log("Loom preparation complete (source-built).");
+    return {
+      schema: "tfsb.loom-payload-receipt-v1",
+      sourceType: "source-built",
+      packageRoot,
+      name: pkg.name,
+      version: pkg.version,
+      catalogEvidence,
+      executableIdentityDigest: catalogEvidence?.executableIdentityDigest,
+    };
+  }
+
+  const repoRoot = repositoryRootForStudio(studioRoot);
+  const loomRoot = resolve(repoRoot, "packages/stellar-loom");
+  const fixtureRoot = resolve(loomRoot, "fixture");
 
   console.log(`Preparing Theme Forge Stellar Loom payload and preview (release: ${isRelease}, dev: ${isDev}, instrumented: ${isInstrumented})...`);
 
@@ -665,6 +776,7 @@ export async function prepareLoom(customOptions = {}) {
       if (buildResult.status !== 0 || !existsSync(resolve(loomPreviewSource, "dist/neutral/index.html"))) {
         throw new Error(`Failed to build preview from loom-preview-source (exit code: ${buildResult.status})`);
       }
+      reindexPagefindSite(resolve(loomPreviewSource, "dist/neutral"), { nodeModules: resolve(loomPreviewSource, "node_modules") });
       await rm(publicPreview, { recursive: true, force: true });
       await mkdir(publicPreview, { recursive: true });
       await cp(resolve(loomPreviewSource, "dist/neutral"), publicPreview, { recursive: true });
@@ -687,6 +799,7 @@ export async function prepareLoom(customOptions = {}) {
     if (!existsSync(resolve(fixtureDistNeutral, "index.html"))) {
       throw new Error("neutral Starlight fixture build succeeded but dist/neutral/index.html is missing");
     }
+    reindexPagefindSite(fixtureDistNeutral, { nodeModules: resolve(fixtureRoot, "node_modules") });
 
     await rm(publicPreview, { recursive: true, force: true });
     await mkdir(publicPreview, { recursive: true });

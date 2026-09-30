@@ -1,25 +1,21 @@
 // @ts-check
+import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const OPTIONAL_SCENE_RESOURCE = "scene-payload/**/*";
 export const SOLAR_SAIL_RESOURCE = "solar-sail-payload/**/*";
-export const OPTIONAL_RESOURCE_SET = Object.freeze(new Set([OPTIONAL_SCENE_RESOURCE]));
-
-export const BASELINE_RESOURCES = Object.freeze([
-  "sidecar-payload/**/*",
-  "loom-payload/**/*",
-  "loom-adapter/**/*",
-  "solar-sail-payload/**/*",
-  "solar-sail-adapter/**/*",
-  "scene-payload/**/*",
-  "release-notices/**/*",
-]);
-
-export const REQUIRED_BASELINE_RESOURCES = Object.freeze(
-  BASELINE_RESOURCES.filter((r) => !OPTIONAL_RESOURCE_SET.has(r))
-);
+// Historical export retained for callers; Scene is mandatory for this candidate.
+export const OPTIONAL_RESOURCE_SET = Object.freeze(new Set());
+const authorityCandidates = [
+  new URL("../../apps/studio/src-tauri/tauri.conf.json", import.meta.url),
+  new URL("../../src-tauri/tauri.conf.json", import.meta.url),
+];
+const authority = authorityCandidates.find(path => existsSync(path));
+if (!authority) throw new Error("[RESOURCE_CLOSURE_FAIL] Maintained Tauri resource authority unavailable");
+export const BASELINE_RESOURCES = Object.freeze(JSON.parse(readFileSync(authority, "utf8")).bundle.resources);
+export const REQUIRED_BASELINE_RESOURCES = BASELINE_RESOURCES;
 
 export const DEFAULT_TARGET = "aarch64-apple-darwin";
 export const HEX64_RE = /^[0-9a-f]{64}$/;
@@ -344,13 +340,7 @@ export async function verifyTauriResourceClosure(options = {}) {
   const sceneStatus = sceneRecord && typeof sceneRecord === "object" ? sceneRecord.status : undefined;
 
   if (!hasSceneResource) {
-    // Scene is omitted from tauri.conf.json
-    if (sceneStatus !== "omitted-by-contract") {
-      throw new Error(
-        `[RESOURCE_CLOSURE_FAIL] Resource '${OPTIONAL_SCENE_RESOURCE}' is omitted from tauri.conf.json, ` +
-        `but stellar-binding.json does not authorize 'omitted-by-contract' (found: ${JSON.stringify(sceneStatus ?? null)})`
-      );
-    }
+    throw new Error("[RESOURCE_CLOSURE_FAIL] Scene is required; omitted-by-contract is not supported for this candidate");
   } else {
     // Scene is declared in tauri.conf.json
     if (sceneStatus === "omitted-by-contract") {

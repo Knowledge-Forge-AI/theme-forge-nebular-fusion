@@ -7,6 +7,7 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
@@ -15,12 +16,23 @@ import {
 } from "node:fs/promises";
 import { constants as fsConstants, existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
+import { TARGETS } from "./platform-targets.mjs";
+import {
+  EXPECTED_NODE_VERSION as NODE_VERSION,
+  EXPECTED_EXECUTABLE_SHA256,
+  EXPECTED_EXECUTABLE_SIZE,
+  EXPECTED_V8_VERSION,
+  validateDarwinPortableNode,
+} from "./node-runtime-authority.mjs";
+import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
+import { validateBuildInputs } from "./build-inputs.mjs";
+import { inventoryTree } from "./candidate-provenance.mjs";
 
 export const TARGET = "aarch64-apple-darwin";
 export const RUNTIME_KIND = "node-runtime-payload-v1";
-export const NODE_VERSION = "22.23.2";
+export { NODE_VERSION };
 export const SIDECAR_NAME = `tfsb-studio-service-${TARGET}`;
 export const ENTRYPOINT = "dist/service-protocol/server-cli.js";
 export const MAX_FILE_BYTES = 256 * 1024 * 1024;
@@ -28,6 +40,47 @@ export const MAX_AGGREGATE_BYTES = 1024 * 1024 * 1024;
 export const MAX_FILES = 10_000;
 export const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 export const MAX_PATH_BYTES = 512;
+
+export { TARGETS };
+
+export function sidecarBinaryName(target = TARGETS[0]) {
+  const triple = typeof target === "string" ? target : target?.triple;
+  if (!triple) throw new Error("target triple is required to determine sidecar binary name");
+  return `tfsb-studio-service-${triple}`;
+}
+
+export function validateTarget(target) {
+  if (!target || typeof target !== "object") throw new Error("target must be a valid platform-targets TARGETS record");
+  const found = TARGETS.find(
+    (t) =>
+      t.triple === target.triple &&
+      t.os === target.os &&
+      t.cpu === target.cpu &&
+      t.addon === target.addon &&
+      t.system === target.system
+  );
+  if (!found) {
+    throw new Error(`unsupported or invalid target: ${JSON.stringify(target)}`);
+  }
+  return found;
+}
+
+export function resolveTarget(target) {
+  if (!target) return TARGETS[0];
+  if (typeof target === "string") {
+    const found = TARGETS.find((t) => t.triple === target || t.system === target);
+    if (!found) throw new Error(`unsupported or invalid target: ${target}`);
+    return found;
+  }
+  return validateTarget(target);
+}
+
+export function validateSourceIdentity(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error("explicit sourceIdentity must be a canonical 64-hex SHA-256 digest");
+  }
+  return value;
+}
 
 const ROOT_RUNTIME_PACKAGES = ["@xmldom/xmldom", "fflate", "smol-toml"];
 const PROTOCOL_FILES = [
@@ -193,7 +246,7 @@ async function inventory(payloadRoot) {
 }
 
 function parseArgs(argv) {
-  const allowed = new Set(["node", "root-tarball"]);
+  const allowed = new Set(["node", "root-tarball", "target"]);
   if (argv.length % 2 !== 0) throw new Error("sidecar preparation requires paired explicit arguments");
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -203,12 +256,13 @@ function parseArgs(argv) {
     const name = key.slice(2);
     if (!allowed.has(name)) throw new Error(`unknown sidecar preparation option: ${key}`);
     if (values.has(name)) throw new Error(`duplicate sidecar preparation option: ${key}`);
-    values.set(name, resolve(value));
+    // A target is a platform triple, not a path; every other option names an explicit input path.
+    values.set(name, name === "target" ? resolveTarget(value).triple : resolve(value));
   }
   return values;
 }
 
-function probeRuntime(nodePath) {
+export function probeRuntime(nodePath, target = TARGETS[0]) {
   const probe = spawnSync(nodePath, ["-p", "JSON.stringify({node:process.versions.node,v8:process.versions.v8,arch:process.arch,platform:process.platform})"], {
     encoding: "utf8",
     env: { LANG: "C", LC_ALL: "C", TZ: "UTC" },
@@ -216,8 +270,9 @@ function probeRuntime(nodePath) {
   });
   if (probe.status !== 0 || probe.error) throw new Error("the explicit Node runtime probe failed");
   const identity = JSON.parse(probe.stdout.trim());
-  if (identity.node !== NODE_VERSION || identity.arch !== "arm64" || identity.platform !== "darwin") {
-    throw new Error("the explicit Node runtime has the wrong version or target");
+  const effectiveTarget = typeof target === "string" ? resolveTarget(target) : target;
+  if (identity.node !== NODE_VERSION || identity.arch !== effectiveTarget.cpu || identity.platform !== effectiveTarget.os) {
+    throw new Error(`the explicit Node runtime has the wrong version or target: expected ${NODE_VERSION} ${effectiveTarget.os}/${effectiveTarget.cpu}, got ${identity.node} ${identity.platform}/${identity.arch}`);
   }
   return identity;
 }
@@ -415,7 +470,7 @@ async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   } catch {
     throw new Error("standalone sidecar Stellar package inputs are not valid JSON");
   }
-  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0")
+  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0" && corePackage.version !== "0.6.1")
       || !isRecord(corePackage.dependencies) || !isRecord(coreLock) || coreLock.name !== corePackage.name || coreLock.version !== corePackage.version) {
     throw new Error("standalone sidecar Stellar package identity is invalid");
   }
@@ -626,11 +681,142 @@ function boundedInteger(value, maximum, label) {
   if (!Number.isSafeInteger(value) || value < 0 || value > maximum) throw new Error(`${label} is invalid`);
 }
 
-export function validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity = false } = {}) {
+// Contexts cannot be manufactured from a caller-supplied digest or mode flag.
+const nativeAuthorities = new WeakSet();
+const nativeSourcePath = "native/directory-snapshot/src/directory_snapshot.c";
+const nativeToolPath = "tools/build-directory-snapshot-native.mjs";
+const nativeBackend = "native-addon-posix-openat-v1";
+
+// Maintained counterpart of the producer's headerIdentity. Never import or run
+// producer code from a component output. Parity is tested against buildNative.
+export async function nativeHeaderIdentity(root) {
+  const hash = createHash("sha256");
+  async function visit(dir) {
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, "en"))) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile() || (entry.isSymbolicLink() && (await stat(path)).isFile())) {
+        hash.update(relative(root, path)).update("\0").update(await readFile(path)).update("\0");
+      } else throw new Error("Node headers must contain only regular files and directories");
+    }
+  }
+  await visit(root);
+  return hash.digest("hex");
+}
+
+export async function validateSourceBuiltNative(buildInputs) {
+  const authority = await validateBuildInputs(buildInputs);
+  if (authority.inputs.mode !== "nix-source") throw new Error("Native source authority requires nix-source");
+  const { target, roots, tools, inputs } = authority;
+  const component = inputs.components.burst;
+  if (typeof component.sourceRoot !== "string" || !isAbsolute(component.sourceRoot)) throw new Error("Native source root required");
+  const sourceRoot = await realpath(component.sourceRoot);
+  if ((await inventoryTree(sourceRoot)).identity !== component.source) throw new Error("Native source inventory mismatch");
+  const prefix = `native/directory-snapshot/prebuilds/${target.addon}`;
+  const { bytes: manifestBytes } = await readRegular(join(roots.burst, prefix, "manifest.json"), 16 * 1024);
+  const manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+  if (manifestBytes.toString("utf8") !== `${JSON.stringify(manifest, null, 2)}\n`) throw new Error("Native source manifest serialization invalid");
+  exactRecord(manifest, ["schemaVersion", "backend", "abiVersion", "artifact", "platform", "architecture", "libc",
+    "nodeVersion", "nodeApiVersion", "nodeHeadersSha256", "compiler", "compilerExecutableSha256", "command",
+    "sourceIdentity", "nativeSource", "nativeSourceSha256", "buildTool", "buildToolSha256", "artifactSha256", "artifactBytes"], "native source manifest");
+  exactRecord(manifest.sourceIdentity, ["kind", "gitRequired", "explicitToolchain"], "native source identity");
+  if (manifest.schemaVersion !== 1 || manifest.backend !== nativeBackend || manifest.abiVersion !== 1
+      || manifest.artifact !== target.addon || manifest.platform !== target.os || manifest.architecture !== target.cpu
+      || manifest.libc !== (target.os === "linux" ? "glibc" : null)
+      || manifest.nativeSource !== nativeSourcePath || manifest.buildTool !== nativeToolPath
+      || manifest.sourceIdentity.kind !== "source-files" || manifest.sourceIdentity.gitRequired !== false
+      || manifest.sourceIdentity.explicitToolchain !== true) throw new Error("Native source provenance is invalid");
+  for (const key of ["nativeSourceSha256", "buildToolSha256", "artifactSha256", "compilerExecutableSha256", "nodeHeadersSha256"]) {
+    exactDigest(manifest[key], `native ${key}`);
+  }
+  boundedInteger(manifest.artifactBytes, MAX_FILE_BYTES, "native artifact bytes");
+  if (!manifest.artifactBytes) throw new Error("Empty native artifact");
+  for (const [path, key] of [[nativeSourcePath, "nativeSourceSha256"], [nativeToolPath, "buildToolSha256"]]) {
+    const source = await readRegular(join(sourceRoot, path));
+    const output = await readRegular(join(roots.burst, path));
+    if (sha256(source.bytes) !== manifest[key] || sha256(output.bytes) !== manifest[key]) throw new Error(`Native ${key} mismatch`);
+  }
+  const artifact = await readRegular(join(roots.burst, prefix, `${nativeBackend}.node`));
+  if (artifact.bytes.length !== manifest.artifactBytes || sha256(artifact.bytes) !== manifest.artifactSha256) throw new Error("Native artifact mismatch");
+  if (manifest.compilerExecutableSha256 !== inputs.toolchains.compiler.identity) throw new Error("Native compiler identity mismatch");
+  if (typeof manifest.compiler !== "string" || !/^[\x20-\x7e]{1,512}$/.test(manifest.compiler)) throw new Error("Native compiler description invalid");
+  const compiler = spawnSync(tools.compiler, ["--version"], { encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 });
+  if (compiler.error || compiler.status !== 0 || compiler.stdout.trim().split("\n")[0] !== manifest.compiler) throw new Error("Native compiler version mismatch");
+  const command = [basename(inputs.toolchains.compiler.path), "-O2", "-Wall", "-Wextra", "-Werror", "-std=c11", "-I<NODE_INCLUDE>",
+    ...(target.os === "darwin" ? ["-bundle", "-undefined", "dynamic_lookup", "-arch", target.cpu === "arm64" ? "arm64" : "x86_64"] : ["-fPIC", "-shared"]),
+    "-o", `<${target.addon}>/${nativeBackend}.node`, nativeSourcePath];
+  if (canonicalJson(manifest.command) !== canonicalJson(command)) throw new Error("Native compiler command mismatch");
+  const headers = resolve(dirname(tools.node), "../include/node");
+  if (await nativeHeaderIdentity(headers) !== manifest.nodeHeadersSha256) throw new Error("Native Node header identity mismatch");
+  const major = (await readFile(join(headers, "node_version.h"), "utf8")).match(/#define NODE_MAJOR_VERSION\s+(\d+)/)?.[1];
+  const probe = spawnSync(tools.node, ["-p", "JSON.stringify({version:process.version,napi:process.versions.napi})"], {
+    encoding: "utf8", timeout: 10_000, maxBuffer: 4096,
+  });
+  if (probe.error || probe.status !== 0) throw new Error("Native Node identity unavailable");
+  const runtime = JSON.parse(probe.stdout);
+  if (manifest.nodeVersion !== `v${NODE_VERSION}` || manifest.nodeVersion !== runtime.version
+      || major !== NODE_VERSION.split(".")[0] || manifest.nodeApiVersion !== "10" || runtime.napi !== manifest.nodeApiVersion) {
+    throw new Error("Native Node runtime/header/N-API mismatch");
+  }
+  const runtimePath = tools.embeddedRuntime ?? tools.node;
+  const runtimeBytes = await readFile(runtimePath);
+  const result = Object.freeze({ target: target.triple, source: inputs.source.identity, root: roots.burst,
+    nativeSha256: manifest.artifactSha256, nativeBytes: manifest.artifactBytes,
+    manifestSha256: sha256(manifestBytes), prefix,
+    runtimeSha256: sha256(runtimeBytes), runtimeBytes: runtimeBytes.length });
+  nativeAuthorities.add(result);
+  return result;
+}
+
+async function sidecarAuthority(mode, buildInputs) {
+  if (mode !== undefined && !["portable-source", "nix-source"].includes(mode)) throw new Error("Unsupported sidecar mode");
+  if (mode === "nix-source") return validateSourceBuiltNative(buildInputs);
+  if (buildInputs?.mode === "nix-source") throw new Error("Nix native authority requires explicit nix-source mode");
+  return null;
+}
+
+export function validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity = false, nativeAuthority = null } = {}) {
+  if (nativeAuthority && !nativeAuthorities.has(nativeAuthority)) throw new Error("Unauthenticated native authority");
+  if (nativeAuthority && (manifest.target !== nativeAuthority.target || manifest.source?.model !== "source-candidate-v2"
+      || manifest.source.sourceCandidate !== nativeAuthority.source || manifest.native?.sha256 !== nativeAuthority.nativeSha256
+      || manifest.native.size !== nativeAuthority.nativeBytes || manifest.runtime?.sha256 !== nativeAuthority.runtimeSha256
+      || manifest.runtime.size !== nativeAuthority.runtimeBytes)) throw new Error("Source-bound sidecar identity mismatch");
   exactRecord(manifest, ["core", "entrypoint", "files", "manifestDigest", "native", "protocol", "raster", "resvg", "runtime", "runtimeKind", "schema", "schemaVersion", "source", "target", "totals"], "manifest");
-  exactRecord(manifest.source, ["actualInputDigest", "baseCommit", "model"], "manifest source");
-  exactRecord(manifest.core, ["name", "tarball", "version"], "manifest core");
-  exactRecord(manifest.core.tarball, ["sha1", "sha256", "size", "sri"], "manifest core tarball");
+
+  if (manifest.source.model === "closed-input-digest-v1") {
+    exactRecord(manifest.source, ["actualInputDigest", "baseCommit", "model"], "manifest source");
+    exactDigest(manifest.source.baseCommit, "manifest source base commit", 40);
+  } else if (manifest.source.model === "source-candidate-v2") {
+    if ("sourceCandidate" in manifest.source) {
+      exactRecord(manifest.source, ["actualInputDigest", "model", "sourceCandidate"], "manifest source");
+      exactDigest(manifest.source.sourceCandidate, "manifest source candidate", 64);
+    } else {
+      exactRecord(manifest.source, ["actualInputDigest", "model", "sourceIdentity"], "manifest source");
+      exactDigest(manifest.source.sourceIdentity, "manifest source identity", 64);
+    }
+  } else if (manifest.source.model === "source-identity-v2") {
+    if ("sourceIdentity" in manifest.source) {
+      exactRecord(manifest.source, ["actualInputDigest", "model", "sourceIdentity"], "manifest source");
+      exactDigest(manifest.source.sourceIdentity, "manifest source identity", 64);
+    } else {
+      exactRecord(manifest.source, ["actualInputDigest", "model", "sourceCandidate"], "manifest source");
+      exactDigest(manifest.source.sourceCandidate, "manifest source candidate", 64);
+    }
+  } else {
+    throw new Error("manifest source model is invalid");
+  }
+
+  if (manifest.core.tarball !== undefined) {
+    exactRecord(manifest.core, ["name", "tarball", "version"], "manifest core");
+    exactRecord(manifest.core.tarball, ["sha1", "sha256", "size", "sri"], "manifest core tarball");
+    exactDigest(manifest.core.tarball.sha1, "manifest core tarball SHA-1", 40);
+    exactDigest(manifest.core.tarball.sha256, "manifest core tarball SHA-256");
+    boundedInteger(manifest.core.tarball.size, MAX_FILE_BYTES, "manifest core tarball size");
+    if (typeof manifest.core.tarball.sri !== "string" || !/^sha512-[A-Za-z0-9+/]+=*$/.test(manifest.core.tarball.sri)) throw new Error("manifest core tarball SRI is invalid");
+  } else {
+    exactRecord(manifest.core, ["name", "version"], "manifest core");
+  }
+
   exactRecord(manifest.runtime, ["mode", "sha256", "size", "target", "v8", "version"], "manifest runtime");
   exactRecord(manifest.protocol, ["1.0", "1.1", "1.2"], "manifest protocol");
   for (const version of ["1.0", "1.1", "1.2"]) exactRecord(manifest.protocol[version], ["inventorySha256", "requestsSha256", "resultsSha256"], `manifest protocol ${version}`);
@@ -638,10 +824,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
   exactRecord(manifest.raster, ["name", "packageJsonSha256", "version"], "manifest raster");
   exactRecord(manifest.resvg, ["name", "version", "wasmSha256", "wasmSize"], "manifest resvg");
   exactRecord(manifest.totals, ["bytes", "fileCount", "inventoryDigest"], "manifest totals");
-  exactDigest(manifest.core.tarball.sha1, "manifest core tarball SHA-1", 40);
-  exactDigest(manifest.core.tarball.sha256, "manifest core tarball SHA-256");
-  boundedInteger(manifest.core.tarball.size, MAX_FILE_BYTES, "manifest core tarball size");
-  if (typeof manifest.core.tarball.sri !== "string" || !/^sha512-[A-Za-z0-9+/]+=*$/.test(manifest.core.tarball.sri)) throw new Error("manifest core tarball SRI is invalid");
+
   exactDigest(manifest.runtime.sha256, "manifest runtime digest");
   boundedInteger(manifest.runtime.size, MAX_FILE_BYTES, "manifest runtime size");
   for (const version of ["1.0", "1.1", "1.2"]) {
@@ -662,33 +845,62 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
     boundedInteger(file.mode, 0o777, "manifest file mode");
     boundedInteger(file.size, MAX_FILE_BYTES, "manifest file size");
   }
-  if (manifest.schema !== "tfsb.studio-sidecar-distribution" || manifest.schemaVersion !== 1
-      || manifest.target !== TARGET || manifest.runtimeKind !== RUNTIME_KIND || manifest.entrypoint !== ENTRYPOINT
-      || manifest.source.model !== "closed-input-digest-v1" || !/^[0-9a-f]{40}$/.test(manifest.source.baseCommit)
-      || manifest.runtime.version !== NODE_VERSION || manifest.runtime.v8 !== "12.4.254.21-node.56"
-      || manifest.runtime.target !== TARGET || manifest.runtime.mode !== 0o755
-      || manifest.native.backend !== "native-addon-posix-openat-v1" || manifest.native.abi !== 1
-      || manifest.native.target !== TARGET) {
+
+  const targetRecord = TARGETS.find((t) => t.triple === manifest.target);
+  if (!targetRecord) {
     throw new Error("manifest fixed identity is invalid");
   }
-  if (!testOnlyAllowNonProductionIdentity && (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0")
-      || manifest.runtime.sha256 !== "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572"
-      || manifest.runtime.size !== 112_937_728
-      || manifest.native.sha256 !== "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8" || manifest.native.size !== 53_344
-      || manifest.raster.name !== "@knowledge-forge-ai/tfsb-raster-resvg" || manifest.raster.version !== "0.0.0-tfsb47f"
-      || manifest.raster.packageJsonSha256 !== "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
-      || manifest.resvg.name !== "@resvg/resvg-wasm" || manifest.resvg.version !== "2.6.2"
-      || manifest.resvg.wasmSha256 !== "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70" || manifest.resvg.wasmSize !== 2_478_606
-      || manifest.protocol["1.0"].inventorySha256 !== "96fdbcf0c56c1890d44363c34c80d8dacfccb37196de8050ab2d1afc7a3e0f70"
-      || manifest.protocol["1.0"].requestsSha256 !== "5fa687ed6434b4f0ec6288bf4285f4109ab63afe55e2235d52f04f8ed77a8827"
-      || manifest.protocol["1.0"].resultsSha256 !== "5b8f0f057d0dbcabf1b5d83765e476baececd5e7cdb5696bfcb1ac1826f84ff1"
-      || manifest.protocol["1.1"].inventorySha256 !== "9d58e954e62169e87648814372a381653e9e69df5a0ce722251e6e46951dfe8a"
-      || manifest.protocol["1.1"].requestsSha256 !== "b5a10078862c8e03e951a67a8e7cd125c5d4d23619c3d32a9fb41a762629d54f"
-      || manifest.protocol["1.1"].resultsSha256 !== "dee9513c61ed767e260d6dd16a13420c26f745850c7a6055cf6213e52571be60"
-      || manifest.protocol["1.2"].inventorySha256 !== "b620544ad644a7293313212a9585cd9e07af93608f2beac4e36b4bc99d812638"
-      || manifest.protocol["1.2"].requestsSha256 !== "e63252413eaebc2f5a73ad0973d48a51908f8d0604b09440774948bd935daf89"
-      || manifest.protocol["1.2"].resultsSha256 !== "d6259a45a4da2185761098ebf6f8d0f5ff80f08f41d3e34a4a3d69f792760fd1")) {
+
+  if (manifest.schema !== "tfsb.studio-sidecar-distribution"
+      || (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2)
+      || manifest.runtimeKind !== RUNTIME_KIND
+      || manifest.entrypoint !== ENTRYPOINT
+      || manifest.runtime.version !== NODE_VERSION
+      || manifest.runtime.v8 !== EXPECTED_V8_VERSION
+      || manifest.runtime.target !== manifest.target
+      || manifest.runtime.mode !== 0o755
+      || manifest.native.backend !== "native-addon-posix-openat-v1"
+      || manifest.native.abi !== 1
+      || manifest.native.target !== manifest.target) {
     throw new Error("manifest fixed identity is invalid");
+  }
+
+  if (!testOnlyAllowNonProductionIdentity) {
+    if (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0" && manifest.core.version !== "0.6.1")
+        || manifest.raster.name !== "@knowledge-forge-ai/tfsb-raster-resvg" || manifest.raster.version !== "0.0.0-tfsb47f"
+        || manifest.raster.packageJsonSha256 !== "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
+        || manifest.resvg.name !== "@resvg/resvg-wasm" || manifest.resvg.version !== "2.6.2"
+        || manifest.resvg.wasmSha256 !== "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70" || manifest.resvg.wasmSize !== 2_478_606
+        || manifest.protocol["1.0"].inventorySha256 !== "96fdbcf0c56c1890d44363c34c80d8dacfccb37196de8050ab2d1afc7a3e0f70"
+        || manifest.protocol["1.0"].requestsSha256 !== "5fa687ed6434b4f0ec6288bf4285f4109ab63afe55e2235d52f04f8ed77a8827"
+        || manifest.protocol["1.0"].resultsSha256 !== "5b8f0f057d0dbcabf1b5d83765e476baececd5e7cdb5696bfcb1ac1826f84ff1"
+        || manifest.protocol["1.1"].inventorySha256 !== "9d58e954e62169e87648814372a381653e9e69df5a0ce722251e6e46951dfe8a"
+        || manifest.protocol["1.1"].requestsSha256 !== "b5a10078862c8e03e951a67a8e7cd125c5d4d23619c3d32a9fb41a762629d54f"
+        || manifest.protocol["1.1"].resultsSha256 !== "dee9513c61ed767e260d6dd16a13420c26f745850c7a6055cf6213e52571be60"
+        || manifest.protocol["1.2"].inventorySha256 !== "b620544ad644a7293313212a9585cd9e07af93608f2beac4e36b4bc99d812638"
+        || manifest.protocol["1.2"].requestsSha256 !== "e63252413eaebc2f5a73ad0973d48a51908f8d0604b09440774948bd935daf89"
+        || manifest.protocol["1.2"].resultsSha256 !== "d6259a45a4da2185761098ebf6f8d0f5ff80f08f41d3e34a4a3d69f792760fd1") {
+      throw new Error("manifest fixed identity is invalid");
+    }
+    if (manifest.target === "aarch64-apple-darwin") {
+      if (!nativeAuthority && (manifest.native.sha256 !== "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8" || manifest.native.size !== 53_344)) {
+        throw new Error("manifest fixed identity is invalid");
+      }
+      if (!nativeAuthority) {
+        if (manifest.runtime.sha256 !== EXPECTED_EXECUTABLE_SHA256
+            || manifest.runtime.size !== EXPECTED_EXECUTABLE_SIZE) {
+          throw new Error("manifest fixed identity is invalid");
+        }
+      }
+    } else if (manifest.target === "aarch64-unknown-linux-gnu") {
+      if (!nativeAuthority && (manifest.native.sha256 !== "67fb6b85f339a7c2f43ababa20434b26a3ea9bb65b17e70257a03c07810beb79" || manifest.native.size !== 73_336)) {
+        throw new Error("manifest fixed identity is invalid");
+      }
+    } else if (manifest.target === "x86_64-unknown-linux-gnu") {
+      if (!nativeAuthority && (manifest.native.sha256 !== "a2999fc9ac1b1f0a31600595f7069e10aadb032f01059b4d7e64ed80cd8a38a8" || manifest.native.size !== 27_240)) {
+        throw new Error("manifest fixed identity is invalid");
+      }
+    }
   }
   exactDigest(manifest.manifestDigest, "manifest self digest");
   exactDigest(manifest.source.actualInputDigest, "manifest actual input digest");
@@ -698,52 +910,185 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
   return manifest;
 }
 
-export async function prepareSidecar({ repositoryRoot, nodePath, rootTarball }) {
-  const studioRoot = existsSync(resolve(repositoryRoot, "apps/studio")) ? resolve(repositoryRoot, "apps/studio") : repositoryRoot;
-  const tauriRoot = resolve(studioRoot, "src-tauri");
+export async function prepareSidecar(options = {}) {
+  const {
+    studioRoot,
+    repositoryRoot,
+    nodePath,
+    rootTarball,
+    sourceIdentity,
+    componentRoots,
+    target,
+    release = false,
+  } = options;
+
+  if (release) {
+    if (!sourceIdentity) {
+      throw new Error("release sidecar preparation requires explicit canonical 64-hex sourceIdentity");
+    }
+    validateSourceIdentity(sourceIdentity);
+    if (!studioRoot || typeof studioRoot !== "string") {
+      throw new Error("release sidecar preparation requires explicit studioRoot");
+    }
+    const resolvedStudioRoot = resolve(studioRoot);
+    if (!existsSync(resolvedStudioRoot)) {
+      throw new Error("explicit studioRoot directory does not exist");
+    }
+    if (!componentRoots || typeof componentRoots !== "object") {
+      throw new Error("release sidecar preparation requires explicit componentRoots");
+    }
+    const { burst: burstRoot, raster: rasterRoot } = componentRoots;
+    if (!burstRoot || !existsSync(resolve(burstRoot))) {
+      throw new Error("release sidecar preparation requires explicit componentRoots.burst");
+    }
+    if (!rasterRoot || !existsSync(resolve(rasterRoot))) {
+      throw new Error("release sidecar preparation requires explicit componentRoots.raster");
+    }
+    if (!target) {
+      throw new Error("release sidecar preparation requires explicit target");
+    }
+    validateTarget(target);
+    if (!nodePath) {
+      throw new Error("release sidecar preparation requires explicit nodePath");
+    }
+  }
+
+  const effectiveTarget = target ? resolveTarget(target) : TARGETS[0];
+  const nativeAuthority = await sidecarAuthority(options.mode, options.buildInputs);
+  if (nativeAuthority && (effectiveTarget.triple !== nativeAuthority.target || sourceIdentity !== nativeAuthority.source
+      || await realpath(componentRoots.burst) !== nativeAuthority.root)) throw new Error("Sidecar preparation authority mismatch");
+  if (effectiveTarget.os === "darwin" && (options.mode === "portable-source" || (release && options.mode !== "nix-source"))) {
+    validateDarwinPortableNode(nodePath, { validateLinkage: true });
+  }
+  const effectiveStudioRoot = studioRoot
+    ? resolve(studioRoot)
+    : (repositoryRoot && existsSync(resolve(repositoryRoot, "apps/studio"))
+      ? resolve(repositoryRoot, "apps/studio")
+      : (repositoryRoot ? resolve(repositoryRoot) : resolve("apps/studio")));
+  const effectiveRepoRoot = repositoryRoot
+    ? resolve(repositoryRoot)
+    : (release ? effectiveStudioRoot : repositoryRootForStudio(effectiveStudioRoot));
+
+  const tauriRoot = resolve(effectiveStudioRoot, "src-tauri");
+  await mkdir(tauriRoot, { recursive: true, mode: 0o755 });
   const stageRoot = await mkdtemp(resolve(tauriRoot, ".sidecar-stage-"));
   const stagePayload = resolve(stageRoot, "sidecar-payload");
-  const stageBinary = resolve(stageRoot, SIDECAR_NAME);
+  const sidecarBinary = sidecarBinaryName(effectiveTarget);
+  const stageBinary = resolve(stageRoot, sidecarBinary);
   await mkdir(stagePayload, { recursive: true, mode: 0o755 });
+
   let standaloneInputs = null;
   try {
     const nodeInfo = await requireRegular(nodePath);
-    const runtimeProbe = probeRuntime(nodePath);
-    const baseCommit = await gitIdentity(repositoryRoot);
-    const authInputs = resolve(repositoryRoot, "authenticated-inputs");
-    const isAuthTree = existsSync(authInputs);
-    standaloneInputs = isAuthTree ? await materializeStandaloneInputs({ authInputs, rootTarball }) : null;
-    const coreRoot = standaloneInputs?.corePackageRoot ?? repositoryRoot;
-    const rasterRoot = standaloneInputs?.rasterPackageRoot ?? resolve(repositoryRoot, "packages/tfsb-raster-resvg");
+    const runtimeProbe = probeRuntime(nodePath, effectiveTarget);
+
+    let canonicalSourceIdentity = null;
+    let baseCommit = null;
+    if (sourceIdentity) {
+      canonicalSourceIdentity = validateSourceIdentity(sourceIdentity);
+    } else if (!release) {
+      baseCommit = await gitIdentity(effectiveRepoRoot);
+    }
+
+    let coreRoot;
+    let resolvedRasterRoot;
+    if (componentRoots) {
+      coreRoot = resolve(componentRoots.burst);
+      resolvedRasterRoot = resolve(componentRoots.raster);
+    } else if (!release) {
+      const authInputs = resolve(effectiveRepoRoot, "authenticated-inputs");
+      const isAuthTree = existsSync(authInputs);
+      standaloneInputs = isAuthTree ? await materializeStandaloneInputs({ authInputs, rootTarball }) : null;
+      coreRoot = standaloneInputs?.corePackageRoot ?? effectiveRepoRoot;
+      resolvedRasterRoot = standaloneInputs?.rasterPackageRoot ?? resolve(effectiveRepoRoot, "packages/tfsb-raster-resvg");
+    } else {
+      throw new Error("release sidecar preparation requires explicit componentRoots");
+    }
+
     const rootPackage = await readPackage(resolve(coreRoot, "package.json"));
-    const rasterPackage = await readPackage(resolve(rasterRoot, "package.json"));
-    const resvgPackage = await readPackage(resolve(rasterRoot, "node_modules/@resvg/resvg-wasm/package.json"));
-    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
+    const rasterPackage = await readPackage(resolve(resolvedRasterRoot, "package.json"));
+    const resvgPackage = await readPackage(resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm/package.json"));
+    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0" && rootPackage.version !== "0.6.1") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
       throw new Error("sidecar package identity does not match the closed release input");
     }
 
     await copyRegular(nodePath, stageBinary, 0o755);
     await copyClosedTree(resolve(coreRoot, "dist"), resolve(stagePayload, "dist"), new Set());
     await copyRegular(resolve(coreRoot, "package.json"), resolve(stagePayload, "package.json"));
+
     for (const packageName of ROOT_RUNTIME_PACKAGES) {
-      await copyClosedTree(resolve(coreRoot, "node_modules", packageName), resolve(stagePayload, "node_modules", packageName), new Set());
+      const corePkgDir = resolve(coreRoot, "node_modules", packageName);
+      if (existsSync(corePkgDir)) {
+        await copyClosedTree(corePkgDir, resolve(stagePayload, "node_modules", packageName), new Set());
+      } else if (!release && existsSync(resolve(effectiveRepoRoot, "node_modules", packageName))) {
+        await copyClosedTree(resolve(effectiveRepoRoot, "node_modules", packageName), resolve(stagePayload, "node_modules", packageName), new Set());
+      } else {
+        throw new Error(`required sidecar runtime package is unavailable: ${packageName}`);
+      }
     }
-    await copyClosedTree(resolve(coreRoot, "native/directory-snapshot/prebuilds/darwin-arm64"), resolve(stagePayload, "native/directory-snapshot/prebuilds/darwin-arm64"), new Set());
-    for (const file of RASTER_FILES) await copyRegular(resolve(rasterRoot, file), resolve(stagePayload, "node_modules/@knowledge-forge-ai/tfsb-raster-resvg", file));
-    await copyClosedTree(resolve(rasterRoot, "node_modules/@resvg/resvg-wasm"), resolve(stagePayload, "node_modules/@resvg/resvg-wasm"), new Set());
-    for (const file of PROTOCOL_FILES) await copyRegular(resolve(coreRoot, "protocol/tfsb-studio-v1", file), resolve(stagePayload, "protocol/tfsb-studio-v1", file));
-    for (const file of LEGAL_FILES) await copyRegular(resolve(coreRoot, file), resolve(stagePayload, "legal", file));
-    await copyRegular(resolve(studioRoot, "legal/node-LICENSE.txt"), resolve(stagePayload, "legal/node-LICENSE.txt"));
+
+    const addon = effectiveTarget.addon;
+    const nativeSrc = resolve(coreRoot, "native/directory-snapshot/prebuilds", addon);
+    const nativeDest = resolve(stagePayload, "native/directory-snapshot/prebuilds", addon);
+    await copyClosedTree(nativeSrc, nativeDest, new Set());
+    const nativeManifest = await readPackage(resolve(nativeSrc, "manifest.json"));
+
+    for (const file of RASTER_FILES) {
+      await copyRegular(resolve(resolvedRasterRoot, file), resolve(stagePayload, "node_modules/@knowledge-forge-ai/tfsb-raster-resvg", file));
+    }
+    await copyClosedTree(resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm"), resolve(stagePayload, "node_modules/@resvg/resvg-wasm"), new Set());
+
+    for (const file of PROTOCOL_FILES) {
+      await copyRegular(resolve(coreRoot, "protocol/tfsb-studio-v1", file), resolve(stagePayload, "protocol/tfsb-studio-v1", file));
+    }
+    for (const file of LEGAL_FILES) {
+      await copyRegular(resolve(coreRoot, file), resolve(stagePayload, "legal", file));
+    }
+    await copyRegular(resolve(effectiveStudioRoot, "legal/node-LICENSE.txt"), resolve(stagePayload, "legal/node-LICENSE.txt"));
 
     const payloadPackage = { name: "@knowledge-forge-ai/tfsb-studio-sidecar-payload", version: "0.1.0", private: true, type: "module" };
     await writeFile(resolve(stagePayload, "package.json"), `${canonicalJson(payloadPackage)}\n`, { mode: 0o644 });
+
     const files = await inventory(stagePayload);
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    const rootTarballIdentity = await packageIdentity(rootTarball);
+
+    let rootTarballIdentity = undefined;
+    if (rootTarball) {
+      await requireRegular(rootTarball);
+      rootTarballIdentity = await packageIdentity(rootTarball);
+    }
+
+    const actualInputPayload = rootTarballIdentity
+      ? { coreTarball: rootTarballIdentity, files }
+      : { files };
+    const actualInputDigest = sha256(Buffer.from(canonicalJson(actualInputPayload)));
+
+    let sourceRecord;
+    let schemaVersion;
+    if (canonicalSourceIdentity) {
+      sourceRecord = {
+        actualInputDigest,
+        model: "source-candidate-v2",
+        sourceCandidate: canonicalSourceIdentity,
+      };
+      schemaVersion = 2;
+    } else {
+      sourceRecord = {
+        actualInputDigest,
+        baseCommit,
+        model: "closed-input-digest-v1",
+      };
+      schemaVersion = 1;
+    }
+
+    const coreRecord = rootTarballIdentity
+      ? { name: rootPackage.name, version: rootPackage.version, tarball: rootTarballIdentity }
+      : { name: rootPackage.name, version: rootPackage.version };
+
     const runtimeBytes = await readFile(nodePath);
-    const nativeManifest = await readPackage(resolve(coreRoot, "native/directory-snapshot/prebuilds/darwin-arm64/manifest.json"));
-    const wasmPath = resolve(rasterRoot, "node_modules/@resvg/resvg-wasm/index_bg.wasm");
+    const wasmPath = resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm/index_bg.wasm");
     const wasmBytes = await readFile(wasmPath);
+
     const protocol = {};
     for (const version of ["1.0", "1.1", "1.2"]) {
       const suffix = version === "1.0" ? "" : `-${version}`;
@@ -753,38 +1098,76 @@ export async function prepareSidecar({ repositoryRoot, nodePath, rootTarball }) 
         resultsSha256: sha256(await readFile(resolve(coreRoot, `protocol/tfsb-studio-v1/results${suffix}.schema.json`))),
       };
     }
+
     const manifest = {
       schema: "tfsb.studio-sidecar-distribution",
-      schemaVersion: 1,
-      target: TARGET,
+      schemaVersion,
+      target: effectiveTarget.triple,
       runtimeKind: RUNTIME_KIND,
-      source: {
-        actualInputDigest: sha256(Buffer.from(canonicalJson({ coreTarball: rootTarballIdentity, files }))),
-        baseCommit,
-        model: "closed-input-digest-v1",
+      source: sourceRecord,
+      core: coreRecord,
+      runtime: {
+        version: runtimeProbe.node,
+        v8: runtimeProbe.v8,
+        target: effectiveTarget.triple,
+        sha256: sha256(runtimeBytes),
+        size: nodeInfo.size,
+        mode: 0o755,
       },
-      core: { name: rootPackage.name, version: rootPackage.version, tarball: rootTarballIdentity },
-      runtime: { version: runtimeProbe.node, v8: runtimeProbe.v8, target: TARGET, sha256: sha256(runtimeBytes), size: nodeInfo.size, mode: 0o755 },
       entrypoint: ENTRYPOINT,
       protocol,
-      native: { backend: nativeManifest.backend, abi: nativeManifest.abiVersion, target: TARGET, sha256: nativeManifest.artifactSha256, size: nativeManifest.artifactBytes },
-      raster: { name: rasterPackage.name, version: rasterPackage.version, packageJsonSha256: sha256(await readFile(resolve(rasterRoot, "package.json"))) },
-      resvg: { name: resvgPackage.name, version: resvgPackage.version, wasmSha256: sha256(wasmBytes), wasmSize: wasmBytes.length },
+      native: {
+        backend: nativeManifest.backend,
+        abi: nativeManifest.abiVersion ?? nativeManifest.abi,
+        target: effectiveTarget.triple,
+        sha256: nativeManifest.artifactSha256,
+        size: nativeManifest.artifactBytes,
+      },
+      raster: {
+        name: rasterPackage.name,
+        version: rasterPackage.version,
+        packageJsonSha256: sha256(await readFile(resolve(resolvedRasterRoot, "package.json"))),
+      },
+      resvg: {
+        name: resvgPackage.name,
+        version: resvgPackage.version,
+        wasmSha256: sha256(wasmBytes),
+        wasmSize: wasmBytes.length,
+      },
       files,
-      totals: { fileCount: files.length, bytes: totalBytes, inventoryDigest: sha256(Buffer.from(canonicalJson(files))) },
+      totals: {
+        fileCount: files.length,
+        bytes: totalBytes,
+        inventoryDigest: sha256(Buffer.from(canonicalJson(files))),
+      },
     };
+
     const manifestDigest = sha256(Buffer.from(canonicalJson(manifest)));
     const closedManifest = { ...manifest, manifestDigest };
-    validateManifestShape(closedManifest);
+    validateManifestShape(closedManifest, {
+      testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
+      nativeAuthority,
+    });
     await writeFile(resolve(stagePayload, "manifest.json"), `${canonicalJson(closedManifest)}\n`, { mode: 0o644 });
-    await verifyDistribution({ binaryPath: stageBinary, payloadRoot: stagePayload });
-    const binaryDestination = resolve(tauriRoot, "binaries", SIDECAR_NAME);
+    await verifyDistribution({
+      binaryPath: stageBinary,
+      payloadRoot: stagePayload,
+      testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
+      mode: options.mode, buildInputs: options.buildInputs,
+    });
+
+    const binaryDestination = resolve(tauriRoot, "binaries", sidecarBinary);
     const payloadDestination = resolve(tauriRoot, "sidecar-payload");
     const existingBinary = await optionalIdentity(binaryDestination, "file");
     const existingPayload = await optionalIdentity(payloadDestination, "directory");
     if (existingBinary !== null || existingPayload !== null) {
       if (existingBinary === null || existingPayload === null) throw new Error("existing generated sidecar pair is incomplete");
-      await verifyDistribution({ binaryPath: binaryDestination, payloadRoot: payloadDestination });
+      await verifyDistribution({
+        binaryPath: binaryDestination,
+        payloadRoot: payloadDestination,
+        testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
+        mode: options.mode, buildInputs: options.buildInputs,
+      });
     }
     await replaceGeneratedPair({
       binarySource: stageBinary,
@@ -797,7 +1180,13 @@ export async function prepareSidecar({ repositoryRoot, nodePath, rootTarball }) 
       standaloneInputs = null;
     }
     await rm(stageRoot, { recursive: true, force: true });
-    return { manifestDigest, fileCount: files.length, bytes: totalBytes };
+    return {
+      manifestDigest,
+      fileCount: files.length,
+      bytes: totalBytes,
+      target: effectiveTarget.triple,
+      sidecarBinary,
+    };
   } catch (error) {
     if (standaloneInputs) await standaloneInputs.cleanup();
     await rm(stageRoot, { recursive: true, force: true });
@@ -807,14 +1196,21 @@ export async function prepareSidecar({ repositoryRoot, nodePath, rootTarball }) 
 
 export const replaceGeneratedPairForTest = replaceGeneratedPair;
 
-export async function verifyDistribution({ binaryPath, payloadRoot, testOnlyAllowNonProductionIdentity = false }) {
+export async function verifyDistribution({
+  binaryPath,
+  payloadRoot,
+  testOnlyAllowNonProductionIdentity = false,
+  mode,
+  buildInputs,
+}) {
+  const nativeAuthority = await sidecarAuthority(mode, buildInputs);
   await rejectSymlinkAncestors(binaryPath);
   await rejectSymlinkAncestors(payloadRoot);
   const { bytes: binaryBytes, info: binaryInfo } = await readRegular(binaryPath);
   const { bytes: manifestBytes } = await readRegular(resolve(payloadRoot, "manifest.json"), MAX_MANIFEST_BYTES);
   const rawManifest = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
   const manifest = JSON.parse(rawManifest);
-  validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity });
+  validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity, nativeAuthority });
   const { manifestDigest, ...unsigned } = manifest;
   if (canonicalJson(manifest) + "\n" !== rawManifest) throw new Error("manifest bytes are not canonical");
   if (manifestDigest !== sha256(Buffer.from(canonicalJson(unsigned)))) throw new Error("manifest self-digest is invalid");
@@ -827,14 +1223,25 @@ export async function verifyDistribution({ binaryPath, payloadRoot, testOnlyAllo
   const totalBytes = actualFiles.reduce((sum, file) => sum + file.size, 0);
   if (manifest.totals.fileCount !== actualFiles.length || manifest.totals.bytes !== totalBytes
       || manifest.totals.inventoryDigest !== sha256(Buffer.from(canonicalJson(actualFiles)))) throw new Error("sidecar payload totals are invalid");
-  if (manifest.source.actualInputDigest !== sha256(Buffer.from(canonicalJson({ coreTarball: manifest.core.tarball, files: manifest.files })))) throw new Error("sidecar actual input identity is invalid");
+
+  const expectedActualInput = manifest.core.tarball
+    ? { coreTarball: manifest.core.tarball, files: manifest.files }
+    : { files: manifest.files };
+  if (manifest.source.actualInputDigest !== sha256(Buffer.from(canonicalJson(expectedActualInput)))) throw new Error("sidecar actual input identity is invalid");
+
   const byPath = new Map(actualFiles.map((file) => [file.path, file]));
   const required = (path) => {
     const file = byPath.get(path);
     if (!file) throw new Error(`required sidecar payload file is unavailable: ${path}`);
     return file;
   };
-  const native = required("native/directory-snapshot/prebuilds/darwin-arm64/native-addon-posix-openat-v1.node");
+
+  const targetRecord = TARGETS.find((t) => t.triple === manifest.target);
+  const addon = targetRecord?.addon ?? "darwin-arm64";
+  const native = required(`native/directory-snapshot/prebuilds/${addon}/native-addon-posix-openat-v1.node`);
+  if (nativeAuthority && required(`${nativeAuthority.prefix}/manifest.json`).sha256 !== nativeAuthority.manifestSha256) {
+    throw new Error("Source-bound native manifest mismatch");
+  }
   const raster = required("node_modules/@knowledge-forge-ai/tfsb-raster-resvg/package.json");
   const wasm = required("node_modules/@resvg/resvg-wasm/index_bg.wasm");
   required(ENTRYPOINT);
@@ -868,5 +1275,5 @@ export function preparationOptions(argv, repositoryRoot) {
   const nodePath = args.get("node") ?? process.env.TFSB_STUDIO_NODE_BINARY;
   const rootTarball = args.get("root-tarball") ?? process.env.TFSB_STUDIO_ROOT_TARBALL ?? fallbackTarball;
   if (!nodePath || !rootTarball) throw new Error("set explicit --node and --root-tarball inputs (or the documented TFSB_STUDIO_* equivalents)");
-  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball) };
+  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball), ...(args.has("target") ? { target: args.get("target") } : {}) };
 }
