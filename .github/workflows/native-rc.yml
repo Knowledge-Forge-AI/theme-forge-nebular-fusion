@@ -658,18 +658,33 @@ jobs:
         with:
           artifact-ids: ${{ steps.ids.outputs.ids }}
           path: .rc-artifacts/
+      # CI11: the catalog directory is not hidden. upload-artifact excludes hidden files by default, and
+      # CI10's .rc-index/ was dropped with only a warning, so a passing catalog was never retained.
       - name: Catalog every lane
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p .rc-index .rc-artifacts
-          node tools/native-rc-index.mjs --download-dir .rc-artifacts --output .rc-index/rc-index.json
-      - name: Upload the release-candidate catalog
+          mkdir -p rc-index .rc-artifacts
+          node tools/native-rc-index.mjs --download-dir .rc-artifacts --output rc-index/rc-index.json
+      # A failing catalog still writes its file and is retained as evidence; no file fails the job here.
+      - name: Require exactly one regular rc-index.json
+        id: catalog-file
         if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          if [[ -L rc-index || ! -d rc-index ]]; then echo "rc-index is not a directory" >&2; exit 1; fi
+          entries=(rc-index/*)
+          if [[ ${#entries[@]} -ne 1 || ${entries[0]} != rc-index/rc-index.json ]]; then echo "rc-index must hold exactly rc-index.json" >&2; exit 1; fi
+          if [[ -L rc-index/rc-index.json || ! -f rc-index/rc-index.json || ! -s rc-index/rc-index.json ]]; then echo "rc-index/rc-index.json is not a non-empty regular file" >&2; exit 1; fi
+      - name: Upload the release-candidate catalog
+        if: ${{ always() && steps.catalog-file.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nebular-rc-index-${{ github.run_id }}-a${{ github.run_attempt }}
-          path: .rc-index/
-          if-no-files-found: warn
+          path: rc-index/
+          if-no-files-found: error
+          include-hidden-files: false
           retention-days: ${{ needs.plan.outputs.retention_days || 14 }}
           overwrite: false
