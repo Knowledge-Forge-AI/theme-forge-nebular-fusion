@@ -1,19 +1,19 @@
 {
-  "sha256": "842fbf29a7ea0a715503a50aa5dd860b6dcaef953b8c6d9030450e76a1732df5",
-  "bytes": 211244,
-  "sourceTreeDigest": "5867d66fa55fba4989628ffb4e4e446cfd6b25911b8928e500ab6a847dd2c2dd",
+  "sha256": "a0cda8aee54a4d90688e512a79256d67f3089365901388ccfbe31d45ff7f7c37",
+  "bytes": 211246,
+  "sourceTreeDigest": "d371f3612b7f755600ed222ccd8b3a00e80070f1b357900867ffcc67d2ba7a6c",
   "executableFiles": 39,
   "schema": "tfsb.nebular-scene-binding-v1",
   "engineSchema": "tfsb.vector-scene-v1",
   "compatibility": 1,
   "compilerLevel": 1,
-  "metadataVersion": "0.6.0",
+  "metadataVersion": "0.6.1",
   "capability": "0.5-development",
   "node": {
-    "version": "22.23.2",
+    "version": "22.23.3",
     "target": "aarch64-apple-darwin",
-    "sha256": "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572",
-    "bytes": 112937728
+    "sha256": "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
+    "bytes": 112925600
   },
   "adapterSha256": "1d0a28a146df201da9ef1fe2432595ccccef3ee3a4851d54e966adc51a8da195",
   "files": [
@@ -145,7 +145,7 @@
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/package.json",
       "bytes": 170,
-      "sha256": "1639f1951c07f2af5c8219e89f1b475feb390c6bf4ee8d17fbff820f3124a3ab"
+      "sha256": "a5c891be94777f4bdf1a546453fc2d0631deb99fb1715486fbb9d4d213c6da81"
     },
     {
       "path": "node_modules/@xmldom/xmldom/CHANGELOG.md",
@@ -325,7 +325,7 @@
     {
       "path": "scene-input.json",
       "bytes": 8363,
-      "sha256": "c90a2c8a71913c2864f5afda0bdddf11977dd7f73978b077e60fc0464aa8344e"
+      "sha256": "eb57d2dfa1d36d769cee296e37db16d9db8b0e783f15db665841128e46254490"
     }
   ]
 }

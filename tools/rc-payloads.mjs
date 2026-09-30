@@ -4,9 +4,9 @@
  * TFSB65 Release-Candidate (RC) Payload Generation and Maintained Binding Owner.
  *
  * Responsibilities:
- * 1. Consumes exact, authenticated Burst 0.6.0 and Loom 0.4.0 RC tarball artifacts.
+ * 1. Consumes exact, authenticated Burst 0.6.1 and Loom 0.4.0 RC tarball artifacts.
  * 2. Deterministically produces the closed Scene payload archive (bit-identical across runs).
- * 3. Maintains Scene Workbench v1 payload-binding.json (62 files, capability 0.5-development, metadataVersion 0.6.0).
+ * 3. Maintains Scene Workbench v1 payload-binding.json (62 files, capability 0.5-development, metadataVersion 0.6.1).
  * 4. Maintains Theme Lab v2 payload-binding.json (335 files, exact Loom 0.4.0 archive digest and members).
  * 5. Updates gallery-contract.ts EXPECTED_ARCHIVE_SHA256 while strictly preserving the 37-field structural inventory.
  * 6. Emits heavy archives and execution receipt to designated output directory.
@@ -38,9 +38,9 @@ const __dirname = dirname(__filename);
 const STUDIO_ROOT = resolve(__dirname, "..");
 
 export const EXPECTED_BURST_NAME = "@knowledge-forge-ai/theme-forge-stellar-burst";
-export const EXPECTED_BURST_VERSION = "0.6.0";
+export const EXPECTED_BURST_VERSION = "0.6.1";
 export const EXPECTED_BURST_SHA256 =
-  "e6437f520745d54e461c51afcc77b1a457363237d3e7f788ed14f0c26c66a4a4";
+  "53ef41a3de3335e042f2c4b1d299b1155b64bfc6556a84baf6a62cb28bcca209";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
 export const EXPECTED_LOOM_VERSION = "0.4.0";
@@ -360,7 +360,7 @@ export async function constructScenePayloadTree(scratchDir, burstPackageRoot, de
     throw new Error(`Expected exactly 39 executable files in scene payload, got ${executableFiles.length}`);
   }
 
-  // 6. Source tree digest of the Burst 0.6.0 package
+  // 6. Source tree digest of the Burst 0.6.1 package
   const sourceTreeDigest = await computeTreeDigest(burstPackageRoot);
 
   // 7. Write scene-input.json

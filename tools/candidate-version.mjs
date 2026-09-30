@@ -498,7 +498,7 @@ function classifyHit(path, line, lineIndex, lines, match) {
   if (/^native\//.test(path)) {
     return { classification: "unrelated/non-version semantic text", reason: "independent native prebuild or addon artifact" };
   }
-  if (/^nix\/(?:packages\/(?:stellar-burst|stellar-loom|solar-sail)\.nix|burst\/|stellar-loom\/|solar-sail\/|experimental\/|experimental-burst\/)/.test(path)) {
+  if (/^nix\/(?:packages\/(?:stellar-burst|stellar-loom|solar-sail)\.nix|npm-dependency-authority\.json$|burst\/|stellar-loom\/|solar-sail\/|experimental\/|experimental-burst\/)/.test(path)) {
     return { classification: "unrelated/non-version semantic text", reason: "independent component nix packaging; separate release cadence" };
   }
   if (path === "package-lock.json") {

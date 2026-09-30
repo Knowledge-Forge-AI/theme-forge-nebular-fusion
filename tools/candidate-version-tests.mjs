@@ -67,7 +67,7 @@ test("repository discovery fails on unknown live version text outside known proj
 });
 
 test("Candidate version constant is projected at 0.6.0", () => {
-  assert.equal(CANDIDATE_VERSION, "0.6.0");
+  assert.equal(CANDIDATE_VERSION, "0.6.1");
 });
 
 test("Cargo, Tauri and application lock project the maintained candidate version 0.6.0", () => {
@@ -427,13 +427,13 @@ test("Scenario 1: unnamed new build tool discovered mechanically without product
     await mkdir(join(tempRepo, "tools"), { recursive: true });
     // An unnamed tool without any mention of "nebular", "studioVersion", etc.
     const toolFile = "tools/pipeline-asset-bundler.mjs";
-    await writeFile(join(tempRepo, toolFile), 'export const candidateVersion = "0.6.0";\n');
+    await writeFile(join(tempRepo, toolFile), `export const candidateVersion = "${CANDIDATE_VERSION}";\n`);
 
     const report = discoverVersionReferences(tempRepo);
     assert.equal(report.passed, true);
     assert.equal(report.drift.length, 0);
     assert.equal(report.unclassified.length, 0);
-    assert.ok(report.hits.some(h => h.path === toolFile && h.version === "0.6.0" && h.classification === "derived/checked candidate surface"),
+    assert.ok(report.hits.some(h => h.path === toolFile && h.version === CANDIDATE_VERSION && h.classification === "derived/checked candidate surface"),
       "Unnamed build tool version must be mechanically discovered");
 
     // If candidate version in unnamed tool drifts to 0.4.0, it must fail

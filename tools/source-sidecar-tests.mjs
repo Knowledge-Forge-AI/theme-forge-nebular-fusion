@@ -5,7 +5,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { locateCachedPortableNode } from "./node-runtime-authority.mjs";
+import { EXPECTED_V8_VERSION, locateCachedPortableNode } from "./node-runtime-authority.mjs";
 import { inventoryTree, seal, sourceResourcePlans } from "./candidate-provenance.mjs";
 import { createBuildSettings } from "./build-settings.mjs";
 import { parseVerificationArguments, verifySidecar } from "./sidecar-verify.mjs";
@@ -29,7 +29,7 @@ import {
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const tempBase = realpathSync(resolve(process.env.TMPDIR ?? tmpdir()));
 
-async function createNodeRuntimeStub(dir, target, { version = NODE_VERSION, v8 = "12.4.254.21-node.56" } = {}) {
+async function createNodeRuntimeStub(dir, target, { version = NODE_VERSION, v8 = EXPECTED_V8_VERSION } = {}) {
   const stubPath = resolve(dir, `node-stub-${target.triple}`);
   const payload = JSON.stringify({
     node: version,

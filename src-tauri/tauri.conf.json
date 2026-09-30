@@ -1,6 +1,6 @@
 {
   "productName": "Theme Forge Nebular Fusion",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
   "build": {
     "beforeBuildCommand": "npm run build",
