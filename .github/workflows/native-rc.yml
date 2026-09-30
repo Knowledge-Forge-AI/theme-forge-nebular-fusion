@@ -274,6 +274,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Trust exactly this job's workspace for Git
+        run: |
+          case "$GITHUB_WORKSPACE" in /*) ;; *) echo "::error::GITHUB_WORKSPACE is not absolute"; exit 1 ;; esac
+          case "$GITHUB_WORKSPACE" in *'*'*) echo "::error::GITHUB_WORKSPACE contains a wildcard"; exit 1 ;; esac
+          test "$(pwd -P)" = "$GITHUB_WORKSPACE"
+          test -d "$GITHUB_WORKSPACE/.git"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          git config --show-origin --get-all safe.directory
+          test -z "$(git config --get-all safe.directory | grep -Fxv -e "$GITHUB_WORKSPACE" || true)"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
       # A pull-request candidate is the head commit, and its tree must be exactly the tree that merges.
       - name: Bind the source commit and tree
         env:
@@ -458,6 +468,16 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Trust exactly this job's workspace for Git
+        run: |
+          case "$GITHUB_WORKSPACE" in /*) ;; *) echo "::error::GITHUB_WORKSPACE is not absolute"; exit 1 ;; esac
+          case "$GITHUB_WORKSPACE" in *'*'*) echo "::error::GITHUB_WORKSPACE contains a wildcard"; exit 1 ;; esac
+          test "$(pwd -P)" = "$GITHUB_WORKSPACE"
+          test -d "$GITHUB_WORKSPACE/.git"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          git config --show-origin --get-all safe.directory
+          test -z "$(git config --get-all safe.directory | grep -Fxv -e "$GITHUB_WORKSPACE" || true)"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
       # A pull-request candidate is the head commit, and its tree must be exactly the tree that merges.
       - name: Bind the source commit and tree
         env:
