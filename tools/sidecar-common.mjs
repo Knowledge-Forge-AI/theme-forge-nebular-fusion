@@ -246,7 +246,7 @@ async function inventory(payloadRoot) {
 }
 
 function parseArgs(argv) {
-  const allowed = new Set(["node", "root-tarball"]);
+  const allowed = new Set(["node", "root-tarball", "target"]);
   if (argv.length % 2 !== 0) throw new Error("sidecar preparation requires paired explicit arguments");
   const values = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -256,7 +256,8 @@ function parseArgs(argv) {
     const name = key.slice(2);
     if (!allowed.has(name)) throw new Error(`unknown sidecar preparation option: ${key}`);
     if (values.has(name)) throw new Error(`duplicate sidecar preparation option: ${key}`);
-    values.set(name, resolve(value));
+    // A target is a platform triple, not a path; every other option names an explicit input path.
+    values.set(name, name === "target" ? resolveTarget(value).triple : resolve(value));
   }
   return values;
 }
@@ -1274,5 +1275,5 @@ export function preparationOptions(argv, repositoryRoot) {
   const nodePath = args.get("node") ?? process.env.TFSB_STUDIO_NODE_BINARY;
   const rootTarball = args.get("root-tarball") ?? process.env.TFSB_STUDIO_ROOT_TARBALL ?? fallbackTarball;
   if (!nodePath || !rootTarball) throw new Error("set explicit --node and --root-tarball inputs (or the documented TFSB_STUDIO_* equivalents)");
-  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball) };
+  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball), ...(args.has("target") ? { target: args.get("target") } : {}) };
 }

@@ -361,6 +361,16 @@ test("generated binary and payload publish as one recoverable pair", async (cont
   });
 });
 
+test("preparation arguments carry an explicit platform target without treating it as a path", () => {
+  const repositoryRoot = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
+  const linux = preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "aarch64-unknown-linux-gnu"], repositoryRoot);
+  assert.equal(linux.target, "aarch64-unknown-linux-gnu");
+  assert.equal(preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "x86_64-linux"], repositoryRoot).target, "x86_64-unknown-linux-gnu");
+  assert.equal(Object.hasOwn(preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz"], repositoryRoot), "target"), false);
+  assert.throws(() => preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "../escape"], repositoryRoot), /unsupported or invalid target/u);
+  assert.throws(() => preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "x86_64-pc-windows-msvc"], repositoryRoot), /unsupported or invalid target/u);
+});
+
 test("preparation arguments reject duplicates unknowns and missing pairs", () => {
   const repositoryRoot = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
   assert.throws(() => preparationOptions(["--node", "/node", "--node", "/other", "--root-tarball", "/root.tgz"], repositoryRoot), /duplicate/u);

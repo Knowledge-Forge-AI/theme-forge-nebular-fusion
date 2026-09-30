@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { lstatSync, readFileSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile, readFile, stat, chmod, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, chmod, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { finalizeDarwinAppBundle } from "./finalize-darwin-bundle.mjs";
+import { readRegularSnapshot } from "./fs-snapshot.mjs";
 
 test("finalizeDarwinAppBundle installs launcher and legal notices before signing gate with strict ordering", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "finalize-bundle-test-"));
@@ -39,19 +39,19 @@ test("finalizeDarwinAppBundle installs launcher and legal notices before signing
       assert.equal(cmd, "codesign");
       if (args.includes("--sign")) {
         // At the moment codesign is invoked, verify launcher, LICENSE, and NOTICE exist synchronously on disk with exact modes!
-        const lStat = lstatSync(launcherExpected);
-        assert.ok(lStat.isFile() && !lStat.isSymbolicLink(), "Launcher must be regular file before signing");
-        assert.equal(lStat.mode & 0o777, 0o755, "Launcher must have mode 0755 before signing");
+        // Each member is observed through one no-follow descriptor: a symlink or
+        // non-regular member fails the snapshot, and mode and bytes come from that
+        // same descriptor.
+        const launcher = readRegularSnapshot(launcherExpected);
+        assert.equal(launcher.mode & 0o777, 0o755, "Launcher must have mode 0755 before signing");
 
-        const licStat = lstatSync(licenseExpected);
-        assert.ok(licStat.isFile() && !licStat.isSymbolicLink(), "LICENSE must be regular file before signing");
-        assert.equal(licStat.mode & 0o777, 0o644, "LICENSE must have deterministic mode 0644 before signing");
-        assert.deepEqual(readFileSync(licenseExpected), licenseContent, "LICENSE bytes must match source before signing");
+        const license = readRegularSnapshot(licenseExpected);
+        assert.equal(license.mode & 0o777, 0o644, "LICENSE must have deterministic mode 0644 before signing");
+        assert.deepEqual(license.bytes, licenseContent, "LICENSE bytes must match source before signing");
 
-        const notStat = lstatSync(noticeExpected);
-        assert.ok(notStat.isFile() && !notStat.isSymbolicLink(), "NOTICE must be regular file before signing");
-        assert.equal(notStat.mode & 0o777, 0o644, "NOTICE must have deterministic mode 0644 before signing");
-        assert.deepEqual(readFileSync(noticeExpected), noticeContent, "NOTICE bytes must match source before signing");
+        const notice = readRegularSnapshot(noticeExpected);
+        assert.equal(notice.mode & 0o777, 0o644, "NOTICE must have deterministic mode 0644 before signing");
+        assert.deepEqual(notice.bytes, noticeContent, "NOTICE bytes must match source before signing");
       } else if (args.includes("--verify")) {
         // Verify that --sign was invoked prior to --verify
         assert.ok(callOrder.some(c => c.args.includes("--sign")), "--verify must be called after --sign");
@@ -92,16 +92,15 @@ test("finalizeDarwinAppBundle installs launcher and legal notices before signing
     });
 
     // Check final file properties
-    const launcherSt = await stat(result.launcherPath);
-    assert.equal(launcherSt.mode & 0o777, 0o755, "Launcher must be mode 0755");
+    assert.equal(readRegularSnapshot(result.launcherPath).mode & 0o777, 0o755, "Launcher must be mode 0755");
 
-    const licenseSt = await stat(result.licenseDst);
-    assert.equal(licenseSt.mode & 0o777, 0o644, "LICENSE must be mode 0644");
-    assert.deepEqual(await readFile(result.licenseDst), licenseContent);
+    const license = readRegularSnapshot(result.licenseDst);
+    assert.equal(license.mode & 0o777, 0o644, "LICENSE must be mode 0644");
+    assert.deepEqual(license.bytes, licenseContent);
 
-    const noticeSt = await stat(result.noticeDst);
-    assert.equal(noticeSt.mode & 0o777, 0o644, "NOTICE must be mode 0644");
-    assert.deepEqual(await readFile(result.noticeDst), noticeContent);
+    const notice = readRegularSnapshot(result.noticeDst);
+    assert.equal(notice.mode & 0o777, 0o644, "NOTICE must be mode 0644");
+    assert.deepEqual(notice.bytes, noticeContent);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

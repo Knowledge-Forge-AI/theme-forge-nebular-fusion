@@ -256,6 +256,10 @@ jobs:
           node --input-type=module -e 'import { createHash } from "node:crypto"; import { readFileSync } from "node:fs"; import { EXPECTED_EXECUTABLE_SHA256 } from "./tools/node-runtime-authority.mjs"; if (createHash("sha256").update(readFileSync(process.env.TFSB_STUDIO_NODE_BINARY)).digest("hex") !== EXPECTED_EXECUTABLE_SHA256) throw new Error("[NODE_AUTH_FAIL] Authenticated Node runtime changed before the Tauri build");'
           # Apple ld records rustup std rlib paths (under the runner home) in its debug map; strip that prefix so build-app's home-path hygiene check applies to real leaks.
           CARGO_ENCODED_RUSTFLAGS="-Clink-arg=-Wl,-oso_prefix,$(rustup show home)/" npm run tauri:build
+      # Tauri's beforeBuildCommand rebuilt dist and the application crate embedded exactly those bytes;
+      # archive them before any later step so the aggregate cross-check binds the embedded frontend.
+      - name: Archive the frontend embedded by the Tauri build
+        run: tar -czf .test-reports/nebular/frontend-dist.tar.gz -C dist .
       - name: Verify application bundle and security ACL
         run: |
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Theme Forge Nebular Fusion.app"
@@ -265,7 +269,7 @@ jobs:
           tar -czf .test-reports/nebular/nebular-fusion.app.tar.gz -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos "Theme Forge Nebular Fusion.app"
       - name: Bind Nebular artifact bytes
         run: |
-          node tools/ci/artifact-manifest.mjs --root .test-reports/nebular --output .test-reports/nebular/artifact-manifest.json --job macos-arm64 --require receipt.json --require node-authenticity/receipt.json --require node-authenticity/SHASUMS256.txt.asc --require node-runtime --require sidecar-payload.tar.gz --require sidecar-transcript.json --require nebular-fusion.app.tar.gz --require bundle-identity.json --require signing-facts.json
+          node tools/ci/artifact-manifest.mjs --root .test-reports/nebular --output .test-reports/nebular/artifact-manifest.json --job macos-arm64 --require receipt.json --require node-authenticity/receipt.json --require node-authenticity/SHASUMS256.txt.asc --require node-runtime --require sidecar-payload.tar.gz --require sidecar-transcript.json --require nebular-fusion.app.tar.gz --require frontend-dist.tar.gz --require bundle-identity.json --require signing-facts.json
       - name: Upload Nebular Fusion macOS artifacts
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         if: always()

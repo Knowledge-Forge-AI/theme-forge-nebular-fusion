@@ -34,6 +34,7 @@ const __dirname = dirname(__filename);
 const studioRoot = resolve(__dirname, "..");
 
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
+import { reindexPagefindSite } from "./pagefind-index.mjs";
 
 import {
   EXPECTED_ARCHIVE_SHA256,
@@ -644,6 +645,9 @@ export default defineConfig({
       throw new Error(`Astro build succeeded for \x27${theme.id}\x27 but catalog/index.html is missing`);
     }
     console.log(`✓ Scenario \x27${theme.id}\x27 built successfully in ${buildDuration}ms via installed executable`);
+    // Replace the order-dependent service-API index with the sorted CLI index of the installed Pagefind.
+    const pagefind = reindexPagefindSite(distDir, { nodeModules: join(consumerDir, "node_modules") });
+    console.log(`✓ Scenario \x27${theme.id}\x27 re-indexed deterministically with Pagefind ${pagefind.binary.version} (${pagefind.binary.platform})`);
 
     // Stage output to outputRoot/<id>
     const destScenarioDir = join(options.outputRoot, theme.id);

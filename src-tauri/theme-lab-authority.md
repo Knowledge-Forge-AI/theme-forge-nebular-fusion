@@ -91,3 +91,15 @@ policy adjustment. Host receipts bind the served document digest and header;
 the runner separately binds the executable digest and launch mode. Opaque-frame
 and bridge execution evidence comes from the actual frame, not the header alone.
 This instrumentation adds no production command and does not alter capabilities.
+
+The release smoke mode (`src/release_smoke`, CI9) is compiled into every build so
+that native release candidates are smoke-tested as the exact bytes that ship. It is
+inert unless the binary is launched with `--nebular-release-smoke=<scenario>` and
+`TFNF_RELEASE_SMOKE_DIR` names an owner-only directory inside the temporary
+directory; the flag with an invalid directory refuses to start. When active it
+drives the packaged frontend through its DOM and the existing command bridge with
+a compiled-in driver, answers project selection only from a finite compiled-in
+list of directories inside the smoke directory, keeps webview and sidecar
+temporary state inside that directory, writes one exclusively created receipt,
+and quits through the normal exit path. Its only filesystem owner is
+`src/release_smoke/io.rs`. It adds no command and does not alter capabilities.

@@ -107,12 +107,34 @@ fn scene_binding() -> StudioResult<Binding> {
     Ok(pins.scene)
 }
 
+// Tarball builds: the maintained protocol bindings pin the payload files, and the runtime pin is the
+// embedded Node that the prepared sidecar payload records for this build target (build.rs). Without a
+// prepared payload the protocol binding's own runtime pin applies.
+#[cfg(all(not(nebular_source_build), nebular_runtime_pin))]
+static RUNTIME_PIN_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/runtime-pin.json"));
+
+#[cfg(all(not(nebular_source_build), nebular_runtime_pin))]
+fn target_runtime(binding: Binding) -> StudioResult<Binding> {
+    let node: Runtime = serde_json::from_str(RUNTIME_PIN_JSON).map_err(|_| invalid())?;
+    Ok(Binding {
+        node,
+        files: binding.files,
+    })
+}
+
+#[cfg(all(not(nebular_source_build), not(nebular_runtime_pin)))]
+fn target_runtime(binding: Binding) -> StudioResult<Binding> {
+    Ok(binding)
+}
+
 #[cfg(not(nebular_source_build))]
 fn scene_binding() -> StudioResult<Binding> {
-    serde_json::from_str(include_str!(
-        "../../../protocol/scene-workbench-v1/payload-binding.json"
-    ))
-    .map_err(|_| invalid())
+    target_runtime(
+        serde_json::from_str(include_str!(
+            "../../../protocol/scene-workbench-v1/payload-binding.json"
+        ))
+        .map_err(|_| invalid())?,
+    )
 }
 
 #[cfg(nebular_source_build)]
@@ -123,10 +145,12 @@ fn loom_binding() -> StudioResult<Binding> {
 
 #[cfg(not(nebular_source_build))]
 fn loom_binding() -> StudioResult<Binding> {
-    serde_json::from_str(include_str!(
-        "../../../protocol/theme-lab-v2/payload-binding.json"
-    ))
-    .map_err(|_| invalid())
+    target_runtime(
+        serde_json::from_str(include_str!(
+            "../../../protocol/theme-lab-v2/payload-binding.json"
+        ))
+        .map_err(|_| invalid())?,
+    )
 }
 
 pub(crate) fn verify(node: &Path, adapter: &Path) -> StudioResult<()> {

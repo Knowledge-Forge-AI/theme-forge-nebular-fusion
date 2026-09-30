@@ -14,7 +14,9 @@ import {
   NODE_RELEASE_IDENTITY,
   EXPECTED_TARBALL_NAME,
   authenticateDarwinNodeDownload,
+  authenticateLinuxNodeArchive,
   readRegularFile,
+  signedShasumsBody,
   validateDarwinNodeArchive,
   validateDarwinPortableNode,
   validateLinuxPortableNode,
@@ -334,4 +336,65 @@ describe("maintained authenticity chain (shared verifier, signed SHASUMS)", () =
     expect(cached.executable.sha256).toBe(NODE_RELEASE_IDENTITY.nodeExecutableSha256);
     expect(stagingLeftovers(p.dir)).toEqual([]);
   }, 120_000);
+});
+
+describe("Linux runtime archive authentication (hosted Linux release-candidate lanes)", () => {
+  const LINUX = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"];
+  const stage = (archiveBytes, shasumsBytes = bytesOf(FIXTURE_SHASUMS), target = LINUX[0]) => {
+    const dir = join(root, `linux-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SHASUMS256.txt.asc"), shasumsBytes);
+    writeFileSync(join(dir, NODE_RELEASE_IDENTITY.targets[target].archive), archiveBytes);
+    return { dir, shasumsPath: join(dir, "SHASUMS256.txt.asc"), tarballPath: join(dir, NODE_RELEASE_IDENTITY.targets[target].archive), outputNodePath: join(dir, "out", "node"), targetTriple: target };
+  };
+
+  it("reads the Linux archive digests from the signed body of the genuine SHASUMS", () => {
+    const body = signedShasumsBody(bytesOf(FIXTURE_SHASUMS));
+    for (const triple of LINUX) {
+      const identity = NODE_RELEASE_IDENTITY.targets[triple];
+      expect(body).toContain(`${identity.archiveSha256}  ${identity.archive}`);
+    }
+    expect(() => signedShasumsBody(Buffer.from("unsigned text"))).toThrow(/cleartext-signed/);
+  });
+
+  it("verifies the signature through the shared verifier and then rejects an archive that is not the verified one", async () => {
+    const staged = stage(Buffer.from("not the official archive"));
+    await expect(authenticateLinuxNodeArchive(staged)).rejects.toThrow(/\[NODE_AUTH_FAIL\] node-v22\.23\.3-linux-arm64\.tar\.xz SHA-256 [0-9a-f]{64} does not match the verified checksum/);
+    expect(absent(staged.outputNodePath)).toBe(true);
+    expect(readdirSync(join(staged.dir, "out")).filter((name) => name.startsWith(".node-linux-"))).toEqual([]);
+  }, 60_000);
+
+  it("rejects a tampered signed SHASUMS and a foreign signer before anything is adopted", async () => {
+    const identity = NODE_RELEASE_IDENTITY.targets[LINUX[1]];
+    const tampered = bytesOf(FIXTURE_SHASUMS).toString("utf8").replace(identity.archiveSha256, "0".repeat(64));
+    const staged = stage(Buffer.from("archive"), Buffer.from(tampered), LINUX[1]);
+    await expect(authenticateLinuxNodeArchive(staged)).rejects.toThrow(/PGP signature verification failed/);
+    expect(absent(staged.outputNodePath)).toBe(true);
+    const foreign = stage(Buffer.from("archive"));
+    await expect(authenticateLinuxNodeArchive({ ...foreign, verify: async () => ({ signature: { fingerprint: "0".repeat(40) } }) })).rejects.toThrow(/is not the embedded runtime signer/);
+    await expect(authenticateLinuxNodeArchive({ ...foreign, targetTriple: "aarch64-apple-darwin" })).rejects.toThrow(/No embedded Linux runtime identity/);
+  }, 60_000);
+
+  it("adopts the genuine official Linux runtimes (qualification with the retained archives)", async () => {
+    const available = DIST_DIR && LINUX.every((triple) => { try { lstatSync(join(DIST_DIR, NODE_RELEASE_IDENTITY.targets[triple].archive)); return true; } catch { return false; } });
+    if (!available) {
+      if (QUALIFICATION) throw new Error("qualification requires the retained official Linux archives in NEBULAR_NODE_DIST_DIR");
+      return;
+    }
+    for (const triple of LINUX) {
+      const identity = NODE_RELEASE_IDENTITY.targets[triple];
+      const staged = stage(bytesOf(join(DIST_DIR, identity.archive)), bytesOf(FIXTURE_SHASUMS), triple);
+      const receipt = await authenticateLinuxNodeArchive(staged);
+      expect(receipt).toMatchObject({ schema: "nebular.linux-node-authenticity-v1", target: triple, nodeVersion: "22.23.3", undici: "6.28.1",
+        archive: { name: identity.archive, sha256: identity.archiveSha256 }, executable: { sha256: identity.executableSha256, size: identity.executableSize } });
+      expect(receipt.signature.fingerprint).toBe(NODE_RELEASE_IDENTITY.signingKeyFingerprint);
+      expect(sha256(bytesOf(staged.outputNodePath))).toBe(identity.executableSha256);
+      writeFileSync(join(staged.dir, "other"), "x");
+      const again = stage(bytesOf(join(DIST_DIR, identity.archive)), bytesOf(FIXTURE_SHASUMS), triple);
+      mkdirSync(join(again.dir, "out"), { recursive: true });
+      writeFileSync(again.outputNodePath, "different existing runtime");
+      await expect(authenticateLinuxNodeArchive(again)).rejects.toThrow(/differs from the authenticated bytes; it was not replaced/);
+      expect(bytesOf(again.outputNodePath).toString()).toBe("different existing runtime");
+    }
+  }, 180_000);
 });

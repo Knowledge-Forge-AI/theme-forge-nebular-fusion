@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::path::PathBuf;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
@@ -113,8 +113,23 @@ impl NativePicker for TauriNativePicker<'_> {
     }
 }
 
+// While the release smoke mode is active, selection is answered from its compiled-in finite list of
+// directories inside the smoke directory instead of a native dialog (see release_smoke).
+impl NativePicker for crate::release_smoke::ScriptedSelections {
+    fn pick(&self, request: PickerRequest) -> StudioResult<Option<PathBuf>> {
+        self.pick_directory(request.directory)
+    }
+}
+
+fn with_picker<T>(app: &AppHandle, select: impl FnOnce(&dyn NativePicker) -> T) -> T {
+    match app.try_state::<crate::release_smoke::ScriptedSelections>() {
+        Some(scripted) => select(scripted.inner()),
+        None => select(&TauriNativePicker { app }),
+    }
+}
+
 fn selected_text(
-    picker: &impl NativePicker,
+    picker: &dyn NativePicker,
     request: PickerRequest,
 ) -> StudioResult<Option<String>> {
     picker.pick(request)?.map_or(Ok(None), |path| {
@@ -126,7 +141,7 @@ fn selected_text(
 }
 
 fn select_and_open<T>(
-    picker: &impl NativePicker,
+    picker: &dyn NativePicker,
     request: PickerRequest,
     open: impl FnOnce(&str) -> StudioResult<T>,
 ) -> StudioResult<Option<T>> {
@@ -141,10 +156,11 @@ pub(crate) fn studio_select_project(
     app: AppHandle,
     state: State<'_, HostState>,
 ) -> StudioResult<PublicProjectResult> {
-    let picker = TauriNativePicker { app: &app };
-    let selected = select_and_open(&picker, mode.picker(), |text| {
-        let _identity_change = state.begin_identity_change()?;
-        state.lock()?.open_project(text, mode.protocol())
+    let selected = with_picker(&app, |picker| {
+        select_and_open(picker, mode.picker(), |text| {
+            let _identity_change = state.begin_identity_change()?;
+            state.lock()?.open_project(text, mode.protocol())
+        })
     })?;
     let Some(project) = selected else {
         return Ok(PublicProjectResult {
@@ -164,10 +180,11 @@ pub(crate) fn studio_select_source(
     app: AppHandle,
     state: State<'_, HostState>,
 ) -> StudioResult<PublicSourceResult> {
-    let picker = TauriNativePicker { app: &app };
-    let selected = select_and_open(&picker, kind.picker(), |text| {
-        let _identity_change = state.begin_identity_change()?;
-        state.lock()?.open_source(text, kind.purpose())
+    let selected = with_picker(&app, |picker| {
+        select_and_open(picker, kind.picker(), |text| {
+            let _identity_change = state.begin_identity_change()?;
+            state.lock()?.open_source(text, kind.purpose())
+        })
     })?;
     let Some(source) = selected else {
         return Ok(PublicSourceResult {
