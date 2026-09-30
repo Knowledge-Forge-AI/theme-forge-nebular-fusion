@@ -22,7 +22,7 @@ import { digest, inventoryTree, seal, sourceResourcePlans } from "./candidate-pr
 import { TARGETS, CANDIDATE_VERSION } from "./platform-targets.mjs";
 import { createBuildSettings } from "./build-settings.mjs";
 import { validateBuildInputs } from "./build-inputs.mjs";
-import { EXPECTED_EXECUTABLE_SHA256 } from "./node-runtime-authority.mjs";
+import { EXPECTED_EXECUTABLE_SHA256, EXPECTED_NODE_VERSION, EXPECTED_V8_VERSION } from "./node-runtime-authority.mjs";
 
 import {
   EXPECTED_SOLAR_SAIL_NAME,
@@ -654,13 +654,13 @@ describe("Declared build inputs resource preparation and TDZ regression", () => 
     }
 
     const nodeStub = join(fixtureDir, "node-stub");
-    const nodePayload = JSON.stringify({ node: "22.23.2", v8: "12.4.254.21-node.56", arch: target.cpu, platform: target.os });
+    const nodePayload = JSON.stringify({ node: EXPECTED_NODE_VERSION, v8: EXPECTED_V8_VERSION, arch: target.cpu, platform: target.os });
     await writeFile(nodeStub, `#!/bin/sh\nif [ "$1" = "-p" ]; then echo '${nodePayload}'; exit 0; fi\necho 'node stub'\n`, { mode: 0o755 });
 
     let embeddedPath = embeddedNodePath;
     if (!embeddedPath) {
       embeddedPath = join(fixtureDir, "embedded-node-stub");
-      const embeddedPayload = JSON.stringify({ node: "22.23.2", v8: "12.4.254.21-node.56", arch: target.cpu, platform: target.os });
+      const embeddedPayload = JSON.stringify({ node: EXPECTED_NODE_VERSION, v8: EXPECTED_V8_VERSION, arch: target.cpu, platform: target.os });
       await writeFile(embeddedPath, `#!/bin/sh\n# distinct embedded runtime bytes\nif [ "$1" = "-p" ]; then echo '${embeddedPayload}'; exit 0; fi\necho 'embedded stub'\n`, { mode: 0o755 });
     }
 

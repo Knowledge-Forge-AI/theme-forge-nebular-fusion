@@ -17,9 +17,9 @@ const payloadRoot = resolve(srcTauriRoot, "solar-sail-payload");
 const adapterDir = resolve(srcTauriRoot, "solar-sail-adapter");
 
 export const EXPECTED_SOLAR_SAIL_NAME = "@knowledge-forge-ai/theme-forge-solar-sail";
-export const EXPECTED_SOLAR_SAIL_VERSION = "0.2.0";
-export const SUPPORTED_SOLAR_SAIL_VERSIONS = Object.freeze(["0.2.0", "0.1.0"]);
-export const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "18a9eab48578c47439597c5e68f6d5e9f6db6ca6aa2647a70649e0b85f8e38b5";
+export const EXPECTED_SOLAR_SAIL_VERSION = "0.2.1";
+export const SUPPORTED_SOLAR_SAIL_VERSIONS = Object.freeze(["0.2.1", "0.1.0"]);
+export const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "3de7659450c25420b179f422d58ad03738c0762f713fc29d17aa2205b97a8d4b";
 
 export const SOLAR_SAIL_RUNTIME_MEMBERS = Object.freeze([
   "dist/cli.js",

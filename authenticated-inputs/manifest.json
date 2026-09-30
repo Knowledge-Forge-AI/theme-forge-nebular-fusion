@@ -1,25 +1,25 @@
 {
   "fileCount": 15,
-  "totalBytes": 6632107,
-  "treeDigest": "205a57973b85bf027267492fb8a4e67977329a2bd87f8c84a631c9a928a548e0",
+  "totalBytes": 6280874,
+  "treeDigest": "244e4dd521a29aea39767fa1b71bab93caaaaa34464326ebb48a53295a62aca6",
   "files": [
     {
-      "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.6.0.tgz",
-      "size": 665842,
+      "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.6.1.tgz",
+      "size": 644313,
       "mode": 420,
-      "sha256": "e6437f520745d54e461c51afcc77b1a457363237d3e7f788ed14f0c26c66a4a4"
+      "sha256": "53ef41a3de3335e042f2c4b1d299b1155b64bfc6556a84baf6a62cb28bcca209"
     },
     {
       "path": "core/package-lock.json",
       "size": 57198,
       "mode": 420,
-      "sha256": "ae3cf92c17329ee025d2c4f18eebe3f50073fa68b2c96384f8da807fcccd05a9"
+      "sha256": "bdab3e0cbbd31d8c1d22bd030e999b6900bf232a4b464604ab521925d0fadb9f"
     },
     {
       "path": "core/package.json",
-      "size": 4134,
+      "size": 3072,
       "mode": 420,
-      "sha256": "6f218fc2c7c61b9b29bebef2b393d5d6863a66140c5dcc005deb232f667fdbf5"
+      "sha256": "744940d2c9523adf6e3766d4ac6f2467ce4e0b57401633a8595164d3f2b19120"
     },
     {
       "path": "loom-binding.json",
@@ -35,9 +35,9 @@
     },
     {
       "path": "publication-manifest.json",
-      "size": 2982,
+      "size": 2934,
       "mode": 420,
-      "sha256": "048d10627a73196046af23c0627b79aeb10917394a62155ac4367d063f4d7bc0"
+      "sha256": "bf206cfd3193f07a9a28ad1c69fe9a28e464e3a27d23bbbbe9389cd31b11ab2a"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -53,27 +53,27 @@
     },
     {
       "path": "scene-tarball/scene-input.tgz",
-      "size": 211244,
+      "size": 211246,
       "mode": 420,
-      "sha256": "842fbf29a7ea0a715503a50aa5dd860b6dcaef953b8c6d9030450e76a1732df5"
+      "sha256": "a0cda8aee54a4d90688e512a79256d67f3089365901388ccfbe31d45ff7f7c37"
     },
     {
-      "path": "solar-sail-tarball/knowledge-forge-ai-theme-forge-solar-sail-0.2.0.tgz",
-      "size": 109981,
+      "path": "solar-sail-tarball/knowledge-forge-ai-theme-forge-solar-sail-0.2.1.tgz",
+      "size": 110658,
       "mode": 420,
-      "sha256": "1a5e948d6970022f57ecde0ec1d9138650f2b78c7fafc0224f63e4ec8c223454"
+      "sha256": "ebc4f21d1e61dbc0ac4e87ce81f7ecec4f97d7c15562356e429d4c1a4e9aa5a0"
     },
     {
       "path": "source-candidate.json",
-      "size": 329539,
+      "size": 317,
       "mode": 420,
-      "sha256": "68cbf76b3c83674a03e42cebd1a42ff42cc52dcb184661900ca0aa3b42bf22cf"
+      "sha256": "713be019d57f95cdd04088f721a561b21a772903654047ee59fe0178241b1928"
     },
     {
       "path": "stellar-binding.json",
-      "size": 6682,
+      "size": 6631,
       "mode": 420,
-      "sha256": "3d1b2bfbcc68cacdd1707b690a8a74306d1f746a15c958471306d037456d3e34"
+      "sha256": "e06d30944fd236f003a34489ce4b15019fe17b25f6170d141ac49bd8c03b01c8"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",

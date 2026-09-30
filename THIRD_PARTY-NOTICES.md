@@ -5,7 +5,7 @@ commercial license. Third-party packages retain their own licenses.
 
 Direct runtime dependencies:
 
-- Node.js 22.23.2 — MIT and bundled third-party terms; the complete upstream
+- Node.js 22.23.3 — MIT and bundled third-party terms; the complete upstream
   license is retained in `legal/node-LICENSE.txt` and copied into the sidecar.
 
 - React and React DOM 19.2.8 — MIT.

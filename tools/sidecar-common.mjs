@@ -469,7 +469,7 @@ async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   } catch {
     throw new Error("standalone sidecar Stellar package inputs are not valid JSON");
   }
-  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0" && corePackage.version !== "0.6.0")
+  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0" && corePackage.version !== "0.6.1")
       || !isRecord(corePackage.dependencies) || !isRecord(coreLock) || coreLock.name !== corePackage.name || coreLock.version !== corePackage.version) {
     throw new Error("standalone sidecar Stellar package identity is invalid");
   }
@@ -865,7 +865,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
   }
 
   if (!testOnlyAllowNonProductionIdentity) {
-    if (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0" && manifest.core.version !== "0.6.0")
+    if (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0" && manifest.core.version !== "0.6.1")
         || manifest.raster.name !== "@knowledge-forge-ai/tfsb-raster-resvg" || manifest.raster.version !== "0.0.0-tfsb47f"
         || manifest.raster.packageJsonSha256 !== "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
         || manifest.resvg.name !== "@resvg/resvg-wasm" || manifest.resvg.version !== "2.6.2"
@@ -1007,7 +1007,7 @@ export async function prepareSidecar(options = {}) {
     const rootPackage = await readPackage(resolve(coreRoot, "package.json"));
     const rasterPackage = await readPackage(resolve(resolvedRasterRoot, "package.json"));
     const resvgPackage = await readPackage(resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm/package.json"));
-    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0" && rootPackage.version !== "0.6.0") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
+    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0" && rootPackage.version !== "0.6.1") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
       throw new Error("sidecar package identity does not match the closed release input");
     }
 

@@ -2,10 +2,10 @@
   "schema": "tfsb.theme-lab-payload-binding-v1",
   "packageArchiveSha256": "4550314d9a6eb9a016c8637eb2a0a98e9a410210ad6546642dfce31c7402c9ec",
   "node": {
-    "version": "22.23.2",
+    "version": "22.23.3",
     "target": "aarch64-apple-darwin",
-    "sha256": "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572",
-    "bytes": 112937728
+    "sha256": "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
+    "bytes": 112925600
   },
   "files": [
     {

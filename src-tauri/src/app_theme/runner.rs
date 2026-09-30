@@ -19,7 +19,7 @@ const MAX_COMPILE_OUTPUT_BYTES: usize = 2 * 1024 * 1024 + 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const EXECUTION_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATION_TIMEOUT: Duration = Duration::from_millis(2000);
-pub const COMPILER_VERSION: &str = "0.2.0";
+pub const COMPILER_VERSION: &str = "0.2.1";
 
 pub(crate) const SOLAR_SAIL_ADAPTER_BYTES: &[u8] =
     include_bytes!("../../solar-sail-adapter/solar-sail-adapter.mjs");

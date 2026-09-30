@@ -79,8 +79,8 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
 
   it("exports expected candidate constants and runtime members", () => {
     expect(EXPECTED_SOLAR_SAIL_NAME).toBe("@knowledge-forge-ai/theme-forge-solar-sail");
-    expect(EXPECTED_SOLAR_SAIL_VERSION).toBe("0.2.0");
-    expect(SUPPORTED_SOLAR_SAIL_VERSIONS).toContain("0.2.0");
+    expect(EXPECTED_SOLAR_SAIL_VERSION).toBe("0.2.1");
+    expect(SUPPORTED_SOLAR_SAIL_VERSIONS).toContain("0.2.1");
     expect(SUPPORTED_SOLAR_SAIL_VERSIONS).toContain("0.1.0");
     expect(SOLAR_SAIL_RUNTIME_MEMBERS).toHaveLength(8);
     expect(SOLAR_SAIL_DECLARATION_MEMBERS).toHaveLength(8);
@@ -92,7 +92,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
 
     expect(binding.schema).toBe("tfsb.solar-sail-binding-v1");
     expect(binding.name).toBe(EXPECTED_SOLAR_SAIL_NAME);
-    expect(binding.version).toBe("0.2.0");
+    expect(binding.version).toBe("0.2.1");
     expect(binding.runtimeMemberCount).toBe(8);
     expect(binding.members).toHaveLength(8);
     expect(binding.inventoryDigest).toMatch(/^[0-9a-f]{64}$/);
@@ -134,7 +134,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     expect(binding1.inventoryDigest).not.toBe(binding2.inventoryDigest);
   });
 
-  const EXPECTED_SOLAR_SAIL_TARBALL_SHA256 = "1a5e948d6970022f57ecde0ec1d9138650f2b78c7fafc0224f63e4ec8c223454";
+  const EXPECTED_SOLAR_SAIL_TARBALL_SHA256 = "ebc4f21d1e61dbc0ac4e87ce81f7ecec4f97d7c15562356e429d4c1a4e9aa5a0";
 
   function findCandidateTarball() {
     const currentStudioRoot = resolve(__dirname, "..");
@@ -179,7 +179,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
       return sourcePkgRoot;
     }
 
-    throw new Error(`[SOLAR_SAIL_TEST_FAIL] No authentic Solar Sail 0.2.0 candidate tarball or source found in ${authDir}, ${outboxDir}, or ${sourcePkgRoot}`);
+    throw new Error(`[SOLAR_SAIL_TEST_FAIL] No authentic Solar Sail 0.2.1 candidate tarball or source found in ${authDir}, ${outboxDir}, or ${sourcePkgRoot}`);
   }
 
   it("authenticates the authentic Solar Sail payload in apps/studio/src-tauri against expected digest", async () => {
@@ -200,7 +200,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     const binding = await authenticateSolarSailCandidate(realPayload, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 
     expect(binding.schema).toBe("tfsb.solar-sail-binding-v1");
-    expect(binding.version).toBe("0.2.0");
+    expect(binding.version).toBe("0.2.1");
     expect(binding.runtimeMemberCount).toBe(8);
     expect(binding.inventoryDigest).toBe(EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 

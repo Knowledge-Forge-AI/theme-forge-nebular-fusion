@@ -1,6 +1,6 @@
 # Theme Forge Nebular Fusion
 
-Candidate version: 0.6.0.
+Candidate version: 0.6.1.
 
 Nebular is a Tauri desktop workbench for Theme Forge. The maintained candidate
 version authority is package.json; Cargo and Tauri metadata are checked against it.

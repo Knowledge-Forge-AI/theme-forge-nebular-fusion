@@ -581,7 +581,7 @@ fn verify_manifest(
         || manifest.entrypoint != ENTRYPOINT
         || manifest.runtime_kind != "node-runtime-payload-v1"
         || manifest.core.name != "@knowledge-forge-ai/theme-forge-stellar-burst"
-        || (manifest.core.version != "0.5.0" && manifest.core.version != "0.6.0")
+        || (manifest.core.version != "0.5.0" && manifest.core.version != "0.6.1")
         || !valid_hex(&manifest.source.actual_input_digest, 64)
     {
         return Err(io::Error::other("manifest identity"));
@@ -598,6 +598,7 @@ fn verify_manifest(
             || manifest.native.backend != "native-addon-posix-openat-v1"
             || manifest.native.abi != 1
             || manifest.runtime.mode != 0o755
+            || manifest.core.version != "0.6.1"
         {
             return Err(io::Error::other("manifest identity"));
         }
@@ -641,13 +642,13 @@ fn verify_manifest(
             || !valid_hex(&tarball.sha256, 64)
             || tarball.size > MAX_FILE_BYTES
             || !valid_sri(&tarball.sri)
-            || manifest.runtime.version != "22.23.2"
-            || manifest.runtime.v8 != "12.4.254.21-node.56"
+            || manifest.runtime.version != "22.23.3"
+            || manifest.runtime.v8 != "12.4.254.21-node.57"
             || manifest.runtime.target != "aarch64-apple-darwin"
             || manifest.runtime.mode != 0o755
             || manifest.runtime.sha256
-                != "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572"
-            || manifest.runtime.size != 112_937_728
+                != "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b"
+            || manifest.runtime.size != 112_925_600
             || manifest.native.backend != "native-addon-posix-openat-v1"
             || manifest.native.abi != 1
             || manifest.native.target != "aarch64-apple-darwin"

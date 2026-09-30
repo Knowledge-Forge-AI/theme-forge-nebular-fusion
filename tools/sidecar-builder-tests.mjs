@@ -19,6 +19,7 @@ import {
   validateManifestShape,
   verifyDistribution,
 } from "./sidecar-common.mjs";
+import { EXPECTED_NODE_VERSION, EXPECTED_V8_VERSION } from "./node-runtime-authority.mjs";
 
 const baseTargetDir = process.env.CARGO_TARGET_DIR
   ? resolve(process.env.CARGO_TARGET_DIR)
@@ -92,7 +93,7 @@ async function fixture(label = "case") {
     },
     raster: { name: "fixture", packageJsonSha256: byPath.get("node_modules/@knowledge-forge-ai/tfsb-raster-resvg/package.json").sha256, version: "0.0.0" },
     resvg: { name: "fixture", version: "0.0.0", wasmSha256: byPath.get("node_modules/@resvg/resvg-wasm/index_bg.wasm").sha256, wasmSize: 4 },
-    runtime: { mode: 0o755, sha256: sha256(runtimeBytes), size: runtimeBytes.length, target: "aarch64-apple-darwin", v8: "12.4.254.21-node.56", version: "22.23.2" },
+    runtime: { mode: 0o755, sha256: sha256(runtimeBytes), size: runtimeBytes.length, target: "aarch64-apple-darwin", v8: EXPECTED_V8_VERSION, version: EXPECTED_NODE_VERSION },
     runtimeKind: "node-runtime-payload-v1",
     schema: "tfsb.studio-sidecar-distribution",
     schemaVersion: 1,

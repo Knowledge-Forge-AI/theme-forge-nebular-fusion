@@ -97,7 +97,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22.23.2
+          node-version: 22.23.3
           cache: npm
       - name: Record exact-head receipt
         run: |
@@ -182,7 +182,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22.23.2
+          node-version: 22.23.3
           cache: npm
       - name: Record exact-head receipt
         run: |
@@ -203,9 +203,9 @@ jobs:
       - run: npm run build
       - name: Verify Node authenticity
         run: |
-          node tools/ci/verify-node-authenticity.mjs --download-dir "$RUNNER_TEMP/node-v22.23.2" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.3" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
           cp "$RUNNER_TEMP/node-authenticated" .test-reports/nebular/node-runtime
-          cp "$RUNNER_TEMP/node-v22.23.2/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
+          cp "$RUNNER_TEMP/node-v22.23.3/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
       - name: Build and verify sidecar payload twice
         run: |
           ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
@@ -307,7 +307,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22.23.2
+          node-version: 22.23.3
           cache: npm
       - name: Record exact-head receipt
         run: |
@@ -376,7 +376,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22.23.2
+          node-version: 22.23.3
           cache: npm
       - name: Record exact-head receipt
         run: |
@@ -501,7 +501,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 22.23.2
+          node-version: 22.23.3
           cache: npm
       - name: Record exact-head receipt
         run: |
