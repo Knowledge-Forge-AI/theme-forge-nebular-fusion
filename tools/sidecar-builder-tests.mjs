@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { test } from "node:test";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
+  TARGETS,
   canonicalJson,
   gitIdentity,
   validateStellarBinding,
@@ -17,6 +19,7 @@ import {
   validateManifestShape,
   verifyDistribution,
 } from "./sidecar-common.mjs";
+import { EXPECTED_NODE_VERSION, EXPECTED_V8_VERSION } from "./node-runtime-authority.mjs";
 
 const baseTargetDir = process.env.CARGO_TARGET_DIR
   ? resolve(process.env.CARGO_TARGET_DIR)
@@ -90,7 +93,7 @@ async function fixture(label = "case") {
     },
     raster: { name: "fixture", packageJsonSha256: byPath.get("node_modules/@knowledge-forge-ai/tfsb-raster-resvg/package.json").sha256, version: "0.0.0" },
     resvg: { name: "fixture", version: "0.0.0", wasmSha256: byPath.get("node_modules/@resvg/resvg-wasm/index_bg.wasm").sha256, wasmSize: 4 },
-    runtime: { mode: 0o755, sha256: sha256(runtimeBytes), size: runtimeBytes.length, target: "aarch64-apple-darwin", v8: "12.4.254.21-node.56", version: "22.23.2" },
+    runtime: { mode: 0o755, sha256: sha256(runtimeBytes), size: runtimeBytes.length, target: "aarch64-apple-darwin", v8: EXPECTED_V8_VERSION, version: EXPECTED_NODE_VERSION },
     runtimeKind: "node-runtime-payload-v1",
     schema: "tfsb.studio-sidecar-distribution",
     schemaVersion: 1,
@@ -358,6 +361,16 @@ test("generated binary and payload publish as one recoverable pair", async (cont
   });
 });
 
+test("preparation arguments carry an explicit platform target without treating it as a path", () => {
+  const repositoryRoot = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
+  const linux = preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "aarch64-unknown-linux-gnu"], repositoryRoot);
+  assert.equal(linux.target, "aarch64-unknown-linux-gnu");
+  assert.equal(preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "x86_64-linux"], repositoryRoot).target, "x86_64-unknown-linux-gnu");
+  assert.equal(Object.hasOwn(preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz"], repositoryRoot), "target"), false);
+  assert.throws(() => preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "../escape"], repositoryRoot), /unsupported or invalid target/u);
+  assert.throws(() => preparationOptions(["--node", "/node", "--root-tarball", "/root.tgz", "--target", "x86_64-pc-windows-msvc"], repositoryRoot), /unsupported or invalid target/u);
+});
+
 test("preparation arguments reject duplicates unknowns and missing pairs", () => {
   const repositoryRoot = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
   assert.throws(() => preparationOptions(["--node", "/node", "--node", "/other", "--root-tarball", "/root.tgz"], repositoryRoot), /duplicate/u);
@@ -449,4 +462,129 @@ test("standalone candidate accepts published input and rejects malformed identit
   await writeFile(receipt,JSON.stringify({schema:"tfsb.source-candidate-v1",lineageCommit:"b".repeat(40),identity:{commit:"c".repeat(40)}}));
   await assert.rejects(gitIdentity(candidate), /lineage/);
   await rm(candidate,{recursive:true});
+});
+
+test("source candidate v2 model validates 64hex canonical identity without invented lineage", async () => {
+  const candidate = await fixture("v2-canonical-identity");
+  candidate.manifest.schemaVersion = 2;
+  const source64 = "f".repeat(64);
+  candidate.manifest.source = {
+    actualInputDigest: "0".repeat(64),
+    model: "source-candidate-v2",
+    sourceCandidate: source64,
+  };
+  await writeClosedManifest(candidate.payload, candidate.manifest);
+  await verify(candidate);
+
+  // Rejects 40hex or truncated Git commit in v2
+  candidate.manifest.source.sourceCandidate = "f".repeat(40);
+  await writeClosedManifest(candidate.payload, candidate.manifest);
+  await assert.rejects(verify(candidate), /manifest source candidate is invalid/);
+
+  // Rejects invented baseCommit in v2
+  candidate.manifest.source = {
+    actualInputDigest: "0".repeat(64),
+    model: "source-candidate-v2",
+    sourceCandidate: source64,
+    baseCommit: "a".repeat(40),
+  };
+  await writeClosedManifest(candidate.payload, candidate.manifest);
+  await assert.rejects(verify(candidate), /manifest source has unknown or missing fields/);
+
+  // Rejects missing sourceCandidate in v2
+  candidate.manifest.source = {
+    actualInputDigest: "0".repeat(64),
+    model: "source-candidate-v2",
+  };
+  await writeClosedManifest(candidate.payload, candidate.manifest);
+  await assert.rejects(verify(candidate), /manifest source has unknown or missing fields/);
+});
+
+test("source-built output truthful binding without core tarball", async () => {
+  const candidate = await fixture("source-built-no-tarball");
+  delete candidate.manifest.core.tarball;
+  // Actual input digest binds actual content inventory: canonicalJson({ files })
+  candidate.manifest.source.actualInputDigest = sha256(Buffer.from(canonicalJson({ files: candidate.manifest.files })));
+  const { manifestDigest: _discard, ...unsigned } = candidate.manifest;
+  candidate.manifest.manifestDigest = sha256(Buffer.from(canonicalJson(unsigned)));
+  await writeFile(resolve(candidate.payload, "manifest.json"), `${canonicalJson(candidate.manifest)}\n`);
+
+  await verify(candidate);
+
+  // Tampering with content inventory fails closed
+  candidate.manifest.source.actualInputDigest = sha256(Buffer.from(canonicalJson({ files: [] })));
+  const { manifestDigest: _discard2, ...unsigned2 } = candidate.manifest;
+  candidate.manifest.manifestDigest = sha256(Buffer.from(canonicalJson(unsigned2)));
+  await writeFile(resolve(candidate.payload, "manifest.json"), `${canonicalJson(candidate.manifest)}\n`);
+  await assert.rejects(verify(candidate), /sidecar actual input identity is invalid/);
+});
+
+test("multi-target sidecar manifest and addon derivation for Linux targets", async () => {
+  for (const target of TARGETS.filter(t => t.os === "linux")) {
+    const candidate = await fixture(`linux-${target.triple}`);
+    candidate.manifest.target = target.triple;
+    candidate.manifest.runtime.target = target.triple;
+    candidate.manifest.native.target = target.triple;
+
+    // Relocate native addon to derived target addon path
+    const oldAddonPath = resolve(candidate.payload, "native/directory-snapshot/prebuilds/darwin-arm64");
+    const newAddonPath = resolve(candidate.payload, `native/directory-snapshot/prebuilds/${target.addon}`);
+    await mkdir(dirname(newAddonPath), { recursive: true });
+    await rename(oldAddonPath, newAddonPath);
+
+    // Update files array with new addon path
+    for (const f of candidate.manifest.files) {
+      if (f.path.includes("darwin-arm64")) {
+        f.path = f.path.replace("darwin-arm64", target.addon);
+      }
+    }
+    candidate.manifest.files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    candidate.manifest.totals.inventoryDigest = sha256(Buffer.from(canonicalJson(candidate.manifest.files)));
+    await writeClosedManifest(candidate.payload, candidate.manifest);
+    await verify(candidate);
+
+    // Mismatched addon path or target fails closed
+    candidate.manifest.native.target = "aarch64-apple-darwin";
+    await writeClosedManifest(candidate.payload, candidate.manifest);
+    await assert.rejects(verify(candidate), /manifest fixed identity is invalid/);
+  }
+});
+
+
+test("production AMD64 identity accepts ADDON1 and rejects stale or altered pins", async () => {
+  const { manifest } = await fixture("production-amd64-addon1");
+  const repo = repositoryRootForStudio(resolve(import.meta.dirname, ".."));
+  manifest.target = manifest.runtime.target = manifest.native.target = "x86_64-unknown-linux-gnu";
+  manifest.core.name = "@knowledge-forge-ai/theme-forge-stellar-burst";
+  manifest.core.version = "0.5.0";
+  manifest.raster = { name: "@knowledge-forge-ai/tfsb-raster-resvg", version: "0.0.0-tfsb47f", packageJsonSha256: "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12" };
+  manifest.resvg = { name: "@resvg/resvg-wasm", version: "2.6.2", wasmSha256: "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70", wasmSize: 2_478_606 };
+  for (const version of ["1.0", "1.1", "1.2"]) {
+    const suffix = version === "1.0" ? "" : `-${version}`;
+    for (const [key, file] of [["inventorySha256", `inventory${suffix}.json`], ["requestsSha256", `requests${suffix}.schema.json`], ["resultsSha256", `results${suffix}.schema.json`]]) {
+      manifest.protocol[version][key] = sha256(await readFile(resolve(repo, "protocol/tfsb-studio-v1", file)));
+    }
+  }
+  const member = "native/directory-snapshot/prebuilds/linux-x64-gnu/native-addon-posix-openat-v1.node";
+  let addon;
+  if (existsSync(resolve(repo, "authenticated-inputs/stellar-binding.json"))) {
+    const binding = validateStellarBinding(JSON.parse(await readFile(resolve(repo, "authenticated-inputs/stellar-binding.json"), "utf8")));
+    const archive = resolve(repo, "authenticated-inputs/core-tarball", binding.package.filename);
+    assert.equal(sha256(await readFile(archive)), binding.package.sha256);
+    addon = execFileSync("tar", ["-xOf", archive, `package/${member}`]);
+  } else {
+    addon = await readFile(resolve(repo, member));
+  }
+  manifest.native.sha256 = sha256(addon);
+  manifest.native.size = addon.length;
+  assert.equal(validateManifestShape(manifest), manifest);
+  for (const change of [
+    { sha256: "589c7c372ceb725c37e33a0f176ad569407580530e9077744104801b9f14006c", size: 31_576 },
+    { sha256: "0".repeat(64) },
+    { size: addon.length + 1 },
+  ]) {
+    const invalid = structuredClone(manifest);
+    Object.assign(invalid.native, change);
+    assert.throws(() => validateManifestShape(invalid), /manifest fixed identity is invalid/);
+  }
 });

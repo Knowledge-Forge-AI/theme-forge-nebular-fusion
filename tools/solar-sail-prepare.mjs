@@ -17,9 +17,9 @@ const payloadRoot = resolve(srcTauriRoot, "solar-sail-payload");
 const adapterDir = resolve(srcTauriRoot, "solar-sail-adapter");
 
 export const EXPECTED_SOLAR_SAIL_NAME = "@knowledge-forge-ai/theme-forge-solar-sail";
-export const EXPECTED_SOLAR_SAIL_VERSION = "0.1.0";
-export const SUPPORTED_SOLAR_SAIL_VERSIONS = Object.freeze(["0.1.0"]);
-export const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "f5cecdcea0a1c6a58d29b2276dba61c94d06655cdb71f7cc3f04b843da1026f0";
+export const EXPECTED_SOLAR_SAIL_VERSION = "0.2.1";
+export const SUPPORTED_SOLAR_SAIL_VERSIONS = Object.freeze(["0.2.1", "0.1.0"]);
+export const EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST = "3de7659450c25420b179f422d58ad03738c0762f713fc29d17aa2205b97a8d4b";
 
 export const SOLAR_SAIL_RUNTIME_MEMBERS = Object.freeze([
   "dist/cli.js",
@@ -192,46 +192,63 @@ export async function prepareSolarSail(options = {}) {
   const currentRepoRoot = repositoryRootForStudio(currentStudioRoot);
   const monorepoCandidate = resolve(currentRepoRoot, "packages/solar-sail");
   const authTarballDir = resolve(currentRepoRoot, "authenticated-inputs/solar-sail-tarball");
-  const targetPayloadRoot = options.payloadRoot ? resolve(options.payloadRoot) : payloadRoot;
-  const targetAdapterDir = options.adapterDir ? resolve(options.adapterDir) : adapterDir;
+  const targetPayloadRoot = options.payloadRoot ? resolve(options.payloadRoot) : resolve(currentStudioRoot, "src-tauri/solar-sail-payload");
+  const targetAdapterDir = options.adapterDir ? resolve(options.adapterDir) : resolve(currentStudioRoot, "src-tauri/solar-sail-adapter");
 
   let candidateDir = null;
   let scratchRoot = null;
 
-  if (options.tarball) {
-    if (!existsSync(options.tarball)) {
-      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Explicit tarball not found: ${options.tarball}`);
+  const explicitPackageRoot = options.packageRoot || options["package-root"] || null;
+  const isSourceBuild = Boolean(explicitPackageRoot);
+
+  if (explicitPackageRoot) {
+    let packageRoot = resolve(explicitPackageRoot);
+    const nestedNix = resolve(packageRoot, "lib/node_modules/@knowledge-forge-ai/theme-forge-solar-sail");
+    if (existsSync(resolve(nestedNix, "package.json"))) {
+      packageRoot = nestedNix;
     }
-    scratchRoot = await mkdtemp(join(tmpdir(), "solar-sail-extract-"));
-    candidateDir = extractTarballSafely(options.tarball, scratchRoot);
-  } else if (existsSync(resolve(monorepoCandidate, "package.json"))) {
-    // Monorepo source layout
-    console.log("Validating and building packages/solar-sail from monorepo source...");
-    const buildResult = spawnSync("npm", ["run", "build"], {
-      cwd: monorepoCandidate,
-      stdio: "inherit",
-    });
-    if (buildResult.status !== 0) {
-      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Failed to build packages/solar-sail (exit code: ${buildResult.status})`);
+    if (!existsSync(resolve(packageRoot, "package.json"))) {
+      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Missing package.json in Solar Sail package root: ${packageRoot}`);
     }
-    candidateDir = monorepoCandidate;
+    candidateDir = packageRoot;
   } else {
-    // Check for staged authenticated tarball or env var
-    let tarballPath = process.env.TFSS_SOLAR_SAIL_TARBALL || process.env.TFSB_STUDIO_SOLAR_SAIL_TARBALL || null;
-    if (!tarballPath && existsSync(authTarballDir)) {
-      const candidates = readdirSync(authTarballDir).filter((f) => f.endsWith(".tgz"));
-      if (candidates.length === 1) {
-        tarballPath = resolve(authTarballDir, candidates[0]);
+    const explicitTarball = options.tarball || process.env.TFSS_SOLAR_SAIL_TARBALL || process.env.TFSB_STUDIO_SOLAR_SAIL_TARBALL || null;
+
+    if (explicitTarball) {
+      if (!existsSync(explicitTarball)) {
+        throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Explicit tarball not found: ${explicitTarball}`);
       }
-    }
+      scratchRoot = await mkdtemp(join(tmpdir(), "solar-sail-extract-"));
+      candidateDir = extractTarballSafely(explicitTarball, scratchRoot);
+    } else if (existsSync(resolve(monorepoCandidate, "package.json"))) {
+      // Monorepo source layout
+      console.log("Validating and building packages/solar-sail from monorepo source...");
+      const buildResult = spawnSync("npm", ["run", "build"], {
+        cwd: monorepoCandidate,
+        stdio: "inherit",
+      });
+      if (buildResult.status !== 0) {
+        throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Failed to build packages/solar-sail (exit code: ${buildResult.status})`);
+      }
+      candidateDir = monorepoCandidate;
+    } else {
+      // Check for staged authenticated tarball
+      let tarballPath = null;
+      if (existsSync(authTarballDir)) {
+        const candidates = readdirSync(authTarballDir).filter((f) => f.endsWith(".tgz"));
+        if (candidates.length === 1) {
+          tarballPath = resolve(authTarballDir, candidates[0]);
+        }
+      }
 
-    if (!tarballPath || !existsSync(tarballPath)) {
-      throw new Error("[SOLAR_SAIL_PREPARE_FAIL] No Solar Sail candidate source available in monorepo packages/solar-sail or authenticated-inputs/solar-sail-tarball");
-    }
+      if (!tarballPath || !existsSync(tarballPath)) {
+        throw new Error("[SOLAR_SAIL_PREPARE_FAIL] No Solar Sail candidate source available in monorepo packages/solar-sail or authenticated-inputs/solar-sail-tarball");
+      }
 
-    console.log(`Extracting authenticated Solar Sail tarball: ${tarballPath}`);
-    scratchRoot = await mkdtemp(join(tmpdir(), "solar-sail-extract-"));
-    candidateDir = extractTarballSafely(tarballPath, scratchRoot);
+      console.log(`Extracting authenticated Solar Sail tarball: ${tarballPath}`);
+      scratchRoot = await mkdtemp(join(tmpdir(), "solar-sail-extract-"));
+      candidateDir = extractTarballSafely(tarballPath, scratchRoot);
+    }
   }
 
   try {
@@ -241,7 +258,12 @@ export async function prepareSolarSail(options = {}) {
     }
 
     console.log("Authenticating candidate Solar Sail source against approved binding digest...");
-    const candidateBinding = await authenticateSolarSailCandidate(candidateDir, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    const expectedDigest = isSourceBuild
+      ? (options.expectedInventoryDigest || null)
+      : EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST;
+
+    const candidateBinding = await authenticateSolarSailCandidate(candidateDir, expectedDigest);
+    delete candidateBinding.generatedAt;
 
     console.log("Preparing solar-sail-payload in src-tauri...");
     await rm(targetPayloadRoot, { recursive: true, force: true });
@@ -264,7 +286,7 @@ export async function prepareSolarSail(options = {}) {
     await writeFile(bindingPath, JSON.stringify(candidateBinding, null, 2) + "\n", "utf8");
 
     // Verify the newly prepared payload
-    const verifiedBinding = await authenticateSolarSailCandidate(targetPayloadRoot, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    const verifiedBinding = await authenticateSolarSailCandidate(targetPayloadRoot, expectedDigest);
     if (verifiedBinding.inventoryDigest !== candidateBinding.inventoryDigest) {
       throw new Error("[SOLAR_SAIL_BINDING_FAIL] Prepared payload digest does not match source candidate digest.");
     }
@@ -280,10 +302,31 @@ export async function prepareSolarSail(options = {}) {
   }
 }
 
+export function parseSolarSailArgs(argv) {
+  /** @type {Record<string, string>} */
+  const options = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--tarball" && i + 1 < argv.length) {
+      options.tarball = argv[++i];
+    } else if ((arg === "--package-root" || arg === "--solar-package-root") && i + 1 < argv.length) {
+      options.packageRoot = argv[++i];
+    } else if (arg === "--studio-root" && i + 1 < argv.length) {
+      options.studioRoot = argv[++i];
+    } else if (arg === "--payload-root" && i + 1 < argv.length) {
+      options.payloadRoot = argv[++i];
+    } else if (arg === "--adapter-dir" && i + 1 < argv.length) {
+      options.adapterDir = argv[++i];
+    } else if (!arg.startsWith("--") && !options.tarball) {
+      options.tarball = arg;
+    }
+  }
+  return options;
+}
+
 if (process.argv[1] === __filename) {
-  prepareSolarSail().catch((err) => {
+  prepareSolarSail(parseSolarSailArgs(process.argv.slice(2))).catch((err) => {
     console.error("FATAL:", err.message);
     process.exit(1);
   });
 }
-

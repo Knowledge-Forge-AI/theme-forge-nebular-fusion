@@ -18,7 +18,7 @@ import {
   sha256Hex,
 } from "../tools/solar-sail-prepare.mjs";
 import { repositoryRootForStudio } from "../tools/sidecar-common.mjs";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -79,7 +79,8 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
 
   it("exports expected candidate constants and runtime members", () => {
     expect(EXPECTED_SOLAR_SAIL_NAME).toBe("@knowledge-forge-ai/theme-forge-solar-sail");
-    expect(EXPECTED_SOLAR_SAIL_VERSION).toBe("0.1.0");
+    expect(EXPECTED_SOLAR_SAIL_VERSION).toBe("0.2.1");
+    expect(SUPPORTED_SOLAR_SAIL_VERSIONS).toContain("0.2.1");
     expect(SUPPORTED_SOLAR_SAIL_VERSIONS).toContain("0.1.0");
     expect(SOLAR_SAIL_RUNTIME_MEMBERS).toHaveLength(8);
     expect(SOLAR_SAIL_DECLARATION_MEMBERS).toHaveLength(8);
@@ -91,7 +92,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
 
     expect(binding.schema).toBe("tfsb.solar-sail-binding-v1");
     expect(binding.name).toBe(EXPECTED_SOLAR_SAIL_NAME);
-    expect(binding.version).toBe("0.1.0");
+    expect(binding.version).toBe("0.2.1");
     expect(binding.runtimeMemberCount).toBe(8);
     expect(binding.members).toHaveLength(8);
     expect(binding.inventoryDigest).toMatch(/^[0-9a-f]{64}$/);
@@ -104,7 +105,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
   });
 
   it("fails closed when package version is unsupported", async () => {
-    const { pkgRoot } = await setupMockSolarSailPackage({ version: "0.2.0" });
+    const { pkgRoot } = await setupMockSolarSailPackage({ version: "0.3.0" });
     await expect(authenticateSolarSailCandidate(pkgRoot)).rejects.toThrow(/Unsupported Solar Sail version/);
   });
 
@@ -133,6 +134,8 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     expect(binding1.inventoryDigest).not.toBe(binding2.inventoryDigest);
   });
 
+  const EXPECTED_SOLAR_SAIL_TARBALL_SHA256 = "ebc4f21d1e61dbc0ac4e87ce81f7ecec4f97d7c15562356e429d4c1a4e9aa5a0";
+
   function findCandidateTarball() {
     const currentStudioRoot = resolve(__dirname, "..");
     const currentRepoRoot = repositoryRootForStudio(currentStudioRoot);
@@ -140,33 +143,55 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     // 1. Check authenticated-inputs in composed tree or monorepo
     const authDir = join(currentRepoRoot, "authenticated-inputs/solar-sail-tarball");
     if (existsSync(authDir)) {
-      const files = readdirSync(authDir).filter((f) => f.endsWith(".tgz"));
-      if (files.length > 0) {
-        return resolve(authDir, files[0]);
+      const files = readdirSync(authDir).filter((f) => f.includes(EXPECTED_SOLAR_SAIL_VERSION) && f.endsWith(".tgz"));
+      for (const file of files) {
+        const full = resolve(authDir, file);
+        if (sha256Hex(readFileSync(full)) === EXPECTED_SOLAR_SAIL_TARBALL_SHA256) {
+          return full;
+        }
       }
     }
 
     // 2. Check .outbox in monorepo
     const outboxDir = join(currentRepoRoot, ".outbox");
     if (existsSync(outboxDir)) {
-      const files = readdirSync(outboxDir).filter((f) => f.includes("solar-sail") && f.endsWith(".tgz"));
-      if (files.length > 0) {
-        return resolve(outboxDir, files[0]);
+      const matches = [];
+      function collect(dir) {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) collect(full);
+          else if (entry.isFile() && entry.name.includes("solar-sail") && entry.name.includes(EXPECTED_SOLAR_SAIL_VERSION) && entry.name.endsWith(".tgz")) {
+            matches.push(full);
+          }
+        }
+      }
+      collect(outboxDir);
+      for (const match of matches) {
+        if (sha256Hex(readFileSync(match)) === EXPECTED_SOLAR_SAIL_TARBALL_SHA256) {
+          return match;
+        }
       }
     }
 
-    throw new Error(`[SOLAR_SAIL_TEST_FAIL] No Solar Sail candidate tarball found in ${authDir} or ${outboxDir}`);
+    // 3. In a clean checkout without .outbox or authenticated-inputs, check packages/solar-sail directly
+    const sourcePkgRoot = join(currentRepoRoot, "packages/solar-sail");
+    if (existsSync(join(sourcePkgRoot, "package.json"))) {
+      return sourcePkgRoot;
+    }
+
+    throw new Error(`[SOLAR_SAIL_TEST_FAIL] No authentic Solar Sail 0.2.1 candidate tarball or source found in ${authDir}, ${outboxDir}, or ${sourcePkgRoot}`);
   }
 
   it("authenticates the authentic Solar Sail payload in apps/studio/src-tauri against expected digest", async () => {
     let realPayload = resolve(__dirname, "../src-tauri/solar-sail-payload");
     if (!existsSync(join(realPayload, "package.json"))) {
-      const candidateTarball = findCandidateTarball();
+      const candidate = findCandidateTarball();
       const fixturePayload = join(tempDir, "fixture-solar-sail-payload");
       const fixtureAdapter = join(tempDir, "fixture-solar-sail-adapter");
+      const isDir = statSync(candidate).isDirectory();
       await prepareSolarSail({
         studioRoot: resolve(__dirname, ".."),
-        tarball: candidateTarball,
+        ...(isDir ? { packageRoot: candidate } : { tarball: candidate }),
         payloadRoot: fixturePayload,
         adapterDir: fixtureAdapter,
       });
@@ -175,7 +200,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     const binding = await authenticateSolarSailCandidate(realPayload, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 
     expect(binding.schema).toBe("tfsb.solar-sail-binding-v1");
-    expect(binding.version).toBe("0.1.0");
+    expect(binding.version).toBe("0.2.1");
     expect(binding.runtimeMemberCount).toBe(8);
     expect(binding.inventoryDigest).toBe(EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 

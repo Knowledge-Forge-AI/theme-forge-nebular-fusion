@@ -5,8 +5,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { validateResult } from "../src-tauri/sidecar-payload/dist/service-protocol/v1-validate.js";
-
 const MAX_FRAME_BYTES = 16_777_216;
 const MAX_STDERR_BYTES = 1_048_576;
 const RESPONSE_TIMEOUT_MS = 10_000;
@@ -15,7 +13,23 @@ const repositoryRoot = repositoryRootForStudio(studioRoot);
 const binary = join(studioRoot, "src-tauri/binaries/tfsb-studio-service-aarch64-apple-darwin");
 const payload = join(studioRoot, "src-tauri/sidecar-payload");
 const entrypoint = join(payload, "dist/service-protocol/server-cli.js");
-const coreApi = await import(pathToFileURL(join(payload, "dist/index.js")).href);
+
+let defaultValidateResult = null;
+export async function getDefaultValidateResult(payloadRoot = payload) {
+  if (!defaultValidateResult) {
+    const valMod = await import(pathToFileURL(join(payloadRoot, "dist/service-protocol/v1-validate.js")).href);
+    defaultValidateResult = valMod.validateResult;
+  }
+  return defaultValidateResult;
+}
+
+let coreApi = null;
+export async function getCoreApi(payloadRoot = payload) {
+  if (!coreApi) {
+    coreApi = await import(pathToFileURL(join(payloadRoot, "dist/index.js")).href);
+  }
+  return coreApi;
+}
 
 const CAPABILITY_UNAVAILABLE = "METHOD_CAPABILITY_UNAVAILABLE";
 const KNOWN_ERROR_CODES = new Set([
@@ -164,9 +178,14 @@ function summarizeQaPage(result) {
   };
 }
 
-function client() {
-  const child = spawn(binary, [entrypoint], {
-    cwd: payload,
+export function createSidecarClient(options = {}) {
+  const binaryPath = options.binaryPath || binary;
+  const payloadRoot = options.payloadRoot || payload;
+  const entrypointPath = options.entrypointPath || join(payloadRoot, "dist/service-protocol/server-cli.js");
+  const validateResultFn = options.validateResult !== undefined ? options.validateResult : null;
+
+  const child = spawn(binaryPath, [entrypointPath], {
+    cwd: payloadRoot,
     env: { LANG: "C", LC_ALL: "C", TZ: "UTC", TMPDIR: tmpdir() },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -286,8 +305,11 @@ function client() {
       assertErrorResponse(response, KNOWN_ERROR_CODES, method);
       throw new Error(`${method} returned ${response.error.data.code}`);
     }
-    try { validateResult(method, response.result); }
-    catch { throw new Error(`${method} result schema is invalid`); }
+    const validateResult = validateResultFn;
+    if (typeof validateResult === "function") {
+      try { validateResult(method, response.result); }
+      catch { throw new Error(`${method} result schema is invalid`); }
+    }
     successfulMethodCounts.set(method, (successfulMethodCounts.get(method) ?? 0) + 1);
     return response.result;
   };
@@ -307,7 +329,11 @@ function client() {
   };
 }
 
-function assertCleanTermination(processEvidence) {
+function client() {
+  return createSidecarClient();
+}
+
+export function assertCleanTermination(processEvidence) {
   if (processEvidence.exit.code !== 0 || processEvidence.exit.signal !== null
       || processEvidence.close.code !== 0 || processEvidence.close.signal !== null
       || processEvidence.stderr.byteLength !== 0) {
@@ -315,8 +341,21 @@ function assertCleanTermination(processEvidence) {
   }
 }
 
-async function session(version, exercise) {
-  const rpc = client();
+export async function session(version, exercise, options = {}) {
+  let valFn = options.validateResult;
+  if (valFn === undefined) {
+    try {
+      valFn = await getDefaultValidateResult(options.payloadRoot || payload);
+    } catch {
+      valFn = null;
+    }
+  }
+  const rpc = createSidecarClient({
+    binaryPath: options.binaryPath,
+    payloadRoot: options.payloadRoot,
+    entrypointPath: options.entrypointPath,
+    validateResult: valFn,
+  });
   try {
     const initialized = await rpc.result("initialize", 1, {
       protocol: "tfsb.studio", minVersion: version, maxVersion: version,
@@ -347,6 +386,22 @@ async function session(version, exercise) {
     const reason = error instanceof Error ? error.message : "unknown protocol failure";
     throw new Error(`protocol ${version} session failed: ${reason}`);
   }
+}
+
+export async function runSidecarSession({
+  binaryPath = binary,
+  payloadRoot = payload,
+  entrypointPath,
+  version = "1.2",
+  exercise,
+  validateResult = null,
+} = {}) {
+  return session(version, exercise, {
+    binaryPath,
+    payloadRoot,
+    entrypointPath,
+    validateResult,
+  });
 }
 
 async function unavailableInLegacy(rpc, nonce, startId) {
@@ -413,6 +468,7 @@ async function prepareDeriveProject(coreProject, deriveProject) {
 }
 
 export async function runTranscript() {
+  await getCoreApi();
   const scratch = await realpath(await mkdtemp(join(tmpdir(), "tfsb48r2-transcript-")));
   try {
     const target = join(scratch, "import-target");

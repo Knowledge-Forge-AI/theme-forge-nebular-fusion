@@ -171,34 +171,42 @@ impl SceneRunner {
     }
 
     pub fn is_packaged_bundle(current_exe: &Path) -> bool {
-        if !tauri::is_dev() {
-            return true;
-        }
-        current_exe
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.file_name())
-            .is_some_and(|name| name == "Contents")
+        crate::platform::is_packaged_bundle(current_exe)
     }
 
     pub fn discover(resource_dir: &Path, current_exe: &Path) -> Self {
-        if Self::is_packaged_bundle(current_exe) {
-            Self::new(
-                current_exe
-                    .parent()
-                    .map(|p| p.join("tfsb-studio-service"))
-                    .unwrap_or_default(),
-                resource_dir.join("scene-payload/bin/scene-batch.js"),
-            )
+        Self::discover_with_mode(
+            resource_dir,
+            current_exe,
+            crate::platform::is_packaged_bundle(current_exe),
+        )
+    }
+
+    pub fn discover_with_mode(resource_dir: &Path, current_exe: &Path, packaged: bool) -> Self {
+        let node_binary = crate::platform::select_runtime(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            current_exe,
+            packaged,
+        );
+        let scene_adapter = if packaged
+            || !cfg!(debug_assertions)
+            || resource_dir
+                .join("scene-payload/bin/scene-batch.js")
+                .is_file()
+        {
+            resource_dir.join("scene-payload/bin/scene-batch.js")
         } else {
-            // The development path points only to the same authenticated prepared
-            // payload and pinned runtime, never a source checkout or PATH command.
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            Self::new(
-                root.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
-                root.join("scene-payload/bin/scene-batch.js"),
-            )
-        }
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("scene-payload/bin/scene-batch.js")
+        };
+        Self::new(node_binary, scene_adapter)
+    }
+
+    pub fn node_binary_path(&self) -> &Path {
+        &self.node_binary
+    }
+
+    pub fn scene_adapter_path(&self) -> &Path {
+        &self.scene_adapter
     }
 
     pub fn is_available(&self) -> bool {
@@ -589,9 +597,32 @@ mod boundary_tests {
     fn prepared_runner() -> SceneRunner {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         SceneRunner::new(
-            root.join("binaries/tfsb-studio-service-aarch64-apple-darwin"),
+            crate::platform::prepared_runtime(root),
             root.join("scene-payload/bin/scene-batch.js"),
         )
+    }
+
+    #[test]
+    fn discovery_packaged_vs_dev_mode() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let exe = manifest_dir.join("target/debug/test-binary");
+        let resource = manifest_dir.join("scene-payload");
+
+        let dev_runner = SceneRunner::discover_with_mode(&resource, &exe, false);
+        assert_eq!(
+            dev_runner.node_binary_path(),
+            crate::platform::development_runtime(manifest_dir, &exe)
+        );
+
+        let pkg_runner = SceneRunner::discover_with_mode(&resource, &exe, true);
+        assert_eq!(
+            pkg_runner.node_binary_path(),
+            crate::platform::packaged_runtime(&exe)
+        );
+        assert_eq!(
+            pkg_runner.scene_adapter_path(),
+            resource.join("scene-payload/bin/scene-batch.js")
+        );
     }
 
     #[test]

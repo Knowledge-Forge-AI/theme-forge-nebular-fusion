@@ -8,7 +8,8 @@ import { repositoryRootForStudio } from "./sidecar-common.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const studioRoot = resolve(__dirname, "..");
-const repoRoot = repositoryRootForStudio(studioRoot);
+const sourceBuild = Boolean(process.env.NEBULAR_BUILD_INPUTS);
+const repoRoot = sourceBuild ? studioRoot : repositoryRootForStudio(studioRoot);
 const publicAppDir = resolve(studioRoot, "public/preview/app");
 
 export async function prepareAppPreview() {
@@ -559,7 +560,7 @@ body {
   const targetNotice = resolve(publicAppDir, "NOTICE.md");
   const targetProvenance = resolve(publicAppDir, "provenance.json");
 
-  const upstreamComponentPaths = [
+  const upstreamComponentPaths = sourceBuild ? ["tools/app-preview-prepare.mjs"] : [
     "packages/solar-sail/consumer-fixture/src/components/ui/button.tsx",
     "packages/solar-sail/consumer-fixture/src/components/ui/card.tsx",
     "packages/solar-sail/consumer-fixture/src/components/ui/badge.tsx",
@@ -568,7 +569,7 @@ body {
   ];
   const upstreamComponents = upstreamComponentPaths.map((rel) => {
     const full = resolve(repoRoot, rel);
-    const content = existsSync(full) ? readFileSync(full) : Buffer.from("");
+    const content = sourceBuild || existsSync(full) ? readFileSync(full) : Buffer.from("");
     const digest = createHash("sha256").update(content).digest("hex");
     return { path: rel, sha256: digest };
   });
@@ -581,7 +582,7 @@ body {
     license: "MIT",
     runtimeDependencies: {},
     source: {
-      fixture: "packages/solar-sail/consumer-fixture",
+      fixture: sourceBuild ? "tools/app-preview-prepare.mjs" : "packages/solar-sail/consumer-fixture",
       components: upstreamComponents,
       patternedAfterUpstreamPackages: {
         "@radix-ui/react-slot": "1.1.2",

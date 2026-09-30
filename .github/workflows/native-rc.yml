@@ -1,0 +1,690 @@
+name: Native release candidates
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - ".github/workflows/native-rc.yml"
+      - "authenticated-inputs/**"
+      - "docs/examples/v0.4/brand-system/core-minimal/**"
+      - "gallery/**"
+      - "index.html"
+      - "LICENSE"
+      - "loom-preview-source/**"
+      - "native-source-inventory.json"
+      - "native/**"
+      - "NOTICE"
+      - "package-lock.json"
+      - "package.json"
+      - "protocol/**"
+      - "rust-toolchain.toml"
+      - "src-tauri/**"
+      - "src/**"
+      - "tools/**"
+      - "tsconfig.json"
+      - "vite.config.ts"
+  workflow_dispatch:
+    inputs:
+      macos_arm64:
+        description: Build, qualify and smoke-test the macOS Apple Silicon candidate
+        type: boolean
+        default: false
+      linux_arm64:
+        description: Build, qualify and smoke-test the Linux arm64 candidate
+        type: boolean
+        default: false
+      linux_x64:
+        description: Build, qualify and smoke-test the Linux x64 candidate
+        type: boolean
+        default: false
+      release_candidate:
+        description: Retain passing candidates for 90 days (the public maximum) instead of 14
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebular-native-rc-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Select native release-candidate lanes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      retention_days: ${{ steps.plan.outputs.retention_days }}
+      diagnostics_retention_days: ${{ steps.plan.outputs.diagnostics_retention_days }}
+      macos_arm64: ${{ steps.plan.outputs.macos_arm64 }}
+      macos_arm64_artifact: ${{ steps.plan.outputs.macos_arm64_artifact }}
+      macos_arm64_diagnostics: ${{ steps.plan.outputs.macos_arm64_diagnostics }}
+      linux_arm64: ${{ steps.plan.outputs.linux_arm64 }}
+      linux_arm64_artifact: ${{ steps.plan.outputs.linux_arm64_artifact }}
+      linux_arm64_diagnostics: ${{ steps.plan.outputs.linux_arm64_diagnostics }}
+      linux_x64: ${{ steps.plan.outputs.linux_x64 }}
+      linux_x64_artifact: ${{ steps.plan.outputs.linux_x64_artifact }}
+      linux_x64_diagnostics: ${{ steps.plan.outputs.linux_x64_diagnostics }}
+    steps:
+      - name: Check out the exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Select lanes, names and retention
+        id: plan
+        env:
+          NEBULAR_RC_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node tools/native-rc-plan.mjs
+
+  macos-arm64:
+    name: macOS arm64 release candidate (scenario A)
+    needs: plan
+    if: needs.plan.outputs.macos_arm64 == 'true'
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      evidence_sha256: ${{ steps.seal.outputs.evidence_sha256 }}
+    env:
+      NEBULAR_RC_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      NEBULAR_RC_PLATFORM: darwin-arm64
+      NEBULAR_RC_TRIPLE: aarch64-apple-darwin
+      NEBULAR_RC_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - name: Check out the exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      # A pull-request candidate is the head commit, and its tree must be exactly the tree that merges.
+      - name: Bind the source commit and tree
+        env:
+          NEBULAR_RC_EVENT: ${{ github.event_name }}
+          NEBULAR_RC_MERGE_SHA: ${{ github.sha }}
+          NEBULAR_RC_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          NEBULAR_RC_REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$NEBULAR_RC_SOURCE_SHA"
+          echo "NEBULAR_RC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
+          if [ "$NEBULAR_RC_EVENT" = "pull_request" ]; then
+            test "$NEBULAR_RC_HEAD_REPOSITORY" = "$NEBULAR_RC_REPOSITORY"
+            git fetch --no-tags --depth=1 origin "$NEBULAR_RC_MERGE_SHA"
+            test "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')"
+            {
+              echo "NEBULAR_RC_MERGE_COMMIT=$NEBULAR_RC_MERGE_SHA"
+              echo "NEBULAR_RC_MERGE_TREE=$(git rev-parse 'FETCH_HEAD^{tree}')"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Select the repository-pinned Rust 1.98.0 toolchain
+        run: |
+          test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          CARGO_HOME="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cargo-home.XXXXXX")"
+          export CARGO_HOME
+          rustup toolchain install 1.98.0 --profile minimal
+          echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
+          RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
+      - name: Authenticate the embedded Node runtime
+        run: |
+          mkdir -p .test-reports/nebular/node-authenticity
+          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.3" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+      - run: npm ci --ignore-scripts
+      - run: npm ci --prefix loom-preview-source --ignore-scripts
+      - run: npm run build
+      - name: Build and verify sidecar, Loom and scene payloads
+        run: |
+          ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
+          test -n "$ROOT_TGZ"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cp src-tauri/sidecar-payload/manifest.json "$RUNNER_TEMP/manifest-first.json"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cmp "$RUNNER_TEMP/manifest-first.json" src-tauri/sidecar-payload/manifest.json
+          node tools/loom-prepare.mjs
+          if [ -d authenticated-inputs/scene-tarball ]; then
+            SCENE_TGZ=$(find authenticated-inputs/scene-tarball -name '*.tgz' -type f -print -quit)
+            if [ -n "$SCENE_TGZ" ]; then
+              node tools/scene-prepare.mjs prepare "$SCENE_TGZ" "$RUNNER_TEMP/node-authenticated"
+              node tools/scene-prepare.mjs verify src-tauri/scene-payload "$RUNNER_TEMP/node-authenticated"
+            fi
+          fi
+          node tools/sidecar-verify.mjs
+      - name: Fetch locked Rust dependencies and generate release notices
+        run: |
+          (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
+          node tools/release-notices.mjs
+          node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Compile the native release payload
+        env:
+          TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
+        run: |
+          # Apple ld records rustup std rlib paths (under the runner home) in its debug map; strip that prefix so build-app's home-path hygiene check applies to real leaks.
+          CARGO_ENCODED_RUSTFLAGS="-Clink-arg=-Wl,-oso_prefix,$(rustup show home)/" npm run tauri:build
+          mkdir -p "$RUNNER_TEMP/rc/payload"
+          ditto --norsrc --noextattr --noacl "src-tauri/target/$NEBULAR_RC_TRIPLE/release/bundle/macos/Theme Forge Nebular Fusion.app" "$RUNNER_TEMP/rc/payload/Theme Forge Nebular Fusion.app"
+      - name: Qualify the native payload
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc/upload/evidence"
+          node tools/native-rc-qualify.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload/evidence/qualification.json"
+          node tools/native-rc-evidence.mjs build-receipt --platform "$NEBULAR_RC_PLATFORM" --checkout . --payload "$RUNNER_TEMP/rc/payload" --node-receipt .test-reports/nebular/node-authenticity/receipt.json --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" --source-commit "$NEBULAR_RC_SOURCE_SHA" ${NEBULAR_RC_MERGE_COMMIT:+--merge-commit "$NEBULAR_RC_MERGE_COMMIT" --merge-tree "$NEBULAR_RC_MERGE_TREE"} --output "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json"
+          cp .test-reports/nebular/node-authenticity/receipt.json "$RUNNER_TEMP/rc/upload/evidence/node-authenticity.json"
+      - name: Package the exact candidate bytes
+        run: |
+          GLIBC=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).glibcMinimum ?? ""' "$RUNNER_TEMP/rc/upload/evidence/qualification.json")
+          node tools/native-rc-package.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload" --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" ${GLIBC:+--glibc-minimum "$GLIBC"}
+          mv "$RUNNER_TEMP/rc/upload/package-record.json" "$RUNNER_TEMP/rc/upload/package-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/"
+          chmod -R a-w "$RUNNER_TEMP/rc/upload/candidate"
+      # Smoke runs read the read-only candidate files only: each scenario is launched once from the
+      # extracted raw archive and once from the extracted npm package.
+      - name: Smoke-test the exact packaged candidate
+        run: |
+          set -e
+          RAW=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).raw.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          TGZ=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).npm.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          MANIFEST=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).packageManifestSha256' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          mkdir -p "$RUNNER_TEMP/rc/smoke/raw" "$RUNNER_TEMP/rc/smoke/npm" "$RUNNER_TEMP/rc/upload/evidence/smoke"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$RAW" -C "$RUNNER_TEMP/rc/smoke/raw"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$TGZ" -C "$RUNNER_TEMP/rc/smoke/npm"
+          node tools/native-rc-package.mjs verify --platform "$NEBULAR_RC_PLATFORM" --package-root "$RUNNER_TEMP/rc/smoke/npm/package" --manifest-sha256 "$MANIFEST"
+          RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw"
+          NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
+          run_smoke() {
+            node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+          }
+          run_smoke A "$RAW_ROOT" raw-archive
+          run_smoke A "$NPM_ROOT" npm-package
+      - name: Seal the candidate identity chain
+        id: seal
+        run: |
+          printf '%s' "$NEBULAR_RC_PLAN" > "$RUNNER_TEMP/rc/upload/evidence/plan.json"
+          node tools/native-rc-evidence.mjs seal --lane macos-arm64 --plan "$RUNNER_TEMP/rc/upload/evidence/plan.json" --candidate-dir "$RUNNER_TEMP/rc/upload/candidate" --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" --package-manifest "$RUNNER_TEMP/rc/upload/evidence/package-manifest.json" --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" --smoke-dir "$RUNNER_TEMP/rc/upload/evidence/smoke" --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" --output "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json"
+          echo "evidence_sha256=$(node -p 'require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex")' "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json")" >> "$GITHUB_OUTPUT"
+      # Upload immediately after the seal: the candidate files are the smoke-tested bytes, unchanged.
+      - name: Upload the qualified candidate and its evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.macos_arm64_artifact }}
+          path: ${{ runner.temp }}/rc/upload/
+          if-no-files-found: error
+          retention-days: ${{ needs.plan.outputs.retention_days }}
+          compression-level: 0
+          overwrite: false
+      - name: Restore write access for runner cleanup
+        if: ${{ always() }}
+        run: chmod -R u+w "$RUNNER_TEMP/rc" 2>/dev/null || true
+      - name: Retain diagnostics without candidate binaries
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.macos_arm64_diagnostics }}
+          path: ${{ runner.temp }}/rc/upload/evidence/
+          if-no-files-found: warn
+          retention-days: ${{ needs.plan.outputs.diagnostics_retention_days }}
+          overwrite: false
+
+  linux-arm64:
+    name: Linux arm64 release candidate (scenario B)
+    needs: plan
+    if: needs.plan.outputs.linux_arm64 == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    container:
+      image: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+      options: --init
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      evidence_sha256: ${{ steps.seal.outputs.evidence_sha256 }}
+    env:
+      NEBULAR_RC_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      NEBULAR_RC_PLATFORM: linux-arm64
+      NEBULAR_RC_TRIPLE: aarch64-unknown-linux-gnu
+      NEBULAR_RC_PLAN: ${{ needs.plan.outputs.plan }}
+      NEBULAR_RC_CONTAINER: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+      DEBIAN_FRONTEND: noninteractive
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+    steps:
+      - name: Install the build and virtual display environment
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils build-essential ca-certificates curl dbus dbus-x11 git libappindicator3-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libsoup-3.0-dev libwebkit2gtk-4.1-dev patchelf pkg-config procps xauth xvfb xz-utils
+          mkdir -p "$RUNNER_TEMP/rc/upload/evidence"
+          dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' | sort > "$RUNNER_TEMP/rc/upload/evidence/dpkg-packages.txt"
+          echo "NEBULAR_RC_PACKAGES_SHA256=$(sha256sum "$RUNNER_TEMP/rc/upload/evidence/dpkg-packages.txt" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+      - name: Check out the exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Trust exactly this job's workspace for Git
+        run: |
+          case "$GITHUB_WORKSPACE" in /*) ;; *) echo "::error::GITHUB_WORKSPACE is not absolute"; exit 1 ;; esac
+          case "$GITHUB_WORKSPACE" in *'*'*) echo "::error::GITHUB_WORKSPACE contains a wildcard"; exit 1 ;; esac
+          test "$(pwd -P)" = "$GITHUB_WORKSPACE"
+          test -d "$GITHUB_WORKSPACE/.git"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          git config --show-origin --get-all safe.directory
+          test -z "$(git config --get-all safe.directory | grep -Fxv -e "$GITHUB_WORKSPACE" || true)"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+      # A pull-request candidate is the head commit, and its tree must be exactly the tree that merges.
+      - name: Bind the source commit and tree
+        env:
+          NEBULAR_RC_EVENT: ${{ github.event_name }}
+          NEBULAR_RC_MERGE_SHA: ${{ github.sha }}
+          NEBULAR_RC_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          NEBULAR_RC_REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$NEBULAR_RC_SOURCE_SHA"
+          echo "NEBULAR_RC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
+          if [ "$NEBULAR_RC_EVENT" = "pull_request" ]; then
+            test "$NEBULAR_RC_HEAD_REPOSITORY" = "$NEBULAR_RC_REPOSITORY"
+            git fetch --no-tags --depth=1 origin "$NEBULAR_RC_MERGE_SHA"
+            test "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')"
+            {
+              echo "NEBULAR_RC_MERGE_COMMIT=$NEBULAR_RC_MERGE_SHA"
+              echo "NEBULAR_RC_MERGE_TREE=$(git rev-parse 'FETCH_HEAD^{tree}')"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Select the repository-pinned Rust 1.98.0 toolchain
+        run: |
+          test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          RUSTUP_DIR="$RUNNER_TEMP/rustup-init"
+          mkdir -p "$RUSTUP_DIR"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$RUSTUP_DIR/rustup-init" "https://static.rust-lang.org/rustup/dist/$NEBULAR_RC_TRIPLE/rustup-init"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$RUSTUP_DIR/rustup-init.sha256" "https://static.rust-lang.org/rustup/dist/$NEBULAR_RC_TRIPLE/rustup-init.sha256"
+          test "$(cut -d' ' -f1 "$RUSTUP_DIR/rustup-init.sha256")" = "$(sha256sum "$RUSTUP_DIR/rustup-init" | cut -d' ' -f1)"
+          chmod +x "$RUSTUP_DIR/rustup-init"
+          export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo-home"
+          "$RUSTUP_DIR/rustup-init" -y --no-modify-path --profile minimal --default-toolchain 1.98.0
+          {
+            echo "RUSTUP_HOME=$RUSTUP_HOME"
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "RUSTUP_TOOLCHAIN=1.98.0"
+          } >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
+          RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
+      - name: Authenticate the embedded Node runtime
+        run: |
+          mkdir -p .test-reports/nebular/node-authenticity
+          NODE_DIR="$RUNNER_TEMP/node-linux"
+          ARCHIVE=$(node --input-type=module -e 'import { NODE_RELEASE_IDENTITY } from "./tools/node-runtime-authority.mjs"; process.stdout.write(NODE_RELEASE_IDENTITY.targets[process.env.NEBULAR_RC_TRIPLE].archive)')
+          mkdir -p "$NODE_DIR"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.3/SHASUMS256.txt.asc
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.3/$ARCHIVE"
+          node tools/node-runtime-authority.mjs --authenticate-linux "$NODE_DIR" --target "$NEBULAR_RC_TRIPLE" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+      - run: npm ci --ignore-scripts
+      - run: npm ci --prefix loom-preview-source --ignore-scripts
+      - run: npm run build
+      - name: Build and verify sidecar, Loom and scene payloads
+        run: |
+          ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
+          test -n "$ROOT_TGZ"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cp src-tauri/sidecar-payload/manifest.json "$RUNNER_TEMP/manifest-first.json"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cmp "$RUNNER_TEMP/manifest-first.json" src-tauri/sidecar-payload/manifest.json
+          node tools/loom-prepare.mjs
+          if [ -d authenticated-inputs/scene-tarball ]; then
+            SCENE_TGZ=$(find authenticated-inputs/scene-tarball -name '*.tgz' -type f -print -quit)
+            if [ -n "$SCENE_TGZ" ]; then
+              node tools/scene-prepare.mjs prepare "$SCENE_TGZ" "$RUNNER_TEMP/node-authenticated"
+              node tools/scene-prepare.mjs verify src-tauri/scene-payload "$RUNNER_TEMP/node-authenticated"
+            fi
+          fi
+          node tools/sidecar-verify.mjs
+      - name: Fetch locked Rust dependencies and generate release notices
+        run: |
+          (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
+          node tools/release-notices.mjs
+          node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Compile the native release payload
+        env:
+          TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
+        run: |
+          npm run tauri:build
+          RAW=$(find src-tauri/target -type d -path '*/release/bundle/raw' -print -quit)
+          test -n "$RAW"
+          mkdir -p "$RUNNER_TEMP/rc"
+          cp -a "$RAW" "$RUNNER_TEMP/rc/payload"
+      - name: Qualify the native payload
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc/upload/evidence"
+          node tools/native-rc-qualify.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload/evidence/qualification.json"
+          node tools/native-rc-evidence.mjs build-receipt --platform "$NEBULAR_RC_PLATFORM" --checkout . --payload "$RUNNER_TEMP/rc/payload" --node-receipt .test-reports/nebular/node-authenticity/receipt.json --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" --source-commit "$NEBULAR_RC_SOURCE_SHA" ${NEBULAR_RC_MERGE_COMMIT:+--merge-commit "$NEBULAR_RC_MERGE_COMMIT" --merge-tree "$NEBULAR_RC_MERGE_TREE"} --output "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json"
+          cp .test-reports/nebular/node-authenticity/receipt.json "$RUNNER_TEMP/rc/upload/evidence/node-authenticity.json"
+      - name: Package the exact candidate bytes
+        run: |
+          GLIBC=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).glibcMinimum ?? ""' "$RUNNER_TEMP/rc/upload/evidence/qualification.json")
+          node tools/native-rc-package.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload" --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" ${GLIBC:+--glibc-minimum "$GLIBC"}
+          mv "$RUNNER_TEMP/rc/upload/package-record.json" "$RUNNER_TEMP/rc/upload/package-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/"
+          chmod -R a-w "$RUNNER_TEMP/rc/upload/candidate"
+      # Smoke runs read the read-only candidate files only: each scenario is launched once from the
+      # extracted raw archive and once from the extracted npm package.
+      - name: Smoke-test the exact packaged candidate
+        run: |
+          set -e
+          RAW=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).raw.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          TGZ=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).npm.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          MANIFEST=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).packageManifestSha256' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          mkdir -p "$RUNNER_TEMP/rc/smoke/raw" "$RUNNER_TEMP/rc/smoke/npm" "$RUNNER_TEMP/rc/upload/evidence/smoke"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$RAW" -C "$RUNNER_TEMP/rc/smoke/raw"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$TGZ" -C "$RUNNER_TEMP/rc/smoke/npm"
+          node tools/native-rc-package.mjs verify --platform "$NEBULAR_RC_PLATFORM" --package-root "$RUNNER_TEMP/rc/smoke/npm/package" --manifest-sha256 "$MANIFEST"
+          RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw"
+          RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw/theme-forge-nebular-fusion"
+          NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
+          run_smoke() {
+            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+          }
+          run_smoke B "$RAW_ROOT" raw-archive
+          run_smoke B "$NPM_ROOT" npm-package
+      - name: Seal the candidate identity chain
+        id: seal
+        run: |
+          printf '%s' "$NEBULAR_RC_PLAN" > "$RUNNER_TEMP/rc/upload/evidence/plan.json"
+          node tools/native-rc-evidence.mjs seal --lane linux-arm64 --plan "$RUNNER_TEMP/rc/upload/evidence/plan.json" --candidate-dir "$RUNNER_TEMP/rc/upload/candidate" --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" --package-manifest "$RUNNER_TEMP/rc/upload/evidence/package-manifest.json" --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" --smoke-dir "$RUNNER_TEMP/rc/upload/evidence/smoke" --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" --output "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json"
+          echo "evidence_sha256=$(node -p 'require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex")' "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json")" >> "$GITHUB_OUTPUT"
+      # Upload immediately after the seal: the candidate files are the smoke-tested bytes, unchanged.
+      - name: Upload the qualified candidate and its evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.linux_arm64_artifact }}
+          path: ${{ runner.temp }}/rc/upload/
+          if-no-files-found: error
+          retention-days: ${{ needs.plan.outputs.retention_days }}
+          compression-level: 0
+          overwrite: false
+      - name: Restore write access for runner cleanup
+        if: ${{ always() }}
+        run: chmod -R u+w "$RUNNER_TEMP/rc" 2>/dev/null || true
+      - name: Retain diagnostics without candidate binaries
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.linux_arm64_diagnostics }}
+          path: ${{ runner.temp }}/rc/upload/evidence/
+          if-no-files-found: warn
+          retention-days: ${{ needs.plan.outputs.diagnostics_retention_days }}
+          overwrite: false
+
+  linux-x64:
+    name: Linux x64 release candidate (scenario C + C-signal)
+    needs: plan
+    if: needs.plan.outputs.linux_x64 == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    container:
+      image: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+      options: --init
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      evidence_sha256: ${{ steps.seal.outputs.evidence_sha256 }}
+    env:
+      NEBULAR_RC_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      NEBULAR_RC_PLATFORM: linux-x64
+      NEBULAR_RC_TRIPLE: x86_64-unknown-linux-gnu
+      NEBULAR_RC_PLAN: ${{ needs.plan.outputs.plan }}
+      NEBULAR_RC_CONTAINER: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+      DEBIAN_FRONTEND: noninteractive
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+    steps:
+      - name: Install the build and virtual display environment
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends binutils build-essential ca-certificates curl dbus dbus-x11 git libappindicator3-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libsoup-3.0-dev libwebkit2gtk-4.1-dev patchelf pkg-config procps xauth xvfb xz-utils
+          mkdir -p "$RUNNER_TEMP/rc/upload/evidence"
+          dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' | sort > "$RUNNER_TEMP/rc/upload/evidence/dpkg-packages.txt"
+          echo "NEBULAR_RC_PACKAGES_SHA256=$(sha256sum "$RUNNER_TEMP/rc/upload/evidence/dpkg-packages.txt" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+      - name: Check out the exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Trust exactly this job's workspace for Git
+        run: |
+          case "$GITHUB_WORKSPACE" in /*) ;; *) echo "::error::GITHUB_WORKSPACE is not absolute"; exit 1 ;; esac
+          case "$GITHUB_WORKSPACE" in *'*'*) echo "::error::GITHUB_WORKSPACE contains a wildcard"; exit 1 ;; esac
+          test "$(pwd -P)" = "$GITHUB_WORKSPACE"
+          test -d "$GITHUB_WORKSPACE/.git"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          git config --show-origin --get-all safe.directory
+          test -z "$(git config --get-all safe.directory | grep -Fxv -e "$GITHUB_WORKSPACE" || true)"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+      # A pull-request candidate is the head commit, and its tree must be exactly the tree that merges.
+      - name: Bind the source commit and tree
+        env:
+          NEBULAR_RC_EVENT: ${{ github.event_name }}
+          NEBULAR_RC_MERGE_SHA: ${{ github.sha }}
+          NEBULAR_RC_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          NEBULAR_RC_REPOSITORY: ${{ github.repository }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$NEBULAR_RC_SOURCE_SHA"
+          echo "NEBULAR_RC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_ENV"
+          if [ "$NEBULAR_RC_EVENT" = "pull_request" ]; then
+            test "$NEBULAR_RC_HEAD_REPOSITORY" = "$NEBULAR_RC_REPOSITORY"
+            git fetch --no-tags --depth=1 origin "$NEBULAR_RC_MERGE_SHA"
+            test "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')"
+            {
+              echo "NEBULAR_RC_MERGE_COMMIT=$NEBULAR_RC_MERGE_SHA"
+              echo "NEBULAR_RC_MERGE_TREE=$(git rev-parse 'FETCH_HEAD^{tree}')"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Select the repository-pinned Rust 1.98.0 toolchain
+        run: |
+          test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          RUSTUP_DIR="$RUNNER_TEMP/rustup-init"
+          mkdir -p "$RUSTUP_DIR"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$RUSTUP_DIR/rustup-init" "https://static.rust-lang.org/rustup/dist/$NEBULAR_RC_TRIPLE/rustup-init"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$RUSTUP_DIR/rustup-init.sha256" "https://static.rust-lang.org/rustup/dist/$NEBULAR_RC_TRIPLE/rustup-init.sha256"
+          test "$(cut -d' ' -f1 "$RUSTUP_DIR/rustup-init.sha256")" = "$(sha256sum "$RUSTUP_DIR/rustup-init" | cut -d' ' -f1)"
+          chmod +x "$RUSTUP_DIR/rustup-init"
+          export RUSTUP_HOME="$RUNNER_TEMP/rustup" CARGO_HOME="$RUNNER_TEMP/cargo-home"
+          "$RUSTUP_DIR/rustup-init" -y --no-modify-path --profile minimal --default-toolchain 1.98.0
+          {
+            echo "RUSTUP_HOME=$RUSTUP_HOME"
+            echo "CARGO_HOME=$CARGO_HOME"
+            echo "RUSTUP_TOOLCHAIN=1.98.0"
+          } >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
+          RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
+      - name: Authenticate the embedded Node runtime
+        run: |
+          mkdir -p .test-reports/nebular/node-authenticity
+          NODE_DIR="$RUNNER_TEMP/node-linux"
+          ARCHIVE=$(node --input-type=module -e 'import { NODE_RELEASE_IDENTITY } from "./tools/node-runtime-authority.mjs"; process.stdout.write(NODE_RELEASE_IDENTITY.targets[process.env.NEBULAR_RC_TRIPLE].archive)')
+          mkdir -p "$NODE_DIR"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.3/SHASUMS256.txt.asc
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.3/$ARCHIVE"
+          node tools/node-runtime-authority.mjs --authenticate-linux "$NODE_DIR" --target "$NEBULAR_RC_TRIPLE" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+      - run: npm ci --ignore-scripts
+      - run: npm ci --prefix loom-preview-source --ignore-scripts
+      - run: npm run build
+      - name: Build and verify sidecar, Loom and scene payloads
+        run: |
+          ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
+          test -n "$ROOT_TGZ"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cp src-tauri/sidecar-payload/manifest.json "$RUNNER_TEMP/manifest-first.json"
+          node tools/sidecar-prepare.mjs --node "$RUNNER_TEMP/node-authenticated" --root-tarball "$ROOT_TGZ" --target "$NEBULAR_RC_TRIPLE"
+          cmp "$RUNNER_TEMP/manifest-first.json" src-tauri/sidecar-payload/manifest.json
+          node tools/loom-prepare.mjs
+          if [ -d authenticated-inputs/scene-tarball ]; then
+            SCENE_TGZ=$(find authenticated-inputs/scene-tarball -name '*.tgz' -type f -print -quit)
+            if [ -n "$SCENE_TGZ" ]; then
+              node tools/scene-prepare.mjs prepare "$SCENE_TGZ" "$RUNNER_TEMP/node-authenticated"
+              node tools/scene-prepare.mjs verify src-tauri/scene-payload "$RUNNER_TEMP/node-authenticated"
+            fi
+          fi
+          node tools/sidecar-verify.mjs
+      - name: Fetch locked Rust dependencies and generate release notices
+        run: |
+          (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
+          node tools/release-notices.mjs
+          node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Compile the native release payload
+        env:
+          TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
+        run: |
+          npm run tauri:build
+          RAW=$(find src-tauri/target -type d -path '*/release/bundle/raw' -print -quit)
+          test -n "$RAW"
+          mkdir -p "$RUNNER_TEMP/rc"
+          cp -a "$RAW" "$RUNNER_TEMP/rc/payload"
+      - name: Qualify the native payload
+        run: |
+          mkdir -p "$RUNNER_TEMP/rc/upload/evidence"
+          node tools/native-rc-qualify.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload/evidence/qualification.json"
+          node tools/native-rc-evidence.mjs build-receipt --platform "$NEBULAR_RC_PLATFORM" --checkout . --payload "$RUNNER_TEMP/rc/payload" --node-receipt .test-reports/nebular/node-authenticity/receipt.json --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" --source-commit "$NEBULAR_RC_SOURCE_SHA" ${NEBULAR_RC_MERGE_COMMIT:+--merge-commit "$NEBULAR_RC_MERGE_COMMIT" --merge-tree "$NEBULAR_RC_MERGE_TREE"} --output "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json"
+          cp .test-reports/nebular/node-authenticity/receipt.json "$RUNNER_TEMP/rc/upload/evidence/node-authenticity.json"
+      - name: Package the exact candidate bytes
+        run: |
+          GLIBC=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).glibcMinimum ?? ""' "$RUNNER_TEMP/rc/upload/evidence/qualification.json")
+          node tools/native-rc-package.mjs --platform "$NEBULAR_RC_PLATFORM" --payload "$RUNNER_TEMP/rc/payload" --checkout . --output "$RUNNER_TEMP/rc/upload" --npm-cli "$(dirname "$(command -v node)")/../lib/node_modules/npm/bin/npm-cli.js" ${GLIBC:+--glibc-minimum "$GLIBC"}
+          mv "$RUNNER_TEMP/rc/upload/package-record.json" "$RUNNER_TEMP/rc/upload/package-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/"
+          chmod -R a-w "$RUNNER_TEMP/rc/upload/candidate"
+      # Smoke runs read the read-only candidate files only: each scenario is launched once from the
+      # extracted raw archive and once from the extracted npm package.
+      - name: Smoke-test the exact packaged candidate
+        run: |
+          set -e
+          RAW=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).raw.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          TGZ=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).npm.filename' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          MANIFEST=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).packageManifestSha256' "$RUNNER_TEMP/rc/upload/evidence/package-record.json")
+          mkdir -p "$RUNNER_TEMP/rc/smoke/raw" "$RUNNER_TEMP/rc/smoke/npm" "$RUNNER_TEMP/rc/upload/evidence/smoke"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$RAW" -C "$RUNNER_TEMP/rc/smoke/raw"
+          tar -xzf "$RUNNER_TEMP/rc/upload/candidate/$TGZ" -C "$RUNNER_TEMP/rc/smoke/npm"
+          node tools/native-rc-package.mjs verify --platform "$NEBULAR_RC_PLATFORM" --package-root "$RUNNER_TEMP/rc/smoke/npm/package" --manifest-sha256 "$MANIFEST"
+          RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw"
+          RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw/theme-forge-nebular-fusion"
+          NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
+          run_smoke() {
+            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+          }
+          run_smoke C "$RAW_ROOT" raw-archive
+          run_smoke C-signal "$NPM_ROOT" npm-package
+      - name: Seal the candidate identity chain
+        id: seal
+        run: |
+          printf '%s' "$NEBULAR_RC_PLAN" > "$RUNNER_TEMP/rc/upload/evidence/plan.json"
+          node tools/native-rc-evidence.mjs seal --lane linux-x64 --plan "$RUNNER_TEMP/rc/upload/evidence/plan.json" --candidate-dir "$RUNNER_TEMP/rc/upload/candidate" --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" --package-manifest "$RUNNER_TEMP/rc/upload/evidence/package-manifest.json" --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" --smoke-dir "$RUNNER_TEMP/rc/upload/evidence/smoke" --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" --output "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json"
+          echo "evidence_sha256=$(node -p 'require("node:crypto").createHash("sha256").update(require("node:fs").readFileSync(process.argv[1])).digest("hex")' "$RUNNER_TEMP/rc/upload/evidence/rc-evidence.json")" >> "$GITHUB_OUTPUT"
+      # Upload immediately after the seal: the candidate files are the smoke-tested bytes, unchanged.
+      - name: Upload the qualified candidate and its evidence
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.linux_x64_artifact }}
+          path: ${{ runner.temp }}/rc/upload/
+          if-no-files-found: error
+          retention-days: ${{ needs.plan.outputs.retention_days }}
+          compression-level: 0
+          overwrite: false
+      - name: Restore write access for runner cleanup
+        if: ${{ always() }}
+        run: chmod -R u+w "$RUNNER_TEMP/rc" 2>/dev/null || true
+      - name: Retain diagnostics without candidate binaries
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.plan.outputs.linux_x64_diagnostics }}
+          path: ${{ runner.temp }}/rc/upload/evidence/
+          if-no-files-found: warn
+          retention-days: ${{ needs.plan.outputs.diagnostics_retention_days }}
+          overwrite: false
+
+  rc-index:
+    name: Release-candidate catalog
+    needs: [plan, macos-arm64, linux-arm64, linux-x64]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read # Reads back each uploaded artifact's digest and expiry.
+    env:
+      NEBULAR_RC_PLAN: ${{ needs.plan.outputs.plan }}
+      NEBULAR_RC_NEEDS: ${{ toJson(needs) }}
+    steps:
+      - name: Check out the exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: List the uploaded candidate artifacts
+        id: ids
+        run: node -e 'const n = JSON.parse(process.env.NEBULAR_RC_NEEDS); const ids = Object.values(n).map((job) => job.outputs && job.outputs.artifact_id).filter((id) => /^[0-9]+$/.test(id || "")); require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, "ids=" + ids.join(",") + "\n");'
+      - name: Download the candidate artifacts by id
+        if: ${{ steps.ids.outputs.ids != '' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ steps.ids.outputs.ids }}
+          path: .rc-artifacts/
+      # CI11: the catalog directory is not hidden. upload-artifact excludes hidden files by default, and
+      # CI10's .rc-index/ was dropped with only a warning, so a passing catalog was never retained.
+      - name: Catalog every lane
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p rc-index .rc-artifacts
+          node tools/native-rc-index.mjs --download-dir .rc-artifacts --output rc-index/rc-index.json
+      # A failing catalog still writes its file and is retained as evidence; no file fails the job here.
+      - name: Require exactly one regular rc-index.json
+        id: catalog-file
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          if [[ -L rc-index || ! -d rc-index ]]; then echo "rc-index is not a directory" >&2; exit 1; fi
+          entries=(rc-index/*)
+          if [[ ${#entries[@]} -ne 1 || ${entries[0]} != rc-index/rc-index.json ]]; then echo "rc-index must hold exactly rc-index.json" >&2; exit 1; fi
+          if [[ -L rc-index/rc-index.json || ! -f rc-index/rc-index.json || ! -s rc-index/rc-index.json ]]; then echo "rc-index/rc-index.json is not a non-empty regular file" >&2; exit 1; fi
+      - name: Upload the release-candidate catalog
+        if: ${{ always() && steps.catalog-file.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-rc-index-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: rc-index/
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: ${{ needs.plan.outputs.retention_days || 14 }}
+          overwrite: false

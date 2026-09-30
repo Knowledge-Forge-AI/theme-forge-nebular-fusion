@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -370,6 +370,58 @@ describe("release-notices standalone legal notices generator", () => {
   });
 
   describe("end-to-end generateReleaseNotices with mock fixtures", () => {
+    it.each(["0.5.0", "1.2.3-rc.1+fixture"])("uses selected studio version %s in repeatable JSON and Markdown", async version => {
+      const studioRoot = await mkdtemp(join(tmpdir(), "notice-version-"));
+      try {
+        await writeFile(join(studioRoot, "package.json"), JSON.stringify({ version }));
+        const outDir = join(studioRoot, "notices");
+        const options = {
+          studioRoot, outDir,
+          cargoMetadata: {
+            resolve: { root: "fixture", nodes: [{ id: "fixture", deps: [{ pkg: "dependency@0.3.0", dep_kinds: [{ kind: null }] }] }, { id: "dependency@0.3.0", deps: [] }] },
+            packages: [{ id: "dependency@0.3.0", name: "dependency", version: "0.3.0", license: "MIT" }],
+          },
+          cargoLockContent: '[[package]]\nname = "dependency"\nversion = "0.3.0"\nchecksum = "abc123"\n',
+          mockCrateFiles: { "dependency@0.3.0": ["LICENSE"] },
+          mockNpmPackages: { react: { version: "0.3.0", license: "MIT", files: ["LICENSE"] } },
+        };
+        await generateReleaseNotices(options);
+        const json = await readFile(join(outDir, "THIRD-PARTY-NOTICES.json"), "utf8");
+        const md = await readFile(join(outDir, "THIRD-PARTY-NOTICES.md"), "utf8");
+        expect(JSON.parse(json).root.version).toBe(version);
+        expect(JSON.parse(json).crates[0]).toMatchObject({ version: "0.3.0", checksum: "abc123", license: "MIT", files: ["crates/dependency-0.3.0/LICENSE"] });
+        expect(JSON.parse(json).npm[0]).toMatchObject({ version: "0.3.0", license: "MIT", files: ["npm/react-0.3.0/LICENSE"] });
+        expect(md).toContain(`- **Version:** ${version}\n`);
+        expect(md).toContain("0.3.0");
+        await generateReleaseNotices(options);
+        expect(await readFile(join(outDir, "THIRD-PARTY-NOTICES.json"), "utf8")).toBe(json);
+        expect(await readFile(join(outDir, "THIRD-PARTY-NOTICES.md"), "utf8")).toBe(md);
+      } finally {
+        await rm(studioRoot, { recursive: true, force: true });
+      }
+    });
+
+    it.each([undefined, null, "", "0.5", "01.2.3", "1.2.3-01", "1.2.3\n", 5])("rejects invalid required source version %s before cargo execution", async version => {
+      const studioRoot = await mkdtemp(join(tmpdir(), "notice-invalid-version-"));
+      try {
+        await writeFile(join(studioRoot, "package.json"), JSON.stringify({ version }));
+        await expect(generateReleaseNotices({ studioRoot, writeFiles: false })).rejects.toThrow(/candidate version is required/);
+        expect(() => renderThirdPartyNoticesJson({ root: { version } })).toThrow(/candidate version is required/);
+        expect(() => renderThirdPartyNoticesMarkdown({ root: { version } })).toThrow(/candidate version is required/);
+      } finally {
+        await rm(studioRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a missing selected studio package instead of using the executing source version", async () => {
+      const studioRoot = await mkdtemp(join(tmpdir(), "notice-missing-version-"));
+      try {
+        await expect(generateReleaseNotices({ studioRoot, writeFiles: false })).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await rm(studioRoot, { recursive: true, force: true });
+      }
+    });
+
     it("fails when failOnMissing is true and a package lacks license text", async () => {
       const tmp = await mkdtemp(join(tmpdir(), "test-release-notices-"));
       try {

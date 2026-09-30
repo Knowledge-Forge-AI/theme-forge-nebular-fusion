@@ -91,11 +91,70 @@ fn inventory_bounded(
     Ok(())
 }
 
+#[cfg(nebular_source_build)]
+#[derive(Deserialize)]
+struct SourceBuildPins {
+    scene: Binding,
+    loom: Binding,
+}
+
+#[cfg(nebular_source_build)]
+static SOURCE_PINS_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/source-build-pins.json"));
+
+#[cfg(nebular_source_build)]
+fn scene_binding() -> StudioResult<Binding> {
+    let pins: SourceBuildPins = serde_json::from_str(SOURCE_PINS_JSON).map_err(|_| invalid())?;
+    Ok(pins.scene)
+}
+
+// Tarball builds: the maintained protocol bindings pin the payload files, and the runtime pin is the
+// embedded Node that the prepared sidecar payload records for this build target (build.rs). Without a
+// prepared payload the protocol binding's own runtime pin applies.
+#[cfg(all(not(nebular_source_build), nebular_runtime_pin))]
+static RUNTIME_PIN_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/runtime-pin.json"));
+
+#[cfg(all(not(nebular_source_build), nebular_runtime_pin))]
+fn target_runtime(binding: Binding) -> StudioResult<Binding> {
+    let node: Runtime = serde_json::from_str(RUNTIME_PIN_JSON).map_err(|_| invalid())?;
+    Ok(Binding {
+        node,
+        files: binding.files,
+    })
+}
+
+#[cfg(all(not(nebular_source_build), not(nebular_runtime_pin)))]
+fn target_runtime(binding: Binding) -> StudioResult<Binding> {
+    Ok(binding)
+}
+
+#[cfg(not(nebular_source_build))]
+fn scene_binding() -> StudioResult<Binding> {
+    target_runtime(
+        serde_json::from_str(include_str!(
+            "../../../protocol/scene-workbench-v1/payload-binding.json"
+        ))
+        .map_err(|_| invalid())?,
+    )
+}
+
+#[cfg(nebular_source_build)]
+fn loom_binding() -> StudioResult<Binding> {
+    let pins: SourceBuildPins = serde_json::from_str(SOURCE_PINS_JSON).map_err(|_| invalid())?;
+    Ok(pins.loom)
+}
+
+#[cfg(not(nebular_source_build))]
+fn loom_binding() -> StudioResult<Binding> {
+    target_runtime(
+        serde_json::from_str(include_str!(
+            "../../../protocol/theme-lab-v2/payload-binding.json"
+        ))
+        .map_err(|_| invalid())?,
+    )
+}
+
 pub(crate) fn verify(node: &Path, adapter: &Path) -> StudioResult<()> {
-    let binding: Binding = serde_json::from_str(include_str!(
-        "../../../protocol/scene-workbench-v1/payload-binding.json"
-    ))
-    .map_err(|_| invalid())?;
+    let binding: Binding = scene_binding()?;
     let root = adapter
         .parent()
         .and_then(Path::parent)
@@ -145,10 +204,7 @@ pub(crate) fn authenticate_theme_adapter(path: &Path) -> StudioResult<()> {
 
 /// Authenticate the separately pinned Loom payload without requiring Burst resources.
 pub(crate) fn authenticate_theme_payload(node: &Path, adapter: &Path) -> StudioResult<()> {
-    let binding: Binding = serde_json::from_str(include_str!(
-        "../../../protocol/theme-lab-v2/payload-binding.json"
-    ))
-    .map_err(|_| invalid())?;
+    let binding: Binding = loom_binding()?;
     let root = adapter
         .parent()
         .and_then(Path::parent)

@@ -26,6 +26,8 @@
     "errors.rs",
     "lib.rs",
     "main.rs",
+    "release_smoke/io.rs",
+    "release_smoke/mod.rs",
     "scene/exchange.rs",
     "scene/io.rs",
     "scene/mod.rs",

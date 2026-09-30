@@ -66,6 +66,7 @@ export const SOLAR_SAIL_PUBLIC_REQUIRED_JOBS = Object.freeze([
 
 export const NATIVE_SNAPSHOT_REQUIRED_TUPLES = Object.freeze([
   "darwin-arm64",
+  "linux-arm64-gnu",
   "linux-x64-gnu",
 ]);
 
@@ -175,6 +176,52 @@ export const SOLAR_SAIL_PUBLIC_ARTIFACTS = Object.freeze([
 ]);
 
 /**
+ * Supplemental security reports that the public CodeQL and supply-chain jobs
+ * retain independently of their pass/fail outcome.  Every category uploads
+ * `security-<category>-raw-<attempt>` (the scanner SARIF) and
+ * `security-<category>-normalized-<attempt>` (the tfsb.security-report-v1 JSON
+ * written by security-report.mjs, bound to that SARIF).  These are recognized
+ * report populations, not release inputs: they never satisfy a required job.
+ *
+ * @param {"codeql" | "grype"} tool
+ * @param {string} reportCategory binding.category written by security-report.mjs
+ * @param {string} job
+ * @param {Record<string, string>} matrix
+ */
+const securityReport = (tool, reportCategory, job, matrix) => Object.freeze({
+  category: `${tool}-${reportCategory}`,
+  tool,
+  reportCategory,
+  job,
+  matrix: Object.freeze({ ...matrix }),
+  normalizedFile: `${tool}.json`,
+});
+/** @param {string} language */
+const codeqlReport = (language) => securityReport("codeql", language, "codeql", { language });
+const grypeSupplyChainReport = securityReport("grype", "supply-chain", "supply-chain", {});
+
+export const SECURITY_REPORT_ROLES = Object.freeze(["raw", "normalized"]);
+
+/** @param {string} category @param {"raw" | "normalized"} role @param {string | number} attempt */
+export const securityReportArtifactName = (category, role, attempt) => `security-${category}-${role}-${attempt}`;
+
+export const STELLAR_BURST_PUBLIC_SECURITY_REPORTS = Object.freeze([codeqlReport("javascript-typescript"), codeqlReport("actions"), codeqlReport("c-cpp"), grypeSupplyChainReport]);
+export const NEBULAR_FUSION_PUBLIC_SECURITY_REPORTS = Object.freeze([codeqlReport("javascript-typescript"), codeqlReport("actions"), codeqlReport("rust"), grypeSupplyChainReport]);
+export const STELLAR_LOOM_PUBLIC_SECURITY_REPORTS = Object.freeze([codeqlReport("javascript-typescript"), codeqlReport("actions"), grypeSupplyChainReport]);
+export const SOLAR_SAIL_PUBLIC_SECURITY_REPORTS = Object.freeze([codeqlReport("javascript-typescript"), codeqlReport("actions"), grypeSupplyChainReport]);
+/** @type {readonly ReturnType<typeof securityReport>[]} */
+export const TERMINAL_NOVA_PUBLIC_SECURITY_REPORTS = Object.freeze([]);
+
+/**
+ * Diagnostics a job uploads only when it fails (`if: failure()`), named
+ * `<name>-<attempt>`.  They are recognized only while the owning job did not
+ * succeed; they never satisfy a required job.
+ */
+export const NEBULAR_FUSION_PUBLIC_FAILURE_DIAGNOSTICS = Object.freeze([
+  Object.freeze({ name: "frontend-audit", job: "frontend", files: Object.freeze(["npm-audit.json", "npm-audit-loom-preview.json"]) }),
+]);
+
+/**
  * Frozen generic-Studio ten-command ACL.
  */
 export const STUDIO_ACL_TEN_COMMANDS = Object.freeze([
@@ -221,6 +268,10 @@ export const NODE_RELEASE_IDENTITY = Object.freeze({
   darwinArm64TarballSha256: "61130f394c1630d211dd50aecc4353d379480f36d3ac913cd85dbba1aed585c6",
   nodeExecutableSha256: "18e387c90ab8a8400183e8bdd396376e1e875b91b4c874b894dcade7b35bf572",
   nodeExecutableSize: 112_937_728,
+  v8: "12.4.254.21-node.56",
+  target: "aarch64-apple-darwin",
+  tarballName: "node-v22.23.2-darwin-arm64.tar.gz",
+  archiveUrl: "https://nodejs.org/download/release/v22.23.2/node-v22.23.2-darwin-arm64.tar.gz",
   signingKeyFingerprint: "CC68F5A3106FF448322E48ED27F5E38D5B0A215F", // betterleaks:allow -- public Node.js release signing-key fingerprint
   signingKeyReleaser: "Marco Ippolito <marcoippolito54@gmail.com>",
 });

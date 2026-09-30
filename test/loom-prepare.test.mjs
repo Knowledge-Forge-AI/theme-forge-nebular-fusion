@@ -90,7 +90,8 @@ describe("loom-prepare catalog evidence authentication", () => {
 
   it("exports expected current candidate identities and inventories", () => {
     expect(EXPECTED_LOOM_NAME).toBe("@knowledge-forge-ai/theme-forge-stellar-loom");
-    expect(EXPECTED_LOOM_VERSION).toBe("0.3.0");
+    expect(EXPECTED_LOOM_VERSION).toBe("0.4.0");
+    expect(SUPPORTED_LOOM_VERSIONS).toContain("0.4.0");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.3.0");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.2.0");
     expect(SUPPORTED_LOOM_VERSIONS).toContain("0.1.1");

@@ -13,7 +13,7 @@ export interface StudioHostStateEvent {
 
 export interface StudioHostStatus {
   readonly schemaVersion: 1;
-  readonly studioVersion: "0.1.0";
+  readonly studioVersion: string;
   readonly manifestDigest: string | null;
   readonly state: StudioHostState;
   readonly selectedProtocolVersion: "1.2" | null;
