@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
+import { reindexPagefindSite } from "./pagefind-index.mjs";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
 export const EXPECTED_LOOM_VERSION = "0.4.0";
@@ -531,6 +532,7 @@ export async function prepareLoom(customOptions = {}) {
       if (buildResult.status !== 0 || !existsSync(resolve(neutralDist, "index.html"))) {
         throw new Error(`Failed to build preview from loom-preview-source (exit code: ${buildResult.status})`);
       }
+      reindexPagefindSite(neutralDist, { nodeModules: resolve(loomPreviewSource, "node_modules") });
     }
 
     await rm(publicPreview, { recursive: true, force: true });
@@ -774,6 +776,7 @@ export async function prepareLoom(customOptions = {}) {
       if (buildResult.status !== 0 || !existsSync(resolve(loomPreviewSource, "dist/neutral/index.html"))) {
         throw new Error(`Failed to build preview from loom-preview-source (exit code: ${buildResult.status})`);
       }
+      reindexPagefindSite(resolve(loomPreviewSource, "dist/neutral"), { nodeModules: resolve(loomPreviewSource, "node_modules") });
       await rm(publicPreview, { recursive: true, force: true });
       await mkdir(publicPreview, { recursive: true });
       await cp(resolve(loomPreviewSource, "dist/neutral"), publicPreview, { recursive: true });
@@ -796,6 +799,7 @@ export async function prepareLoom(customOptions = {}) {
     if (!existsSync(resolve(fixtureDistNeutral, "index.html"))) {
       throw new Error("neutral Starlight fixture build succeeded but dist/neutral/index.html is missing");
     }
+    reindexPagefindSite(fixtureDistNeutral, { nodeModules: resolve(fixtureRoot, "node_modules") });
 
     await rm(publicPreview, { recursive: true, force: true });
     await mkdir(publicPreview, { recursive: true });

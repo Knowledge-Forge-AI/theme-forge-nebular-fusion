@@ -5,7 +5,8 @@ import { createHash } from "node:crypto";
 import { mkdtemp, cp, writeFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { verifyScenePayload } from "./scene-prepare.mjs";
+import { sceneBinding, sceneRuntimeIdentity, verifyScenePayload } from "./scene-prepare.mjs";
+import { NODE_RELEASE_IDENTITY } from "./node-runtime-authority.mjs";
 
 const studio=resolve(new URL("..",import.meta.url).pathname);
 const payload=join(studio,"src-tauri/scene-payload");
@@ -56,4 +57,17 @@ test("payload verification rejects mutated, missing and unexpected files",async(
       await assert.rejects(verifyScenePayload(copy,node));
     }finally{await rm(root,{recursive:true,force:true});}
   }
+});
+
+test("scene runtime identity follows the build target's authenticated Node runtime", () => {
+  const macho = Buffer.alloc(32); macho.writeUInt32LE(0xfeedfacf, 0); macho.writeUInt32LE(0x0100000c, 4);
+  const elf = (machine) => { const bytes = Buffer.alloc(64); bytes.writeUInt32BE(0x7f454c46, 0); bytes[4] = 2; bytes.writeUInt16LE(machine, 18); return bytes; };
+  assert.deepEqual(sceneRuntimeIdentity(macho), { target: "aarch64-apple-darwin", sha256: sceneBinding.node.sha256, bytes: sceneBinding.node.bytes });
+  for (const [machine, triple] of [[183, "aarch64-unknown-linux-gnu"], [62, "x86_64-unknown-linux-gnu"]]) {
+    const identity = NODE_RELEASE_IDENTITY.targets[triple];
+    assert.deepEqual(sceneRuntimeIdentity(elf(machine)), { target: triple, sha256: identity.executableSha256, bytes: identity.executableSize });
+  }
+  assert.throws(() => sceneRuntimeIdentity(Buffer.from("not an executable")), /unsupported/);
+  assert.throws(() => sceneRuntimeIdentity(macho, { ...sceneBinding, node: { ...sceneBinding.node, sha256: "0".repeat(64) } }), /disagrees with the Node runtime authority/);
+  assert.throws(() => sceneRuntimeIdentity(elf(183), { ...sceneBinding, node: { ...sceneBinding.node, version: "22.23.2" } }), /Scene Node identity mismatch/);
 });

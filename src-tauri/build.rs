@@ -122,8 +122,46 @@ fn validate_source_build_pins(content: &str, target_env: &str) -> Result<(), io:
     Ok(())
 }
 
+/// Tarball builds pin the Theme Lab and Scene runtime to the embedded Node that the prepared sidecar
+/// payload records for this build target -- the identity source builds pin through
+/// source-build-pins.json. The maintained protocol bindings keep pinning the payload files.
+fn tarball_runtime_pin(content: &str, target_env: &str) -> Result<String, io::Error> {
+    let manifest: serde_json::Value = serde_json::from_str(content).map_err(io::Error::other)?;
+    let target = manifest
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| io::Error::other("missing sidecar manifest target"))?;
+    let runtime = manifest
+        .get("runtime")
+        .ok_or_else(|| io::Error::other("missing sidecar manifest runtime"))?;
+    let runtime_target = runtime
+        .get("target")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| io::Error::other("missing sidecar manifest runtime target"))?;
+    if target != target_env || runtime_target != target_env {
+        return Err(io::Error::other(
+            "prepared sidecar payload is for a different target",
+        ));
+    }
+    let sha256 = runtime
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| io::Error::other("missing sidecar manifest runtime sha256"))?;
+    let bytes = runtime
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| io::Error::other("missing sidecar manifest runtime size"))?;
+    if !valid_hex_64(sha256) || bytes == 0 {
+        return Err(io::Error::other(
+            "invalid sidecar manifest runtime identity",
+        ));
+    }
+    Ok(serde_json::json!({ "sha256": sha256, "bytes": bytes }).to_string())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-check-cfg=cfg(nebular_source_build)");
+    println!("cargo:rustc-check-cfg=cfg(nebular_runtime_pin)");
     println!("cargo:rerun-if-env-changed=NEBULAR_BUILD_MODE");
 
     match env::var("NEBULAR_BUILD_MODE") {
@@ -161,7 +199,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("cargo:rustc-cfg=nebular_source_build");
         }
-        _ => {}
+        _ => {
+            let manifest_dir = match env::var("CARGO_MANIFEST_DIR") {
+                Ok(val) => PathBuf::from(val),
+                Err(_) => PathBuf::from("."),
+            };
+            let manifest_path = manifest_dir.join("sidecar-payload").join("manifest.json");
+            println!("cargo:rerun-if-changed={}", manifest_path.display());
+            if manifest_path.is_file() {
+                let target_env = env::var("TARGET")
+                    .map_err(|_| io::Error::other("TARGET environment variable not set"))?;
+                let pin = tarball_runtime_pin(&fs::read_to_string(&manifest_path)?, &target_env)?;
+                let out_dir = env::var("OUT_DIR")
+                    .map_err(|_| io::Error::other("OUT_DIR environment variable not set"))?;
+                fs::write(PathBuf::from(out_dir).join("runtime-pin.json"), pin)?;
+                println!("cargo:rustc-cfg=nebular_runtime_pin");
+            }
+        }
     }
 
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(

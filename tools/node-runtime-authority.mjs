@@ -556,15 +556,99 @@ export async function authenticateDarwinNodeDownload(options) {
   }
 }
 
+/**
+ * Returns the signed body of a cleartext-signed SHASUMS256.txt.asc (dash-escaping removed). The caller
+ * must parse only bytes whose signature the shared verifier has accepted.
+ * @param {Buffer} bytes
+ */
+export function signedShasumsBody(bytes) {
+  const lines = bytes.toString("utf8").split(/\r?\n/u);
+  const begin = lines.indexOf("-----BEGIN PGP SIGNED MESSAGE-----");
+  const end = lines.indexOf("-----BEGIN PGP SIGNATURE-----");
+  if (begin === -1 || end === -1 || end < begin) throw new Error("[NODE_AUTH_FAIL] SHASUMS256.txt.asc is not a cleartext-signed message.");
+  const blank = lines.indexOf("", begin);
+  if (blank === -1 || blank > end) throw new Error("[NODE_AUTH_FAIL] SHASUMS256.txt.asc armor headers are malformed.");
+  return lines.slice(blank + 1, end).map((line) => (line.startsWith("- ") ? line.slice(2) : line));
+}
+
+/**
+ * Authenticates an official Node.js Linux archive of the embedded runtime and extracts its executable.
+ *
+ * The SHASUMS and archive files are downloaded by the caller (the hosted lane) and read here once through
+ * descriptors. The captured SHASUMS bytes are staged in an owner-only directory and their signature is
+ * verified by the shared locked verifier (active release keyring); the Linux archive entry is then read
+ * from exactly those verified bytes and must equal both the embedded identity and the captured archive.
+ * The executable is extracted from the captured archive bytes (never the pathname again), adopted
+ * without replacing an existing different file, and validated -- and probed on a matching host.
+ * @param {{ shasumsPath: string, tarballPath: string, targetTriple: string, outputNodePath: string, verify?: Function }} options
+ */
+export async function authenticateLinuxNodeArchive(options) {
+  const { shasumsPath, tarballPath, targetTriple, outputNodePath } = options ?? {};
+  const identity = NODE_RELEASE_IDENTITY.targets?.[targetTriple];
+  if (!identity || identity.platform !== "linux") throw new Error(`[NODE_AUTH_FAIL] No embedded Linux runtime identity for ${targetTriple}.`);
+  if (!shasumsPath || !tarballPath || !outputNodePath) throw new Error("[NODE_AUTH_FAIL] SHASUMS, archive and output executable paths are required.");
+  const shasums = readRegularFile(shasumsPath, { label: SHASUMS_FILENAME });
+  const archive = readRegularFile(tarballPath, { label: identity.archive });
+  const archiveSha256 = sha256(archive.bytes);
+  const resolvedOut = resolve(outputNodePath);
+  mkdirSync(dirname(resolvedOut), { recursive: true });
+  const staging = mkdtempSync(join(dirname(resolvedOut), ".node-linux-"));
+  try {
+    const stagedShasums = join(staging, SHASUMS_FILENAME);
+    writeNewFile(stagedShasums, shasums.bytes, 0o600);
+    const verify = options.verify ?? (async (verifyOptions) => (await importSharedVerifier()).verifyNodeAuthenticity(verifyOptions));
+    const receipt = await verify({ version: EXPECTED_NODE_VERSION, shasumsPath: stagedShasums });
+    if (receipt?.signature?.fingerprint !== PRIMARY_SIGNING_KEY_FINGERPRINT) {
+      throw new Error(`[NODE_AUTH_FAIL] SHASUMS signer ${receipt?.signature?.fingerprint} is not the embedded runtime signer ${PRIMARY_SIGNING_KEY_FINGERPRINT}.`);
+    }
+    const entry = signedShasumsBody(shasums.bytes)
+      .map((line) => line.trim().split(/\s+/u))
+      .find((fields) => fields.length === 2 && (fields[1] === identity.archive || fields[1] === `*${identity.archive}`));
+    if (!entry) throw new Error(`[NODE_AUTH_FAIL] ${identity.archive} is not listed in the verified SHASUMS256.`);
+    if (entry[0] !== identity.archiveSha256) throw new Error(`[NODE_AUTH_FAIL] Verified SHASUMS digest for ${identity.archive} does not match the embedded runtime authority.`);
+    if (archiveSha256 !== identity.archiveSha256) throw new Error(`[NODE_AUTH_FAIL] ${identity.archive} SHA-256 ${archiveSha256} does not match the verified checksum.`);
+    const member = `${identity.archive.replace(/\.tar\.xz$/u, "")}/bin/node`;
+    const extracted = spawnSync("tar", ["-xJf", "-", "-C", staging, member], {
+      input: archive.bytes, encoding: "utf8", env: { LANG: "C", LC_ALL: "C", PATH: process.env.PATH ?? "/usr/bin:/bin" }, timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
+    });
+    if (extracted.status !== 0 || extracted.error) throw new Error(`[NODE_AUTH_FAIL] Could not extract ${member}: ${extracted.error?.message || extracted.stderr}`);
+    adoptNoClobber([{ staged: join(staging, member), final: resolvedOut, label: "authenticated Node runtime", sha256: identity.executableSha256, executable: true }]);
+    const runtime = validateLinuxPortableNode(resolvedOut, targetTriple);
+    return {
+      schema: "nebular.linux-node-authenticity-v1",
+      target: targetTriple,
+      nodeVersion: EXPECTED_NODE_VERSION,
+      undici: NODE_RELEASE_IDENTITY.undici,
+      signature: receipt.signature,
+      shasums: { sha256: sha256(shasums.bytes), entry: entry[0] },
+      archive: { name: identity.archive, sha256: archiveSha256, size: archive.bytes.length },
+      executable: { sha256: runtime.sha256, size: runtime.size, probed: runtime.probed },
+    };
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
   const value = (flag) => { const i = args.indexOf(flag); return i === -1 ? undefined : args[i + 1]; };
   const downloadDir = value("--authenticate-download");
+  const linuxDir = value("--authenticate-linux");
   const outputNodePath = value("--output-node");
   const output = value("--output");
   try {
-    if (!downloadDir || !outputNodePath) throw new Error("Usage: node-runtime-authority.mjs --authenticate-download <dir> --output-node <path> [--output <receipt.json>]");
-    const receipt = await authenticateDarwinNodeDownload({ downloadDir, outputNodePath });
+    if ((!downloadDir && !linuxDir) || !outputNodePath) {
+      throw new Error("Usage: node-runtime-authority.mjs (--authenticate-download <dir> | --authenticate-linux <dir> --target <triple>) --output-node <path> [--output <receipt.json>]");
+    }
+    let receipt;
+    if (linuxDir) {
+      const targetTriple = value("--target");
+      const identity = NODE_RELEASE_IDENTITY.targets?.[targetTriple];
+      if (!identity) throw new Error(`Unknown Linux runtime target ${targetTriple}`);
+      receipt = await authenticateLinuxNodeArchive({ shasumsPath: join(resolve(linuxDir), SHASUMS_FILENAME), tarballPath: join(resolve(linuxDir), identity.archive), targetTriple, outputNodePath });
+    } else {
+      receipt = await authenticateDarwinNodeDownload({ downloadDir, outputNodePath });
+    }
     const text = `${JSON.stringify(receipt, null, 2)}\n`;
     if (output) {
       mkdirSync(dirname(resolve(output)), { recursive: true });

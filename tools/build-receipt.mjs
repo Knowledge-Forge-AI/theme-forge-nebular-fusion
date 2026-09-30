@@ -1,23 +1,36 @@
-import { readFile, writeFile, stat } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { digest, identity, inventoryTree, seal, validateBuildReceipt, candidateProvenance } from "./candidate-provenance.mjs";
 import { validateBuildInputs } from "./build-inputs.mjs";
 import { payloadLayout } from "./platform-targets.mjs";
+import { defaultSnapshotReader } from "./fs-snapshot.mjs";
 
-// Called only after the native command exits successfully. All claims are
-// collected from produced bytes; no pre-build or schema-only success receipt.
-export async function produceBuildReceipt({ inputs, studioRoot, payloadRoot, output }) {
-  const authority = await validateBuildInputs(inputs);
-  const executable = join(payloadRoot, payloadLayout(authority.target).executable);
-  if (!((await stat(executable)).mode & 0o111)) throw new Error("Native output is not executable");
-  const header = await readFile(executable);
-  const darwin = authority.target.os === "darwin";
-  const correctTarget = darwin
+// The executable bit and the target header are both taken from one no-follow
+// descriptor, and the payload path must still name that file afterwards.
+export function measureNativeExecutable(executable, target, reader = defaultSnapshotReader) {
+  const produced = reader.readRegular(executable, {
+    bindPath: true,
+    label: "Native output",
+    maxBytes: 1024 * 1024 * 1024,
+    messages: { notRegular: "Native output must be a regular file", symlink: "Native output must be a regular file, not a symbolic link" },
+  });
+  if (!produced.executable) throw new Error("Native output is not executable");
+  const header = produced.bytes;
+  const correctTarget = target.os === "darwin"
     ? header.length >= 8 && header.readUInt32LE(0) === 0xfeedfacf && header.readUInt32LE(4) === 0x0100000c
     : header.length >= 20 && header.subarray(0, 4).equals(Buffer.from([127, 69, 76, 70]))
       && header[4] === 2 && header[5] === 1
-      && header.readUInt16LE(18) === (authority.target.cpu === "arm64" ? 183 : 62);
+      && header.readUInt16LE(18) === (target.cpu === "arm64" ? 183 : 62);
   if (!correctTarget) throw new Error("Native output target mismatch");
+  return produced;
+}
+
+// Called only after the native command exits successfully. All claims are
+// collected from produced bytes; no pre-build or schema-only success receipt.
+export async function produceBuildReceipt({ inputs, studioRoot, payloadRoot, output, reader = defaultSnapshotReader }) {
+  const authority = await validateBuildInputs(inputs);
+  measureNativeExecutable(join(payloadRoot, payloadLayout(authority.target).executable), authority.target, reader);
+  const darwin = authority.target.os === "darwin";
   const plan = inputs.source.resourcePlans[inputs.target];
   const resources = [];
   for (const path of plan.resources) {

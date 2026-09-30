@@ -1,6 +1,7 @@
-import { readFile, stat, lstat, readdir, realpath } from "node:fs/promises";
+import { readFile, stat, lstat, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { digest, identity } from "./candidate-provenance.mjs";
+import { defaultSnapshotReader } from "./fs-snapshot.mjs";
 
 export const EXECUTION_ONLY_REASONS = Object.freeze({
   NIX_STORE: "Fixed canonical Nix store mount / execution prefix",
@@ -62,43 +63,57 @@ export function extractCargoConfigLocators(content) {
 // internal links bind their root-relative destination, whose bytes are already
 // inventoried by the physical tree walk. This handles SDK aliases/backlinks
 // without recursive expansion. External referents are content-bound separately.
-export async function inventoryPath(targetPath) {
+//
+// Each resolved member is opened once without following a final link. Its type
+// and mode come from that descriptor, file bytes are read through it, and a
+// directory is listed while its descriptor is held and must be unchanged (and
+// still named by its path) afterwards. A member that is swapped for a link,
+// replaced, truncated or changed while it is measured fails closed.
+export async function inventoryPath(targetPath, { reader = defaultSnapshotReader } = {}) {
   if (typeof targetPath !== "string" || !isAbsolute(targetPath)) throw new Error("Locator path must be absolute");
   const root = await realpath(targetPath);
   const cache = new Map(), active = new Set();
   let count = 0, totalBytes = 0;
+  const member = {
+    label: "Locator member",
+    maxBytes: 256 * 1024 * 1024,
+    messages: { tooLarge: "Locator inventory byte limit exceeded", unsupported: "Unsupported locator member type" },
+  };
   async function visit(path, depth = 0, scopeRoot = root) {
     const real = await realpath(path);
+    let referent = null;
     if ((await lstat(path)).isSymbolicLink()) {
+      referent = reader.describe(real, member);
       const rel = relative(scopeRoot, real);
       if (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)) {
-        return { identity: identity({ type: "internal-link", target: rel || "." }), isDirectory: (await stat(real)).isDirectory() };
+        return { identity: identity({ type: "internal-link", target: rel || "." }), isDirectory: referent.type === "directory" };
       }
       // External directory inputs (for example SDK ncurses headers) have their
       // own internal aliases. Inventory that complete referent as its own root.
-      if ((await stat(real)).isDirectory()) scopeRoot = real;
+      if (referent.type === "directory") scopeRoot = real;
     }
     if (active.has(real)) throw new Error("Locator directory cycle detected");
     const cacheKey = `${scopeRoot}\0${real}`;
     if (cache.has(cacheKey)) return cache.get(cacheKey);
     if (depth > 64 || ++count > 100000) throw new Error("Locator inventory traversal limit exceeded");
-    const info = await stat(real);
+    const measured = reader.inspect(real, member);
+    if (referent && referent.type !== measured.type) throw new Error(`Locator member changed while it was read: ${real}`);
     let record;
-    if (info.isFile()) {
-      if (info.size > 256 * 1024 * 1024 || (totalBytes += info.size) > 2 * 1024 * 1024 * 1024) throw new Error("Locator inventory byte limit exceeded");
-      record = { type: "file", mode: info.mode & 0o111 ? 0o755 : 0o644, bytes: info.size, sha256: digest(await readFile(real)) };
-    } else if (info.isDirectory()) {
+    if (measured.type === "file") {
+      if ((totalBytes += measured.size) > 2 * 1024 * 1024 * 1024) throw new Error("Locator inventory byte limit exceeded");
+      record = { type: "file", mode: measured.executable ? 0o755 : 0o644, bytes: measured.size, sha256: measured.sha256 };
+    } else {
       active.add(real);
       try {
         const entries = [];
-        for (const name of (await readdir(real)).sort()) {
+        for (const name of measured.entries) {
           if (name.length > 1024) throw new Error("Locator member path limit exceeded");
           entries.push({ name, identity: (await visit(join(real, name), depth + 1, scopeRoot)).identity });
         }
         record = { type: "directory", entries };
       } finally { active.delete(real); }
-    } else throw new Error("Unsupported locator member type");
-    const result = { identity: identity(record), isDirectory: info.isDirectory() };
+    }
+    const result = { identity: identity(record), isDirectory: measured.type === "directory" };
     cache.set(cacheKey, result);
     return result;
   }
@@ -264,7 +279,7 @@ export function buildSettingsClaims(settings) {
   return { ...claims, identity: expectedId };
 }
 
-export async function validateBuildSettings(settings, execution = {}) {
+export async function validateBuildSettings(settings, execution = {}, { reader = defaultSnapshotReader } = {}) {
   if (!settings || typeof settings !== "object") {
     throw new Error("Explicit build settings required");
   }
@@ -307,18 +322,24 @@ export async function validateBuildSettings(settings, execution = {}) {
     }
   }
 
-  // cargoHome verification
+  // cargoHome verification. Each candidate configuration is opened once; the
+  // bytes that are compared are the bytes Cargo would find at that name. Only a
+  // missing file is absent: a link, special file or unreadable name fails closed.
   if (execution.cargoHome) {
     const home = resolve(execution.cargoHome);
     for (const configName of ["config", "config.toml"]) {
       const configPath = join(home, configName);
-      let exists = false;
-      try { await stat(configPath); exists = true; } catch {}
-      if (exists) {
+      const config = reader.readRegular(configPath, {
+        missingOk: true,
+        bindPath: true,
+        label: "cargoHome configuration",
+        maxBytes: 1024 * 1024,
+      });
+      if (config) {
         if (!settings.cargo) {
           throw new Error("Unbound cargo configuration in cargoHome");
         }
-        const raw = await readFile(configPath, "utf8");
+        const raw = config.bytes.toString("utf8");
         normalizeCargoConfig(raw);
         if (digest(Buffer.from(raw)) !== settings.cargo.identity) {
           throw new Error("cargoHome configuration bypasses bound settings");

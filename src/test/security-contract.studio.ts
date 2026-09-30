@@ -420,7 +420,8 @@ describe("Studio package and authority isolation", () => {
       "protocol/contracts.ts",
     ]);
     const nativeInventory = JSON.parse(await text("native-source-inventory.json")) as { files: string[] };
-    expect(nativeInventory.files).toHaveLength(71);
+    // 73: the always-compiled release smoke controller (release_smoke/mod.rs) and its filesystem owner (release_smoke/io.rs).
+    expect(nativeInventory.files).toHaveLength(73);
     const rustFiles = await maintainedFiles(resolve(appRoot, "src-tauri/src"), [".rs"], nativeInventory.files);
     const galleryFiles = await maintainedFiles(resolve(appRoot, "gallery"), [".mjs"], ["bridge-runtime.mjs"]);
     const galleryRuntime = await sourceText(galleryFiles);
@@ -536,6 +537,8 @@ describe("Studio package and authority isolation", () => {
       "design_evidence/mod.rs",
       "design_evidence/types.rs",
       "design_evidence/validate.rs",
+      "release_smoke/io.rs",
+      "release_smoke/mod.rs",
       "sidecar/json_decoder.rs",
       "state/app_theme.rs",
       "theme_lab/smoke_selection.rs",
@@ -545,8 +548,8 @@ describe("Studio package and authority isolation", () => {
     expect(removed).toEqual([]);
 
     expect(historicalSet.size).toBe(59);
-    expect(unifiedSet.size).toBe(71);
-    expect(added).toHaveLength(12);
+    expect(unifiedSet.size).toBe(73);
+    expect(added).toHaveLength(14);
   });
 
   it("keeps generated application output excluded from Git and root packaging", async () => {

@@ -1,12 +1,26 @@
 // Materialize authority from explicit producer observations, never Git or PATH.
-import { readFile, writeFile, stat } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMPONENTS, TOOLCHAINS, validateBuildInputs, verifySourceTree } from "./build-inputs.mjs";
 import { digest, inventoryTree, seal, sourceResourcePlans } from "./candidate-provenance.mjs";
 import { createBuildSettings } from "./build-settings.mjs";
+import { defaultSnapshotReader } from "./fs-snapshot.mjs";
 
-export async function createBuildInputs(spec) {
+// Toolchain locators may be links (rustup proxies, Nix profiles), so the final
+// link is followed. The member is opened once: a file's identity is the digest
+// of the bytes read through that descriptor, and a directory is inventoried while
+// the descriptor is held; afterwards the descriptor and the locator path must
+// still name the object that was opened.
+export async function toolchainIdentity(path, { reader = defaultSnapshotReader, label = "Toolchain input" } = {}) {
+  const options = { follow: true, bindPath: true, label, maxBytes: 1024 * 1024 * 1024 };
+  return reader.withBound(path, options, async ({ type, read }) => {
+    if (type === "directory") return (await inventoryTree(path)).identity;
+    return read().sha256;
+  });
+}
+
+export async function createBuildInputs(spec, { reader = defaultSnapshotReader } = {}) {
   if (spec.schema !== "nebular-build-observations-v1") throw new Error("Explicit build observations required");
   const components = {}, componentSources = {};
   for (const name of COMPONENTS) {
@@ -19,11 +33,11 @@ export async function createBuildInputs(spec) {
   const toolchains = {};
   for (const name of TOOLCHAINS) {
     const path = spec.toolchains[name];
-    toolchains[name] = { path, identity: (await stat(path)).isDirectory()
-      ? (await inventoryTree(path)).identity : digest(await readFile(path)) };
+    toolchains[name] = { path, identity: await toolchainIdentity(path, { reader, label: `Toolchain ${name}` }) };
   }
   if (!spec.toolchains.npm) throw new Error("Explicit npm CLI input required");
-  toolchains.node.npm = { path: spec.toolchains.npm, identity: digest(await readFile(spec.toolchains.npm)) };
+  toolchains.node.npm = { path: spec.toolchains.npm,
+    identity: reader.readRegular(spec.toolchains.npm, { follow: true, bindPath: true, label: "npm CLI input" }).sha256 };
   const source = spec.source ?? seal("nebular-source-candidate-v1", {
     version: JSON.parse(await readFile(join(spec.sourceRoot, "package.json"), "utf8")).version,
     composition: (await inventoryTree(spec.sourceRoot)).identity,

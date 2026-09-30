@@ -9,15 +9,22 @@
 //   runtime/node-runtime, runtime/catalog/node                 the authenticated embedded Node runtime
 //   runtime/node-authenticity/{receipt.json,SHASUMS256.txt.asc}
 //   sidecar/sidecar-payload.tar.gz, sidecar/extracted/**       the sidecar payload archive and its members
-//   resources/<name>/**                                        every Tauri bundle resource directory
+//   resources/<entry>                                          every Contents/Resources entry the macOS
+//                                                              bundle ships: each Tauri resource directory
+//                                                              and the members Darwin finalization adds
+//                                                              (bin/tfnf, LICENSE, NOTICE)
 //
 // release-surface.json records every file (size, SHA-256) and the declared omissions: the Tauri main
 // executable, Info.plist and code-signing metadata (not package inputs; Rust dependencies are scanned
-// from the Cargo.lock inventory) and the release-notices license texts (no package manifests).
+// from the Cargo.lock inventory). No bundle resource is omitted.
 //
 // `cross-check` runs in the evidence aggregate after every producer succeeded and proves, per run, that
-// the scanned runtime, sidecar payload, bundle resources and frontend distributable are byte-identical
-// to the macOS application bundle and the frontend artifact that the same run produced.
+// the scanned runtime, sidecar payload and every bundle resource are byte-identical to the macOS
+// application bundle the same run produced, and that the scanned frontend is byte-identical to the
+// frontend that bundle embedded. The frontend job's Linux-built distributable must equal that embedded
+// frontend byte for byte except the platform-specific Pagefind WASM members, whose decoded payloads
+// must be the pinned Pagefind release payloads for each builder platform, and the gallery manifest,
+// whose totalBytes statistic must equal each side's own staged gallery size.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
@@ -25,19 +32,25 @@ import { lstat, mkdir, mkdtemp, open, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync } from "node:zlib";
+import { finalizedResourceMembers } from "./finalize-darwin-bundle.mjs";
+import { PAGEFIND_WASM_MEMBER, PAGEFIND_WASM_PAYLOADS } from "./pagefind-index.mjs";
+import { targetForTriple } from "./platform-targets.mjs";
 
 export const SURFACE_SCHEMA = "tfsb.nebular-supply-chain-surface-v1";
 export const CROSS_CHECK_SCHEMA = "tfsb.nebular-supply-chain-surface-cross-check-v1";
-export const OMITTED_RESOURCES = Object.freeze({
-  "release-notices": "License and notice texts generated from the locked Cargo registry and npm metadata; they contain no package manifests. Rust dependencies are scanned from the Cargo.lock inventory.",
-});
+// Every Contents/Resources entry is scanned; nothing is omitted.
+export const OMITTED_RESOURCES = Object.freeze({});
 export const DECLARED_OMISSIONS = Object.freeze([
   Object.freeze({ path: "Contents/MacOS/theme-forge-nebular-fusion", reason: "Tauri main executable; not cargo-auditable, so Syft cannot catalog it. Its Rust dependencies are scanned from src-tauri/Cargo.lock (rust-lock inventory) and by cargo audit." }),
   Object.freeze({ path: "Contents/MacOS/tfsb-studio-service", reason: "Bundled copy of the authenticated Node runtime; scanned as runtime/node-runtime and runtime/catalog/node, which the cross-check binds to the producer node-runtime." }),
   Object.freeze({ path: "Contents/Info.plist, Contents/_CodeSignature/**, bundle-identity.json, signing-facts.json", reason: "Bundle identity and signing metadata; not package inputs." }),
   Object.freeze({ path: "sidecar-transcript.json", reason: "Protocol transcript test output; not a shipped package input." }),
-  Object.freeze({ path: "resources/release-notices/**", reason: OMITTED_RESOURCES["release-notices"] }),
 ]);
+// The public macOS job ships an Apple Silicon bundle; its finalized resource members are target-specific.
+export const SHIPPED_BUNDLE_TRIPLE = "aarch64-apple-darwin";
+export const EMBEDDED_FRONTEND_PLATFORM = "darwin-arm64";
+export const FRONTEND_ARTIFACT_PLATFORM = "linux-x64";
 
 const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const CREATE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
@@ -189,8 +202,12 @@ export async function materializeSurface(options) {
   await extractArchive(join(release, "sidecar/sidecar-payload.tar.gz"), join(release, "sidecar/extracted"), sha256(sidecarArchive.bytes));
 
   const tauriConfig = JSON.parse((await readRegular(join(root, "src-tauri/tauri.conf.json"))).bytes.toString("utf8"));
-  const resources = bundleResourceNames(tauriConfig).filter((name) => !omitted(name));
-  for (const name of resources) await copyTree(join(root, "src-tauri", name), join(release, "resources", name));
+  const directories = bundleResourceNames(tauriConfig).filter((name) => !omitted(name));
+  for (const name of directories) await copyTree(join(root, "src-tauri", name), join(release, "resources", name));
+  // The members Darwin finalization installs, produced by the same maintained contract with the same bytes.
+  const finalized = finalizedResourceMembers({ productTarget: targetForTriple(SHIPPED_BUNDLE_TRIPLE), studioRoot: root });
+  for (const member of finalized) await writeNew(join(release, "resources", member.path), member.bytes, member.mode);
+  const resources = [...new Set([...directories, ...finalized.map((member) => member.path.split("/")[0])])].sort();
 
   for (const [group, files] of Object.entries({
     frontend: ["package.json", "package-lock.json"],
@@ -246,9 +263,79 @@ async function producerFile(downloadDir, artifact, path) {
   return { path: join(directory, path), sha256: member.sha256 };
 }
 
+async function decodedPayload(path) {
+  return sha256(gunzipSync((await readRegular(path)).bytes));
+}
+
+// The gallery manifest records totalBytes, the byte size of every staged gallery scenario file; it is the
+// only field that follows the platform WASM sizes. Two manifests are equivalent when every other field is
+// identical and each side's totalBytes is exactly the size of its own staged gallery tree.
+export const GALLERY_MANIFEST = "preview/gallery/manifest.json";
+
+async function galleryBytes(root) {
+  let total = 0;
+  const gallery = join(root, "preview/gallery");
+  for (const entry of await readdir(gallery, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    for (const path of await treeFiles(join(gallery, entry.name))) total += (await readRegular(path)).bytes.length;
+  }
+  return total;
+}
+
+async function galleryManifestsEquivalent(leftRoot, rightRoot) {
+  let left, right;
+  try {
+    left = JSON.parse((await readRegular(join(leftRoot, GALLERY_MANIFEST))).bytes.toString("utf8"));
+    right = JSON.parse((await readRegular(join(rightRoot, GALLERY_MANIFEST))).bytes.toString("utf8"));
+  } catch {
+    return { accepted: false, reason: "not JSON" };
+  }
+  const { totalBytes: leftTotal, ...leftRest } = left;
+  const { totalBytes: rightTotal, ...rightRest } = right;
+  const actual = [await galleryBytes(leftRoot), await galleryBytes(rightRoot)];
+  const sameOtherwise = JSON.stringify(leftRest) === JSON.stringify(rightRest);
+  return { accepted: sameOtherwise && leftTotal === actual[0] && rightTotal === actual[1],
+    totalBytes: [leftTotal, rightTotal], measured: actual, sameOtherwise };
+}
+
+/**
+ * Compares two frontend distributables built on different platforms. Every path must exist on both
+ * sides with identical bytes, except Pagefind WASM members: those must decode (gzip) to the pinned
+ * Pagefind payload for the respective builder platform. Anything else that differs fails.
+ */
+export async function comparePlatformFrontends(leftRoot, leftPlatform, rightRoot, rightPlatform, { payloads } = {}) {
+  payloads ??= PAGEFIND_WASM_PAYLOADS;
+  const pins = [payloads[leftPlatform], payloads[rightPlatform]];
+  if (pins.some((pin) => !pin)) throw new Error(`no pinned Pagefind payloads for ${leftPlatform} or ${rightPlatform}`);
+  const left = withoutAppleDouble(await treeInventory(leftRoot)).kept;
+  const right = withoutAppleDouble(await treeInventory(rightRoot)).kept;
+  const missing = [...left.keys()].filter((path) => !right.has(path));
+  const extra = [...right.keys()].filter((path) => !left.has(path));
+  const different = [];
+  const platformWasm = [];
+  let galleryManifest = null;
+  for (const path of [...left.keys()].filter((key) => right.has(key) && right.get(key) !== left.get(key))) {
+    const name = path.split("/").pop();
+    if (path === GALLERY_MANIFEST) {
+      galleryManifest = await galleryManifestsEquivalent(leftRoot, rightRoot);
+      if (!galleryManifest.accepted) different.push(path);
+      continue;
+    }
+    if (!PAGEFIND_WASM_MEMBER.test(path)) { different.push(path); continue; }
+    const decoded = [await decodedPayload(join(leftRoot, path)), await decodedPayload(join(rightRoot, path))];
+    const accepted = decoded[0] === pins[0][name] && decoded[1] === pins[1][name];
+    platformWasm.push({ path, [leftPlatform]: decoded[0], [rightPlatform]: decoded[1], accepted });
+    if (!accepted) different.push(path);
+  }
+  return { group: "frontend-platform-equivalence", platforms: [leftPlatform, rightPlatform], files: left.size,
+    equal: missing.length === 0 && extra.length === 0 && different.length === 0,
+    missing: missing.slice(0, 20), extra: extra.slice(0, 20), different: different.slice(0, 20),
+    acceptedPlatformWasm: platformWasm.filter((entry) => entry.accepted).length, platformWasm: platformWasm.slice(0, 20), galleryManifest };
+}
+
 /**
  * Proves that the independently materialized scan surface equals the same run's shipped producer bytes.
- * @param {{ downloadDir: string }} options
+ * @param {{ downloadDir: string, pagefindPayloads?: object }} options
  */
 export async function crossCheckSurface(options) {
   const downloadDir = resolve(options.downloadDir);
@@ -271,20 +358,42 @@ export async function crossCheckSurface(options) {
     const bundles = (await readdir(join(scratch, "app"))).filter((name) => name.endsWith(".app") && !isAppleDouble(name));
     if (bundles.length !== 1) throw new Error("the producer application archive must contain exactly one .app bundle");
     const resourcesRoot = join(scratch, "app", bundles[0], "Contents/Resources");
-    const shipped = (await readdir(resourcesRoot, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !isAppleDouble(entry.name)).map((entry) => entry.name).sort();
+    // Every entry the bundle ships in Contents/Resources -- directories and files -- must be scanned.
+    const entries = (await readdir(resourcesRoot, { withFileTypes: true })).filter((entry) => !isAppleDouble(entry.name));
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isFile()) throw new Error(`shipped resource ${entry.name} is neither a file nor a directory`);
+    }
+    const shipped = entries.map((entry) => entry.name).sort();
     const scanned = [...manifest.resources].sort();
-    const unscanned = shipped.filter((name) => !scanned.includes(name) && !omitted(name));
-    groups.push({ group: "resource-set", equal: unscanned.length === 0 && scanned.every((name) => shipped.includes(name)), shipped, scanned, unscanned });
-    for (const name of scanned) {
-      groups.push(compareInventories(`resources/${name}`, await treeInventory(join(resourcesRoot, name)), surfaceGroup(manifest, `resources/${name}/`)));
+    const unscanned = shipped.filter((name) => !scanned.includes(name));
+    const notShipped = scanned.filter((name) => !shipped.includes(name));
+    groups.push({ group: "resource-set", equal: unscanned.length === 0 && notShipped.length === 0, shipped, scanned, unscanned, notShipped });
+    for (const name of scanned.filter((entry) => shipped.includes(entry))) {
+      const directory = entries.find((entry) => entry.name === name).isDirectory();
+      const shippedInventory = directory ? await treeInventory(join(resourcesRoot, name))
+        : new Map([["", sha256((await readRegular(join(resourcesRoot, name))).bytes)]]);
+      const scannedInventory = directory ? surfaceGroup(manifest, `resources/${name}/`)
+        : new Map([...surfaceGroup(manifest, `resources/${name}`)].filter(([path]) => path === ""));
+      groups.push(compareInventories(`resources/${name}`, shippedInventory, scannedInventory));
     }
 
+    // The scanned frontend must be the frontend the shipped application embedded, byte for byte.
+    const embedded = await producerFile(downloadDir, "nebular-macos-arm64-artifacts", "frontend-dist.tar.gz");
+    await extractArchive(embedded.path, join(scratch, "embedded-frontend"), embedded.sha256);
+    const embeddedInventory = await treeInventory(join(scratch, "embedded-frontend"));
+    groups.push(compareInventories("frontend", embeddedInventory, surfaceGroup(manifest, "frontend/install/")));
+
+    // The frontend job's distributable is built on a different platform. It must equal the embedded
+    // frontend exactly, except the Pagefind WASM members, each of which must decode to the pinned payload
+    // of the Pagefind release binary for its builder platform.
     const frontend = await producerFile(downloadDir, "frontend-artifacts", "frontend-dist.tar.gz");
     await extractArchive(frontend.path, join(scratch, "frontend"), frontend.sha256);
-    groups.push(compareInventories("frontend", await treeInventory(join(scratch, "frontend")), surfaceGroup(manifest, "frontend/install/")));
+    groups.push(await comparePlatformFrontends(join(scratch, "embedded-frontend"), EMBEDDED_FRONTEND_PLATFORM,
+      join(scratch, "frontend"), FRONTEND_ARTIFACT_PLATFORM, { payloads: options.pagefindPayloads }));
 
-    return { schema: CROSS_CHECK_SCHEMA, schemaVersion: 1, status: groups.every((group) => group.equal) ? "pass" : "fail",
-      surfaceManifestSha256: surfaceFile.sha256, producers: { runtime: runtime.sha256, sidecar: sidecar.sha256, app: app.sha256, frontend: frontend.sha256 }, groups };
+    return { schema: CROSS_CHECK_SCHEMA, schemaVersion: 2, status: groups.every((group) => group.equal) ? "pass" : "fail",
+      surfaceManifestSha256: surfaceFile.sha256,
+      producers: { runtime: runtime.sha256, sidecar: sidecar.sha256, app: app.sha256, embeddedFrontend: embedded.sha256, frontend: frontend.sha256 }, groups };
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ pub mod commands;
 mod design_evidence;
 pub mod errors;
 mod platform;
+mod release_smoke;
 pub mod scene;
 mod sidecar;
 pub mod state;
@@ -85,9 +86,22 @@ fn adjust_preview_csp(path: &str, headers: &mut tauri::http::HeaderMap) {
 pub fn run() {
     use tauri::Manager;
 
+    // Inert unless explicitly requested; a malformed request refuses to start rather than falling
+    // back to an ordinary session.
+    let smoke_request = match release_smoke::activation(
+        std::env::args_os(),
+        std::env::var_os(release_smoke::DIRECTORY_ENV),
+    ) {
+        Ok(request) => request,
+        Err(reason) => {
+            eprintln!("TFSB Studio release smoke refused: {reason}");
+            std::process::exit(2);
+        }
+    };
+
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
             let executable = std::env::current_exe().map_err(|error| error.to_string())?;
             let binary = executable
                 .parent()
@@ -96,11 +110,14 @@ pub fn run() {
             let resource = platform::resource_dir(&executable, || {
                 app.path().resource_dir().map_err(|error| error.to_string())
             })?;
-            let temp = app
-                .path()
-                .app_cache_dir()
-                .map_err(|error| error.to_string())?
-                .join("sidecar-temp");
+            let temp = match smoke_request.as_ref() {
+                Some(smoke) => smoke.directory().join("sidecar-temp"),
+                None => app
+                    .path()
+                    .app_cache_dir()
+                    .map_err(|error| error.to_string())?
+                    .join("sidecar-temp"),
+            };
             let host = state::host::HostState::new(sidecar::supervisor::SidecarSupervisor::new(
                 binary,
                 resource.join("sidecar-payload"),
@@ -108,6 +125,9 @@ pub fn run() {
             ))
             .map_err(|_| "plan coordinator unavailable".to_owned())?;
             app.manage(host);
+            if let Some(smoke) = smoke_request.as_ref() {
+                app.manage(smoke.selections());
+            }
 
             #[cfg(feature = "native-smoke")]
             theme_lab::smoke_selection::initialize().map_err(|_| "invalid smoke selections")?;
@@ -146,15 +166,27 @@ pub fn run() {
                 );
             });
 
-            let _main_window = window_builder.build().map_err(|e| e.to_string())?;
+            if let Some(smoke) = smoke_request.as_ref() {
+                // Nothing persists: a non-persistent webview whose data directory is inside the
+                // smoke directory.
+                window_builder = window_builder
+                    .incognito(true)
+                    .data_directory(smoke.directory().join("webview-data"));
+            }
+
+            let main_window = window_builder.build().map_err(|e| e.to_string())?;
 
             #[cfg(feature = "native-smoke")]
             if let Ok(smoke_output) = std::env::var("TFSB_STUDIO_SMOKE_OUTPUT") {
-                smoke::start_native_smoke_harness(
-                    &_main_window,
-                    app.handle().clone(),
-                    smoke_output,
+                smoke::start_native_smoke_harness(&main_window, app.handle().clone(), smoke_output);
+            }
+
+            if let Some(smoke) = smoke_request {
+                eprintln!(
+                    "TFSB Studio release smoke scenario {} active",
+                    smoke.scenario().id()
                 );
+                release_smoke::start(&main_window, app.handle().clone(), smoke);
             }
 
             Ok(())

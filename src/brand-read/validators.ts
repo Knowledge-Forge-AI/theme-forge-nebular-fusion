@@ -67,8 +67,11 @@ export function validateBrandStatus(raw: unknown): BrandStatus {
   const data = record(unwrap(raw, "status"));
   if (data.present === false) { const root = exact(data, ["present", "raster"]); const raster = exact(root.raster, ["available"]); return Object.freeze({ present: false, raster: Object.freeze({ available: bool(raster.available) }) }); }
   const root = exact(data, ["present", "schemaVersion", "brandDigest", "brandSystemDigest", "domains", "counts", "completeness", "derived", "consumerLock", "export", "raster"]);
-  if (root.present !== true || root.schemaVersion !== 1 || !Array.isArray(root.domains) || root.domains.length > 7) fail();
-  const domains = Object.freeze(root.domains.map((entry) => { const item = exact(entry, ["domain", "state", "digest"]); return Object.freeze({ domain: string(item.domain, 64), state: string(item.state, 64), digest: nullableDigest(item.digest) }); })); orderedUnique(domains.map((entry) => entry.domain));
+  if (root.present !== true || root.schemaVersion !== 1 || !Array.isArray(root.domains) || root.domains.length > 8) fail();
+  // The sidecar lists "brand" ahead of the declared domains, which may list "brand" again (eight entries, the host bound).
+  // An exactly repeated entry carries no new information and is collapsed; a differing repeat still fails the order check.
+  const listed = root.domains.map((entry) => { const item = exact(entry, ["domain", "state", "digest"]); return Object.freeze({ domain: string(item.domain, 64), state: string(item.state, 64), digest: nullableDigest(item.digest) }); });
+  const domains = Object.freeze(listed.filter((entry, index) => !listed.slice(0, index).some((earlier) => earlier.domain === entry.domain && earlier.state === entry.state && earlier.digest === entry.digest))); orderedUnique(domains.map((entry) => entry.domain));
   const counts = exact(root.counts, ["families", "roles", "variants", "bindings", "requirements", "tokens", "recipes", "qaProfiles", "qaCases", "qaBaselines", "consumerProfiles", "exportProfiles"]);
   const countBounds: Record<string, number> = { families: 32, roles: 64, variants: 256, bindings: 1024, requirements: 256, tokens: 256, recipes: 128, qaProfiles: 32, qaCases: 512, qaBaselines: 256, consumerProfiles: 32, exportProfiles: 32 };
   const typedCounts = Object.fromEntries(Object.entries(countBounds).map(([key, max]) => [key, integer(counts[key], max)])) as BrandStatus extends { present: true; counts: infer T } ? T : never;

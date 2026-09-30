@@ -1,0 +1,181 @@
+{
+  "schema": "tfsb.nebular-supply-chain-surface-cross-check-v1",
+  "schemaVersion": 1,
+  "status": "fail",
+  "surfaceManifestSha256": "240351a243e6c4df3c148d97c221efdf8a641e0b2ca338a13b2a412fd3b77178",
+  "producers": {
+    "runtime": "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
+    "sidecar": "d8e68be2ce31d83bc6e0bda171a2d5fa665f57c3f34a0ef81670997f78a92fb0",
+    "app": "35feea50bc8cf3731e80445707be9f368c7f88fbe243abbc43ef9f2f2bf12847",
+    "frontend": "55a5afae70106cb5c3635d7e8e91c5f53ef0ced17ccba834c1191314f2690251"
+  },
+  "groups": [
+    {
+      "group": "runtime",
+      "files": 2,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "sidecar",
+      "files": 351,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resource-set",
+      "equal": false,
+      "shipped": [
+        "bin",
+        "loom-adapter",
+        "loom-payload",
+        "release-notices",
+        "scene-payload",
+        "sidecar-payload",
+        "solar-sail-adapter",
+        "solar-sail-payload"
+      ],
+      "scanned": [
+        "loom-adapter",
+        "loom-payload",
+        "scene-payload",
+        "sidecar-payload",
+        "solar-sail-adapter",
+        "solar-sail-payload"
+      ],
+      "unscanned": [
+        "bin"
+      ]
+    },
+    {
+      "group": "resources/loom-adapter",
+      "files": 1,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resources/loom-payload",
+      "files": 335,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resources/scene-payload",
+      "files": 62,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resources/sidecar-payload",
+      "files": 351,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resources/solar-sail-adapter",
+      "files": 1,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "resources/solar-sail-payload",
+      "files": 69,
+      "equal": true,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [],
+      "extraInSurface": [],
+      "different": []
+    },
+    {
+      "group": "frontend",
+      "files": 229,
+      "equal": false,
+      "ignoredAppleDouble": {
+        "shipped": 0,
+        "scanned": 0
+      },
+      "missingFromSurface": [
+        "preview/gallery/active-only-catalog/pagefind/index/en_3fad232.pf_index",
+        "preview/gallery/active-only-catalog/pagefind/pagefind.en_b63d74f363.pf_meta",
+        "preview/gallery/black-catalog/pagefind/index/en_7a81268.pf_index",
+        "preview/gallery/black-catalog/pagefind/pagefind.en_d1157cc2ed.pf_meta",
+        "preview/gallery/celestia-catalog/pagefind/index/en_de50b13.pf_index",
+        "preview/gallery/celestia-catalog/pagefind/pagefind.en_ef8eab3a6f.pf_meta",
+        "preview/gallery/flexoki-catalog/pagefind/index/en_f2aa5cd.pf_index",
+        "preview/gallery/flexoki-catalog/pagefind/pagefind.en_9d78a271bc.pf_meta"
+      ],
+      "extraInSurface": [
+        "preview/gallery/active-only-catalog/pagefind/index/en_e336af3.pf_index",
+        "preview/gallery/active-only-catalog/pagefind/pagefind.en_fb4be4f645.pf_meta",
+        "preview/gallery/black-catalog/pagefind/index/en_5cd7226.pf_index",
+        "preview/gallery/black-catalog/pagefind/pagefind.en_66246cfb1c.pf_meta",
+        "preview/gallery/celestia-catalog/pagefind/index/en_66f3eef.pf_index",
+        "preview/gallery/celestia-catalog/pagefind/pagefind.en_bade5a68fc.pf_meta",
+        "preview/gallery/flexoki-catalog/pagefind/index/en_5686bba.pf_index",
+        "preview/gallery/flexoki-catalog/pagefind/pagefind.en_f3902a762f.pf_meta"
+      ],
+      "different": [
+        "preview/gallery/active-only-catalog/pagefind/pagefind-entry.json",
+        "preview/gallery/active-only-catalog/pagefind/wasm.en.pagefind",
+        "preview/gallery/active-only-catalog/pagefind/wasm.unknown.pagefind",
+        "preview/gallery/black-catalog/pagefind/pagefind-entry.json",
+        "preview/gallery/black-catalog/pagefind/wasm.en.pagefind",
+        "preview/gallery/black-catalog/pagefind/wasm.unknown.pagefind",
+        "preview/gallery/celestia-catalog/pagefind/pagefind-entry.json",
+        "preview/gallery/celestia-catalog/pagefind/wasm.en.pagefind",
+        "preview/gallery/celestia-catalog/pagefind/wasm.unknown.pagefind",
+        "preview/gallery/flexoki-catalog/pagefind/pagefind-entry.json",
+        "preview/gallery/flexoki-catalog/pagefind/wasm.en.pagefind",
+        "preview/gallery/flexoki-catalog/pagefind/wasm.unknown.pagefind",
+        "preview/gallery/manifest.json",
+        "preview/pagefind/wasm.en.pagefind",
+        "preview/pagefind/wasm.unknown.pagefind"
+      ]
+    }
+  ]
+}

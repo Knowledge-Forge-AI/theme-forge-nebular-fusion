@@ -357,6 +357,8 @@ export async function prepareAppResources(options = {}) {
     if (rootTarballArg) {
       sidecarArgv.push("--root-tarball", resolve(rootTarballArg));
     }
+    // The sidecar is prepared for the product target, which build-app takes from the host.
+    sidecarArgv.push("--target", options.target ?? targetForHost().triple);
     const sidecarOpts = preparationOptions(sidecarArgv, repositoryRoot);
     receipts.sidecar = await prepareSidecar(sidecarOpts);
   }

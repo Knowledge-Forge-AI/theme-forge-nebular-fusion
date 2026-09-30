@@ -5,6 +5,7 @@ import { readFile, writeFile, mkdir, lstat, readdir, copyFile, open, cp, rm } fr
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCENE_MEMBERS } from "./scene-input-build.mjs";
+import { NODE_RELEASE_IDENTITY } from "./node-runtime-authority.mjs";
 
 const studio=resolve(dirname(fileURLToPath(import.meta.url)),"..");
 const digest=bytes=>createHash("sha256").update(bytes).digest("hex");
@@ -28,11 +29,38 @@ async function readRegular(path,limit) {
   }
 }
 
+// Target of a Node executable from its own header (no execution).
+function runtimeTriple(bytes) {
+  if (bytes.length >= 8 && bytes.readUInt32LE(0) === 0xfeedfacf && bytes.readUInt32LE(4) === 0x0100000c) return "aarch64-apple-darwin";
+  if (bytes.length >= 20 && bytes.readUInt32BE(0) === 0x7f454c46 && bytes[4] === 2) {
+    const machine = bytes.readUInt16LE(18);
+    if (machine === 183) return "aarch64-unknown-linux-gnu";
+    if (machine === 62) return "x86_64-unknown-linux-gnu";
+  }
+  throw new Error("Scene Node runtime target is unsupported");
+}
+
+// The scene payload is platform-independent JavaScript run by the authenticated embedded Node of the
+// build target. The binding pins that runtime for its own target; every other target runs the same Node
+// release, whose executable identity comes from the maintained runtime authority. A binding that
+// disagrees with the authority for its own target fails.
+export function sceneRuntimeIdentity(runtime, binding = sceneBinding) {
+  const target = runtimeTriple(runtime);
+  const authority = NODE_RELEASE_IDENTITY.targets[target];
+  if (!authority || binding.node?.version !== NODE_RELEASE_IDENTITY.version) throw new Error("Scene Node identity mismatch");
+  if (binding.node.target === target) {
+    if (binding.node.sha256 !== authority.executableSha256 || binding.node.bytes !== authority.executableSize) throw new Error("Scene binding disagrees with the Node runtime authority");
+    return { target, sha256: binding.node.sha256, bytes: binding.node.bytes };
+  }
+  return { target, sha256: authority.executableSha256, bytes: authority.executableSize };
+}
+
 export async function verifyScenePayload(payload,node,binding=sceneBinding) {
   if(binding.capability!=="0.5-development") throw new Error("Scene binding capability must be 0.5-development");
   if(binding.engineSchema!=="tfsb.vector-scene-v1") throw new Error("Scene binding must be SVG-only vector scene");
   const runtime=await readRegular(node,128*1024*1024);
-  if(runtime.length!==binding.node.bytes||digest(runtime)!==binding.node.sha256) throw new Error("Scene Node identity mismatch");
+  const expected=sceneRuntimeIdentity(runtime,binding);
+  if(runtime.length!==expected.bytes||digest(runtime)!==expected.sha256) throw new Error("Scene Node identity mismatch");
   const names=[];
   async function visit(dir,prefix="") {
     for(const e of await readdir(dir,{withFileTypes:true})) {
@@ -47,7 +75,7 @@ export async function verifyScenePayload(payload,node,binding=sceneBinding) {
     const bytes=await readRegular(join(payload,file.path),8*1024*1024);
     if(bytes.length!==file.bytes||digest(bytes)!==file.sha256) throw new Error("Scene payload digest mismatch");
   }
-  return {schema:"tfsb.scene-payload-receipt-v1",inputSha256:binding.sha256,adapterSha256:binding.adapterSha256,nodeSha256:binding.node.sha256,files:names.length,capability:binding.capability};
+  return {schema:"tfsb.scene-payload-receipt-v1",inputSha256:binding.sha256,adapterSha256:binding.adapterSha256,nodeSha256:expected.sha256,nodeTarget:expected.target,files:names.length,capability:binding.capability};
 }
 
 export async function prepareScenePayload({archive,node,destination=join(studio,"src-tauri/scene-payload"),binding=sceneBinding,expectedSha256}) {
@@ -58,7 +86,8 @@ export async function prepareScenePayload({archive,node,destination=join(studio,
   const adapter=await readRegular(join(studio,"tools/scene-batch.js"),64*1024);
   if(digest(adapter)!==binding.adapterSha256) throw new Error("Scene adapter identity mismatch");
   const runtime=await readRegular(node,128*1024*1024);
-  if(digest(runtime)!==binding.node.sha256) throw new Error("Scene Node identity mismatch");
+  const expectedRuntime=sceneRuntimeIdentity(runtime,binding);
+  if(runtime.length!==expectedRuntime.bytes||digest(runtime)!==expectedRuntime.sha256) throw new Error("Scene Node identity mismatch");
   // Existing payloads must already authenticate. Preparation never refreshes pins
   // or silently replaces an unexpected generated tree.
   try { await lstat(destination); return await verifyScenePayload(destination,node,binding); }
