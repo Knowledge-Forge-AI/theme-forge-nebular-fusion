@@ -4,7 +4,7 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "601d6585cfb90266e20343064acabe1ee59479a6",
+    "sourceTree": "a56387a2040ad23cdafd8a392df540fa302051ee",
     "sourceRole": "exact-composition-input",
     "sourceMaterializationSha256": null,
     "publicMergeCommit": null,

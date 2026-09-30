@@ -5,6 +5,16 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { basename, extname, relative, resolve } from "node:path";
 
+// @ts-expect-error - JavaScript tool imported into TypeScript suite
+import * as candidateVersion from "../../tools/candidate-version.mjs";
+// @ts-expect-error - JavaScript tool imported into TypeScript suite
+import * as platformTargets from "../../tools/platform-targets.mjs";
+
+const { discoverApplicationSurfaces } = candidateVersion as {
+  discoverApplicationSurfaces: (studioRoot: string) => Array<{ id: string; version: string | undefined }>;
+};
+const { readCandidateVersion } = platformTargets as { readCandidateVersion: (studioRoot: string) => string };
+
 const appRoot = resolve(import.meta.dirname, "../..");
 const repositoryRoot = existsSync(resolve(appRoot, "authenticated-inputs/stellar-binding.json")) ? appRoot
   : resolve(appRoot, "../..", "apps/studio") === appRoot ? resolve(appRoot, "../..") : appRoot;
@@ -45,23 +55,139 @@ async function sourceText(files: readonly string[]) {
   return (await Promise.all(files.map(readUtf8))).join("\n");
 }
 
+const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
+
+function sha256(bytes: Uint8Array) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function readOptional(path: string) {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+// The Nebular application version has one release authority, the studio package.json; every
+// application projection (lock, Tauri, Cargo manifest and lock) is discovered by the maintained
+// candidate-version surface parser and must agree with it.
+function applicationVersionDrift(studioRoot: string) {
+  const authority = readCandidateVersion(studioRoot);
+  const drift = discoverApplicationSurfaces(studioRoot)
+    .filter((surface) => surface.version !== authority)
+    .map((surface) => `${surface.id}=${String(surface.version)}`);
+  return { authority, drift };
+}
+
+// The embedded Stellar Burst core is versioned independently. In the public projection its
+// authority is the authenticated binding (package digest and exact package filename); in the
+// private workspace it is the Burst root package and its lock.
+async function embeddedCoreVersionDrift(root: string) {
+  const bindingBytes = await readOptional(resolve(root, "authenticated-inputs/stellar-binding.json"));
+  const drift: string[] = [];
+  if (bindingBytes) {
+    const binding = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bindingBytes)) as {
+      input: { packageJsonSha256: string; packageLockSha256: string };
+      package: { filename: string };
+    };
+    const packageBytes = await readFile(resolve(root, "authenticated-inputs/core/package.json"));
+    const lockBytes = await readFile(resolve(root, "authenticated-inputs/core/package-lock.json"));
+    const core = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(packageBytes)) as { name: string; version: string };
+    const lock = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(lockBytes)) as { version: string; packages: Record<string, { version?: string }> };
+    if (sha256(packageBytes) !== binding.input.packageJsonSha256) drift.push("core/package.json digest");
+    if (sha256(lockBytes) !== binding.input.packageLockSha256) drift.push("core/package-lock.json digest");
+    if (binding.package.filename !== `knowledge-forge-ai-theme-forge-stellar-burst-${core.version}.tgz`) drift.push(`binding.package.filename=${binding.package.filename}`);
+    if (lock.version !== core.version) drift.push(`core/package-lock.json=${lock.version}`);
+    if (lock.packages[""]?.version !== core.version) drift.push(`core/package-lock.json#root-package=${String(lock.packages[""]?.version)}`);
+    return { name: core.name, version: core.version, drift };
+  }
+  const core = JSON.parse(await readUtf8(resolve(root, "package.json"))) as { name: string; version: string };
+  const lock = JSON.parse(await readUtf8(resolve(root, "package-lock.json"))) as { version: string; packages: Record<string, { version?: string }> };
+  if (lock.version !== core.version) drift.push(`package-lock.json=${lock.version}`);
+  if (lock.packages[""]?.version !== core.version) drift.push(`package-lock.json#root-package=${String(lock.packages[""]?.version)}`);
+  return { name: core.name, version: core.version, drift };
+}
+
+async function writeTree(root: string, files: Record<string, string>) {
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(resolve(root, path, ".."), { recursive: true });
+    await writeFile(resolve(root, path), content);
+  }
+}
+
+function applicationProjection(version: { app: string; tauri?: string; cargo?: string; cargoLock?: string }) {
+  return {
+    "package.json": JSON.stringify({ name: "@knowledge-forge-ai/theme-forge-nebular-fusion", version: version.app, private: true }),
+    "package-lock.json": JSON.stringify({ version: version.app, packages: { "": { version: version.app } } }),
+    "src-tauri/tauri.conf.json": JSON.stringify({ version: version.tauri ?? version.app }),
+    "src-tauri/Cargo.toml": `[package]\nname = "theme-forge-nebular-fusion"\nversion = "${version.cargo ?? version.app}"\n\n[dependencies]\nserde = { version = "1.0.0" }\n`,
+    "src-tauri/Cargo.lock": `[[package]]\nname = "serde"\nversion = "1.0.0"\n\n[[package]]\nname = "theme-forge-nebular-fusion"\nversion = "${version.cargoLock ?? version.app}"\n`,
+  };
+}
+
 describe("Studio package and authority isolation", () => {
   it("keeps exact independent versions and dependency pins", async () => {
     const appPackage = JSON.parse(await text("package.json")) as Record<string, unknown>;
-    const rootPackagePath = existsSync(resolve(repositoryRoot, "authenticated-inputs/core/package.json"))
-      ? resolve(repositoryRoot, "authenticated-inputs/core/package.json")
-      : resolve(repositoryRoot, "package.json");
-    const rootPackage = JSON.parse(await readUtf8(rootPackagePath)) as Record<string, unknown>;
-    const tauriConfig = JSON.parse(await text("src-tauri/tauri.conf.json")) as { version: string };
-    const cargo = await text("src-tauri/Cargo.toml");
+    const application = applicationVersionDrift(appRoot);
+    const core = await embeddedCoreVersionDrift(repositoryRoot);
 
-    expect(appPackage.version).toBe("0.6.0");
+    expect(application.drift).toEqual([]);
+    expect(application.authority).toMatch(EXACT_VERSION);
+    expect(appPackage.version).toBe(application.authority);
     expect(appPackage.private).toBe(true);
-    expect(rootPackage.version).toBe("0.6.0");
-    expect(tauriConfig.version).toBe(appPackage.version);
-    expect(cargo).toContain(`version = "${appPackage.version}"`);
+    expect(core.name).toBe("@knowledge-forge-ai/theme-forge-stellar-burst");
+    expect(core.drift).toEqual([]);
+    expect(core.version).toMatch(EXACT_VERSION);
     for (const group of [appPackage.dependencies, appPackage.devDependencies] as Array<Record<string, string>>) {
-      for (const version of Object.values(group)) expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+      for (const version of Object.values(group)) expect(version).toMatch(EXACT_VERSION);
+    }
+  });
+
+  it("derives version agreement from the maintained authorities instead of copied literals", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "tfsb-version-authority-"));
+    try {
+      const consistent = resolve(root, "consistent");
+      await writeTree(consistent, applicationProjection({ app: "9.9.9" }));
+      expect(applicationVersionDrift(consistent)).toEqual({ authority: "9.9.9", drift: [] });
+
+      const tauriDrift = resolve(root, "tauri-drift");
+      await writeTree(tauriDrift, applicationProjection({ app: "9.9.9", tauri: "9.9.8" }));
+      expect(applicationVersionDrift(tauriDrift).drift).toEqual(["studio-tauri.conf.json=9.9.8"]);
+
+      const cargoDrift = resolve(root, "cargo-drift");
+      await writeTree(cargoDrift, applicationProjection({ app: "9.9.9", cargo: "9.9.8", cargoLock: "9.9.7" }));
+      expect(applicationVersionDrift(cargoDrift).drift).toEqual(["studio-Cargo.toml=9.9.8", "studio-Cargo.lock=9.9.7"]);
+
+      const corePackage = JSON.stringify({ name: "@knowledge-forge-ai/theme-forge-stellar-burst", version: "4.5.6" });
+      const coreLock = JSON.stringify({ version: "4.5.6", packages: { "": { version: "4.5.6" } } });
+      const binding = (filename: string) => JSON.stringify({
+        input: { packageJsonSha256: sha256(new TextEncoder().encode(corePackage)), packageLockSha256: sha256(new TextEncoder().encode(coreLock)) },
+        package: { filename },
+      });
+      const boundCore = resolve(root, "bound-core");
+      await writeTree(boundCore, {
+        "authenticated-inputs/stellar-binding.json": binding("knowledge-forge-ai-theme-forge-stellar-burst-4.5.6.tgz"),
+        "authenticated-inputs/core/package.json": corePackage,
+        "authenticated-inputs/core/package-lock.json": coreLock,
+      });
+      expect(await embeddedCoreVersionDrift(boundCore)).toEqual({ name: "@knowledge-forge-ai/theme-forge-stellar-burst", version: "4.5.6", drift: [] });
+
+      const unboundCore = resolve(root, "unbound-core");
+      await writeTree(unboundCore, {
+        "authenticated-inputs/stellar-binding.json": binding("knowledge-forge-ai-theme-forge-stellar-burst-4.5.5.tgz"),
+        "authenticated-inputs/core/package.json": corePackage.replace("4.5.6", "4.5.7"),
+        "authenticated-inputs/core/package-lock.json": coreLock,
+      });
+      expect((await embeddedCoreVersionDrift(unboundCore)).drift).toEqual([
+        "core/package.json digest",
+        "binding.package.filename=knowledge-forge-ai-theme-forge-stellar-burst-4.5.5.tgz",
+        "core/package-lock.json=4.5.6",
+        "core/package-lock.json#root-package=4.5.6",
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
