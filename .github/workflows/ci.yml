@@ -418,6 +418,25 @@ jobs:
       # prepared; rebuild the same way so the scanned distributable is the shipped one.
       - name: Rebuild the shipped frontend with the prepared Loom preview
         run: npm run build
+      # release-notices is a bundled resource that no earlier step writes and the checkout does not track;
+      # generate it here through the macOS job's maintained notices steps, never scan around it.
+      - name: Select repository-pinned Rust 1.98.0 toolchain
+        run: |
+          test "$(node -e 'import fs from "node:fs"; const s=fs.readFileSync("rust-toolchain.toml","utf8"); process.stdout.write(s.match(/channel\s*=\s*"([^"]+)"/)[1])')" = "1.98.0"
+          CARGO_HOME="$(mktemp -d "${RUNNER_TEMP:-/tmp}/cargo-home.XXXXXX")"
+          export CARGO_HOME
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt,clippy
+          echo "RUSTUP_TOOLCHAIN=1.98.0" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
+          RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
+      - name: Fetch locked Rust dependencies for offline notices and qualification
+        working-directory: src-tauri
+        run: |
+          cargo --version | grep '^cargo 1.98.0 '
+          cargo fetch --locked --target aarch64-apple-darwin
+      - name: Generate and validate mandatory release notices
+        run: node tools/release-notices.mjs
       - name: Materialize Nebular release surfaces
         run: node tools/supply-chain-surface.mjs materialize --release-dir "$RUNNER_TEMP/tfsb-nebular-release" --inventory-dir "$RUNNER_TEMP/tfsb-nebular-inventory" --report-dir .test-reports/nebular --manifest .test-reports/supply-chain/release-surface.json
       - name: Run Syft SBOM generation and Grype vulnerability scan
