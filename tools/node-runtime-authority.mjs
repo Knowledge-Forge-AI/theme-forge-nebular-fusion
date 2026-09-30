@@ -1,9 +1,12 @@
 // Maintained portable Node.js runtime authority for Darwin ARM64 and Linux arm64/x64.
 // Single source of truth for the official Node 22.23.3 embedded sidecar runtime.
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, existsSync, mkdirSync, copyFileSync, chmodSync, renameSync } from "node:fs";
+import {
+  closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, unlinkSync, writeFileSync, writeSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
-import { resolve, join, dirname } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
 
 // The shared tools/ci/ci-contract.mjs NODE_RELEASE_IDENTITY is also a member of the published standalone
@@ -80,6 +83,119 @@ export const OFFICIAL_RELEASERS = Object.freeze({
   "A363A499291CBBC940DD62E41F10027AF002F8B0": "Ulises Gascón <ulisesgascongonzalez@gmail.com>",
 });
 
+const PROBE_SCRIPT = "JSON.stringify({node:process.versions.node,v8:process.versions.v8,undici:process.versions.undici,arch:process.arch,platform:process.platform})";
+const SHASUMS_FILENAME = "SHASUMS256.txt.asc";
+
+// Descriptor-first file access. Every file this authority accepts is opened exactly once without
+// following a symbolic link (and without blocking on a FIFO); its type, size and identity come from
+// the open descriptor, its bytes are read through that descriptor, and the identity must be unchanged
+// afterwards. No pathname is checked first and then re-read.
+const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+const CREATE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function descriptorIdentity(stat) {
+  return { dev: stat.dev, ino: stat.ino, size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs };
+}
+
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
+    && left.mode === right.mode && left.mtimeMs === right.mtimeMs;
+}
+
+function openRegular(path, label) {
+  let fd;
+  try {
+    fd = openSync(path, READ_FLAGS);
+  } catch (error) {
+    if (error?.code === "ELOOP" || error?.code === "EMLINK") throw new Error(`${label} must be a regular file, not a symbolic link: ${path}`);
+    throw error;
+  }
+  const stat = fstatSync(fd);
+  if (!stat.isFile()) {
+    closeSync(fd);
+    throw new Error(`${label} must be a regular file: ${path}`);
+  }
+  return { fd, stat };
+}
+
+function readDescriptor(fd, stat, path, label) {
+  const bytes = Buffer.allocUnsafe(stat.size);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+    if (count === 0) throw new Error(`${label} was truncated while it was read: ${path}`);
+    offset += count;
+  }
+  if (readSync(fd, Buffer.alloc(1), 0, 1, offset) !== 0) throw new Error(`${label} grew while it was read: ${path}`);
+  if (!sameIdentity(descriptorIdentity(stat), descriptorIdentity(fstatSync(fd)))) throw new Error(`${label} changed while it was read: ${path}`);
+  return bytes;
+}
+
+/**
+ * Reads one regular file through a single no-follow descriptor.
+ * @param {string} path
+ * @param {{ label?: string }} [options]
+ * @returns {{ bytes: Buffer, identity: { dev: number, ino: number, size: number, mode: number, mtimeMs: number } }}
+ */
+export function readRegularFile(path, options = {}) {
+  const label = options.label ?? "File";
+  const { fd, stat } = openRegular(path, label);
+  try {
+    return { bytes: readDescriptor(fd, stat, path, label), identity: descriptorIdentity(stat) };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readOptionalRegular(path, label) {
+  try {
+    return readRegularFile(path, { label });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function writeNewFile(path, bytes, mode) {
+  const fd = openSync(path, CREATE_FLAGS, mode);
+  try {
+    let offset = 0;
+    while (offset < bytes.length) offset += writeSync(fd, bytes, offset, bytes.length - offset);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// After a runtime has been executed or inspected by pathname, the descriptor must still describe the
+// same bytes and the pathname must still name the inode that was measured.
+function requireUnchangedAfterUse(fd, stat, path, label) {
+  const opened = descriptorIdentity(stat);
+  const named = lstatSync(path);
+  if (!sameIdentity(opened, descriptorIdentity(fstatSync(fd))) || named.isSymbolicLink() || !sameIdentity(opened, descriptorIdentity(named))) {
+    throw new Error(`${label} was replaced or modified while it was validated: ${path}`);
+  }
+}
+
+function probeNode(command, displayPath) {
+  const probe = spawnSync(command, ["-p", PROBE_SCRIPT], {
+    encoding: "utf8",
+    env: { LANG: "C", LC_ALL: "C", TZ: "UTC" },
+    timeout: 10_000,
+  });
+  if (probe.status !== 0 || probe.error) {
+    throw new Error(`Failed to probe portable Node runtime at ${displayPath}: ${probe.error?.message || probe.stderr}`);
+  }
+  try {
+    return { data: JSON.parse(probe.stdout.trim()), stdout: probe.stdout };
+  } catch {
+    throw new Error(`Portable Node runtime probe emitted invalid JSON: ${probe.stdout}`);
+  }
+}
+
 /**
  * Validates that an executable is the exact official portable Node 22.23.3 Darwin ARM64 runtime.
  * @param {string} executablePath
@@ -88,62 +204,51 @@ export const OFFICIAL_RELEASERS = Object.freeze({
  * @returns {{ valid: boolean, version: string, v8: string, sha256: string, size: number, target: string }}
  */
 export function validateDarwinPortableNode(executablePath, options = {}) {
-  const stat = lstatSync(executablePath);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(`Portable Node runtime must be a regular file: ${executablePath}`);
-  }
-
-  if (stat.size !== EXPECTED_EXECUTABLE_SIZE) {
-    throw new Error(`Portable Node runtime size mismatch: expected ${EXPECTED_EXECUTABLE_SIZE}, got ${stat.size} (${executablePath})`);
-  }
-
-  const bytes = readFileSync(executablePath);
-  const actualSha256 = createHash("sha256").update(bytes).digest("hex");
-  if (actualSha256 !== EXPECTED_EXECUTABLE_SHA256) {
-    throw new Error(`Portable Node runtime SHA-256 mismatch: expected ${EXPECTED_EXECUTABLE_SHA256}, got ${actualSha256} (${executablePath})`);
-  }
-
-  // Validate Mach-O 64-bit ARM64 header
-  if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf || bytes.readUInt32LE(4) !== 0x0100000c) {
-    throw new Error(`Portable Node runtime is not a valid 64-bit ARM64 Mach-O binary (${executablePath})`);
-  }
-
-  // Probe runtime if executable
-  const probe = spawnSync(executablePath, ["-p", "JSON.stringify({node:process.versions.node,v8:process.versions.v8,undici:process.versions.undici,arch:process.arch,platform:process.platform})"], {
-    encoding: "utf8",
-    env: { LANG: "C", LC_ALL: "C", TZ: "UTC" },
-    timeout: 10_000,
-  });
-
-  if (probe.status !== 0 || probe.error) {
-    throw new Error(`Failed to probe portable Node runtime at ${executablePath}: ${probe.error?.message || probe.stderr}`);
-  }
-
-  let probeData;
+  const label = "Portable Node runtime";
+  const { fd, stat } = openRegular(executablePath, label);
   try {
-    probeData = JSON.parse(probe.stdout.trim());
-  } catch {
-    throw new Error(`Portable Node runtime probe emitted invalid JSON: ${probe.stdout}`);
-  }
-
-  if (probeData.node !== EXPECTED_NODE_VERSION) {
-    throw new Error(`Portable Node runtime version mismatch: expected ${EXPECTED_NODE_VERSION}, got ${probeData.node}`);
-  }
-  if (probeData.v8 !== EXPECTED_V8_VERSION) {
-    throw new Error(`Portable Node runtime V8 mismatch: expected ${EXPECTED_V8_VERSION}, got ${probeData.v8}`);
-  }
-  if (probeData.undici !== NODE_RELEASE_IDENTITY.undici) {
-    throw new Error(`Portable Node runtime Undici mismatch: expected ${NODE_RELEASE_IDENTITY.undici}, got ${probeData.undici}`);
-  }
-  if (probeData.arch !== "arm64" || probeData.platform !== "darwin") {
-    throw new Error(`Portable Node runtime architecture/platform mismatch: expected darwin/arm64, got ${probeData.platform}/${probeData.arch}`);
-  }
-
-  if (options.validateLinkage !== false) {
-    const linkage = validateDarwinLinkage(executablePath);
-    if (linkage.status !== "pass") {
-      throw new Error(`Portable Node runtime has invalid dynamic linkage (${linkage.violations.length} violations):\n  ${linkage.violations.join("\n  ")}`);
+    if (stat.size !== EXPECTED_EXECUTABLE_SIZE) {
+      throw new Error(`Portable Node runtime size mismatch: expected ${EXPECTED_EXECUTABLE_SIZE}, got ${stat.size} (${executablePath})`);
     }
+    const bytes = readDescriptor(fd, stat, executablePath, label);
+    const actualSha256 = sha256(bytes);
+    if (actualSha256 !== EXPECTED_EXECUTABLE_SHA256) {
+      throw new Error(`Portable Node runtime SHA-256 mismatch: expected ${EXPECTED_EXECUTABLE_SHA256}, got ${actualSha256} (${executablePath})`);
+    }
+
+    // Validate Mach-O 64-bit ARM64 header
+    if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf || bytes.readUInt32LE(4) !== 0x0100000c) {
+      throw new Error(`Portable Node runtime is not a valid 64-bit ARM64 Mach-O binary (${executablePath})`);
+    }
+
+    // Darwin cannot execute an open descriptor, so the measured pathname is executed and must
+    // still name the measured inode afterwards (a replace-and-restore during the probe is not
+    // excluded by this check; the Linux validator executes the descriptor itself).
+    const { data: probeData } = probeNode(executablePath, executablePath);
+    requireUnchangedAfterUse(fd, stat, executablePath, label);
+
+    if (probeData.node !== EXPECTED_NODE_VERSION) {
+      throw new Error(`Portable Node runtime version mismatch: expected ${EXPECTED_NODE_VERSION}, got ${probeData.node}`);
+    }
+    if (probeData.v8 !== EXPECTED_V8_VERSION) {
+      throw new Error(`Portable Node runtime V8 mismatch: expected ${EXPECTED_V8_VERSION}, got ${probeData.v8}`);
+    }
+    if (probeData.undici !== NODE_RELEASE_IDENTITY.undici) {
+      throw new Error(`Portable Node runtime Undici mismatch: expected ${NODE_RELEASE_IDENTITY.undici}, got ${probeData.undici}`);
+    }
+    if (probeData.arch !== "arm64" || probeData.platform !== "darwin") {
+      throw new Error(`Portable Node runtime architecture/platform mismatch: expected darwin/arm64, got ${probeData.platform}/${probeData.arch}`);
+    }
+
+    if (options.validateLinkage !== false) {
+      const linkage = validateDarwinLinkage(executablePath);
+      requireUnchangedAfterUse(fd, stat, executablePath, label);
+      if (linkage.status !== "pass") {
+        throw new Error(`Portable Node runtime has invalid dynamic linkage (${linkage.violations.length} violations):\n  ${linkage.violations.join("\n  ")}`);
+      }
+    }
+  } finally {
+    closeSync(fd);
   }
 
   return {
@@ -160,7 +265,8 @@ const ELF_MACHINE = Object.freeze({ arm64: 183, x64: 62 });
 
 /**
  * Validates that an executable is the exact authenticated official Node runtime for a Linux target.
- * The executable is probed only when it can run on the current host platform/architecture.
+ * The executable is probed only when it can run on the current host platform/architecture; the probe
+ * executes the already measured open descriptor through /proc/self/fd rather than the pathname.
  * @param {string} executablePath
  * @param {string} targetTriple
  * @returns {{ valid: boolean, version: string, v8: string, sha256: string, size: number, target: string, probed: boolean }}
@@ -170,37 +276,32 @@ export function validateLinuxPortableNode(executablePath, targetTriple) {
   if (!identity || identity.platform !== "linux") {
     throw new Error(`No authenticated Linux Node runtime identity for target ${targetTriple}`);
   }
-  const stat = lstatSync(executablePath);
-  if (!stat.isFile() || stat.isSymbolicLink()) {
-    throw new Error(`Portable Node runtime must be a regular file: ${executablePath}`);
-  }
-  if (stat.size !== identity.executableSize) {
-    throw new Error(`Portable Node runtime size mismatch for ${targetTriple}: expected ${identity.executableSize}, got ${stat.size} (${executablePath})`);
-  }
-  const bytes = readFileSync(executablePath);
-  const actualSha256 = createHash("sha256").update(bytes).digest("hex");
-  if (actualSha256 !== identity.executableSha256) {
-    throw new Error(`Portable Node runtime SHA-256 mismatch for ${targetTriple}: expected ${identity.executableSha256}, got ${actualSha256} (${executablePath})`);
-  }
-  if (bytes.length < 20 || bytes.readUInt32BE(0) !== 0x7f454c46 || bytes[4] !== 2 || bytes.readUInt16LE(18) !== ELF_MACHINE[identity.arch]) {
-    throw new Error(`Portable Node runtime is not a 64-bit ELF for ${identity.arch} (${executablePath})`);
-  }
+  const label = "Portable Node runtime";
+  const { fd, stat } = openRegular(executablePath, label);
   let probed = false;
-  if (process.platform === "linux" && process.arch === identity.arch) {
-    const probe = spawnSync(executablePath, ["-p", "JSON.stringify({node:process.versions.node,v8:process.versions.v8,undici:process.versions.undici,arch:process.arch,platform:process.platform})"], {
-      encoding: "utf8",
-      env: { LANG: "C", LC_ALL: "C", TZ: "UTC" },
-      timeout: 10_000,
-    });
-    if (probe.status !== 0 || probe.error) {
-      throw new Error(`Failed to probe portable Node runtime at ${executablePath}: ${probe.error?.message || probe.stderr}`);
+  try {
+    if (stat.size !== identity.executableSize) {
+      throw new Error(`Portable Node runtime size mismatch for ${targetTriple}: expected ${identity.executableSize}, got ${stat.size} (${executablePath})`);
     }
-    const data = JSON.parse(probe.stdout.trim());
-    if (data.node !== EXPECTED_NODE_VERSION || data.v8 !== EXPECTED_V8_VERSION || data.undici !== NODE_RELEASE_IDENTITY.undici
-        || data.platform !== "linux" || data.arch !== identity.arch) {
-      throw new Error(`Portable Node runtime identity mismatch for ${targetTriple}: ${probe.stdout.trim()}`);
+    const bytes = readDescriptor(fd, stat, executablePath, label);
+    const actualSha256 = sha256(bytes);
+    if (actualSha256 !== identity.executableSha256) {
+      throw new Error(`Portable Node runtime SHA-256 mismatch for ${targetTriple}: expected ${identity.executableSha256}, got ${actualSha256} (${executablePath})`);
     }
-    probed = true;
+    if (bytes.length < 20 || bytes.readUInt32BE(0) !== 0x7f454c46 || bytes[4] !== 2 || bytes.readUInt16LE(18) !== ELF_MACHINE[identity.arch]) {
+      throw new Error(`Portable Node runtime is not a 64-bit ELF for ${identity.arch} (${executablePath})`);
+    }
+    if (process.platform === "linux" && process.arch === identity.arch) {
+      const { data, stdout } = probeNode(`/proc/self/fd/${fd}`, executablePath);
+      requireUnchangedAfterUse(fd, stat, executablePath, label);
+      if (data.node !== EXPECTED_NODE_VERSION || data.v8 !== EXPECTED_V8_VERSION || data.undici !== NODE_RELEASE_IDENTITY.undici
+          || data.platform !== "linux" || data.arch !== identity.arch) {
+        throw new Error(`Portable Node runtime identity mismatch for ${targetTriple}: ${stdout.trim()}`);
+      }
+      probed = true;
+    }
+  } finally {
+    closeSync(fd);
   }
   return {
     valid: true,
@@ -219,13 +320,8 @@ export function validateLinuxPortableNode(executablePath, targetTriple) {
  * @returns {{ valid: boolean, sha256: string, path: string }}
  */
 export function validateDarwinNodeArchive(archivePath) {
-  const stat = lstatSync(archivePath);
-  if (!stat.isFile()) {
-    throw new Error(`Node archive must be a regular file: ${archivePath}`);
-  }
-
-  const bytes = readFileSync(archivePath);
-  const actualSha256 = createHash("sha256").update(bytes).digest("hex");
+  const { bytes } = readRegularFile(archivePath, { label: "Node archive" });
+  const actualSha256 = sha256(bytes);
   if (actualSha256 !== EXPECTED_TARBALL_SHA256) {
     throw new Error(`Node archive SHA-256 mismatch: expected ${EXPECTED_TARBALL_SHA256}, got ${actualSha256} (${archivePath})`);
   }
@@ -237,8 +333,70 @@ export function validateDarwinNodeArchive(archivePath) {
   };
 }
 
+function placeNoClobber(entry) {
+  try {
+    linkSync(entry.staged, entry.final);
+    return "link";
+  } catch (error) {
+    if (error?.code === "EXDEV") {
+      writeNewFile(entry.final, entry.bytes, entry.identity.mode & 0o777);
+      return "copy";
+    }
+    if (error?.code === "EEXIST") return null;
+    throw error;
+  }
+}
+
+function requireAdopted(entry, created) {
+  const adopted = readRegularFile(entry.final, { label: entry.label });
+  if (sha256(adopted.bytes) !== entry.sha256) {
+    throw new Error(created
+      ? `[NODE_AUTH_FAIL] ${entry.label} at ${entry.final} changed during adoption.`
+      : `[NODE_AUTH_FAIL] Existing ${entry.label} at ${entry.final} differs from the authenticated bytes; it was not replaced.`);
+  }
+  if (created === "link" && (adopted.identity.dev !== entry.identity.dev || adopted.identity.ino !== entry.identity.ino)) {
+    throw new Error(`[NODE_AUTH_FAIL] ${entry.label} at ${entry.final} was replaced during adoption.`);
+  }
+  if (entry.executable && (adopted.identity.mode & 0o111) === 0) {
+    throw new Error(`[NODE_AUTH_FAIL] ${entry.label} at ${entry.final} is not executable.`);
+  }
+}
+
+/**
+ * Adopts authenticated staged files at their final pathnames, all or nothing, without ever replacing
+ * an existing file. Every staged file is re-measured through a descriptor before any final name is
+ * created; each is then hard-linked into place (or copied into a newly created file across
+ * filesystems) and its final pathname is re-measured. An existing final file is accepted only when it
+ * is a regular file with exactly the authenticated bytes; otherwise it is left untouched. On any
+ * failure every final name created by this call is removed again, so the final paths are unchanged.
+ * @param {Array<{ staged: string, final: string, label: string, sha256: string, executable?: boolean }>} entries
+ */
+function adoptNoClobber(entries) {
+  const prepared = entries.map((entry) => {
+    const staged = readRegularFile(entry.staged, { label: `Staged ${entry.label}` });
+    if (sha256(staged.bytes) !== entry.sha256) {
+      throw new Error(`[NODE_AUTH_FAIL] Staged ${entry.label} changed after authentication; ${entry.final} was not adopted.`);
+    }
+    return { ...entry, bytes: staged.bytes, identity: staged.identity };
+  });
+  const created = [];
+  try {
+    for (const entry of prepared) {
+      const how = placeNoClobber(entry);
+      if (how) created.push(entry.final);
+      requireAdopted(entry, how);
+    }
+  } catch (error) {
+    for (const path of created.reverse()) unlinkSync(path);
+    throw error;
+  }
+  return prepared.map((entry) => ({ path: entry.final, sha256: entry.sha256, adopted: created.includes(entry.final) ? "created" : "existing-identical" }));
+}
+
 /**
  * Verifies an official Node.js Darwin ARM64 archive against the maintained authority and extracts the portable binary.
+ * Extraction reads the already authenticated archive bytes (never the pathname again) into an owned staging
+ * directory; an existing output is kept only when it is byte-identical to the authenticated executable.
  * @param {string} archivePath
  * @param {string} outputExecutablePath
  * @param {object} [options]
@@ -246,28 +404,31 @@ export function validateDarwinNodeArchive(archivePath) {
  * @returns {{ valid: boolean, path: string, version: string, v8: string, sha256: string, size: number, target: string }}
  */
 export function verifyAndExtractDarwinNodeArchive(archivePath, outputExecutablePath, options = {}) {
-  validateDarwinNodeArchive(archivePath);
+  const { bytes: archive } = readRegularFile(archivePath, { label: "Node archive" });
+  const archiveSha256 = sha256(archive);
+  if (archiveSha256 !== EXPECTED_TARBALL_SHA256) {
+    throw new Error(`Node archive SHA-256 mismatch: expected ${EXPECTED_TARBALL_SHA256}, got ${archiveSha256} (${archivePath})`);
+  }
   const resolvedOut = resolve(outputExecutablePath);
-  const outDir = dirname(resolvedOut);
-  if (!existsSync(outDir)) {
-    mkdirSync(outDir, { recursive: true });
+  mkdirSync(dirname(resolvedOut), { recursive: true });
+  const staging = mkdtempSync(join(dirname(resolvedOut), ".node-extract-"));
+  try {
+    const member = `${EXPECTED_TARBALL_NAME.replace(/\.tar\.gz$/, "")}/bin/node`;
+    const tarResult = spawnSync("tar", ["-xzf", "-", "-C", staging, member], {
+      input: archive,
+      encoding: "utf8",
+      env: { LANG: "C", LC_ALL: "C" },
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (tarResult.status !== 0 || tarResult.error) {
+      throw new Error(`Failed to extract portable Node runtime from archive: ${tarResult.error?.message || tarResult.stderr}`);
+    }
+    adoptNoClobber([{ staged: join(staging, member), final: resolvedOut, label: "portable Node runtime", sha256: EXPECTED_EXECUTABLE_SHA256, executable: true }]);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
-
-  const prefix = EXPECTED_TARBALL_NAME.replace(/\.tar\.gz$/, "");
-  const tarResult = spawnSync("tar", ["-xzf", resolve(archivePath), "-C", outDir], {
-    encoding: "utf8",
-    env: { LANG: "C", LC_ALL: "C" },
-    timeout: 30_000,
-  });
-
-  const extractedCandidate = join(outDir, `${prefix}/bin/node`);
-  if (tarResult.status !== 0 || !existsSync(extractedCandidate)) {
-    throw new Error(`Failed to extract portable Node runtime from archive: ${tarResult.error?.message || tarResult.stderr}`);
-  }
-
-  copyFileSync(extractedCandidate, resolvedOut);
-  chmodSync(resolvedOut, 0o755);
-  return validateDarwinPortableNode(resolvedOut, options);
+  return { ...validateDarwinPortableNode(resolvedOut, options), path: resolvedOut };
 }
 
 /**
@@ -285,33 +446,40 @@ export function locateCachedPortableNode(options = {}) {
   ].filter(Boolean);
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
-      try {
-        validateDarwinPortableNode(candidate, { validateLinkage: true });
-        return resolve(candidate);
-      } catch {
-        // Continue searching
-      }
+    try {
+      validateDarwinPortableNode(candidate, { validateLinkage: true });
+      return resolve(candidate);
+    } catch {
+      // Missing or non-matching candidates are skipped.
     }
   }
 
   return null;
 }
 
+async function importSharedVerifier() {
+  const verifierUrls = [
+    new URL("./ci/verify-node-authenticity.mjs", import.meta.url),              // Composed repo (tools -> tools/ci)
+    new URL("../../../tools/ci/verify-node-authenticity.mjs", import.meta.url), // Monorepo
+  ];
+  for (const url of verifierUrls) {
+    try {
+      return await import(url.href);
+    } catch (error) {
+      if (error?.code !== "ERR_MODULE_NOT_FOUND" || !String(error.message).includes(fileURLToPath(url))) throw error;
+    }
+  }
+  throw new Error("[NODE_AUTH_FAIL] Shared Node authenticity verifier is unavailable.");
+}
+
 /**
  * Authenticates the official Darwin ARM64 archive of the embedded runtime and extracts its executable.
  * Signature and SHASUMS parsing use the shared locked verifier (openpgp 6.3.1, active release keyring);
  * this module then requires the embedded identity's signer, archive digest and executable identity.
- * @param {{ shasumsPath: string, tarballPath: string, outputNodePath: string }} options
+ * @param {{ shasumsPath?: string, tarballPath?: string, outputNodePath: string, downloadDir?: string, fetchImpl?: typeof fetch }} options
  */
 export async function authenticateEmbeddedDarwinNode(options) {
-  const verifierUrls = [
-    new URL("../../../tools/ci/verify-node-authenticity.mjs", import.meta.url), // Monorepo
-    new URL("./ci/verify-node-authenticity.mjs", import.meta.url),              // Composed repo (tools -> tools/ci)
-  ];
-  const verifierUrl = verifierUrls.find(u => existsSync(u));
-  if (!verifierUrl) throw new Error("[NODE_AUTH_FAIL] Shared Node authenticity verifier is unavailable.");
-  const { verifyNodeAuthenticity } = await import(verifierUrl.href);
+  const { verifyNodeAuthenticity } = await importSharedVerifier();
   const receipt = await verifyNodeAuthenticity({ version: EXPECTED_NODE_VERSION, ...options });
   if (receipt.signature.fingerprint !== PRIMARY_SIGNING_KEY_FINGERPRINT) {
     throw new Error(`[NODE_AUTH_FAIL] SHASUMS signer ${receipt.signature.fingerprint} is not the embedded runtime signer ${PRIMARY_SIGNING_KEY_FINGERPRINT}.`);
@@ -323,7 +491,72 @@ export async function authenticateEmbeddedDarwinNode(options) {
   return { ...receipt, embeddedRuntime: { ...runtime, undici: NODE_RELEASE_IDENTITY.undici } };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+/**
+ * Authenticates the embedded Darwin runtime into a download cache and an output executable.
+ *
+ * Network bytes are only ever written by the shared verifier into a fresh owner-only staging directory
+ * inside the download directory. Nothing reaches the stable SHASUMS, archive or executable pathnames
+ * until the signed SHASUMS and archive chain and the executable identity have been accepted; the
+ * authenticated staged files are then adopted all or nothing without replacing any existing file (see adoptNoClobber).
+ * A complete cached pair in the download directory is copied into staging through descriptors and
+ * authenticated the same way without network access. Partial, truncated, tampered, symlinked or
+ * replaced inputs fail before or during adoption, and the staging directory is always removed.
+ *
+ * The threat model is untrusted network content and pre-existing or concurrently replaced final
+ * paths; a same-user process that can write the owner-only staging directory is out of scope.
+ * @param {object} options
+ * @param {string} options.downloadDir
+ * @param {string} options.outputNodePath
+ * @param {typeof fetch} [options.fetchImpl] test transport; production uses the shared verifier's fetch
+ * @param {(options: object) => Promise<any>} [options.verify] test seam; defaults to authenticateEmbeddedDarwinNode
+ * @param {{ tarballSha256: string, executableSha256: string }} [options.expected] test seam; defaults to the embedded identity
+ * @param {(context: { staging: string, staged: Record<string, string> }) => (void | Promise<void>)} [options.beforeAdoption] test seam
+ */
+export async function authenticateDarwinNodeDownload(options) {
+  const { downloadDir, outputNodePath, fetchImpl, beforeAdoption } = options ?? {};
+  const verify = options?.verify ?? authenticateEmbeddedDarwinNode;
+  const expected = options?.expected ?? { tarballSha256: EXPECTED_TARBALL_SHA256, executableSha256: EXPECTED_EXECUTABLE_SHA256 };
+  if (!downloadDir || !outputNodePath) throw new Error("[NODE_AUTH_FAIL] A download directory and an output executable path are required.");
+  const directory = resolve(downloadDir);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const directoryInfo = lstatSync(directory);
+  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
+    throw new Error(`[NODE_AUTH_FAIL] Node download directory must be a real directory: ${directory}`);
+  }
+  const finals = { shasums: join(directory, SHASUMS_FILENAME), tarball: join(directory, EXPECTED_TARBALL_NAME), node: resolve(outputNodePath) };
+  const nodeName = basename(finals.node);
+  if (nodeName === SHASUMS_FILENAME || nodeName === EXPECTED_TARBALL_NAME) {
+    throw new Error(`[NODE_AUTH_FAIL] Output executable name ${nodeName} collides with an authenticated download name.`);
+  }
+  mkdirSync(dirname(finals.node), { recursive: true });
+
+  const staging = mkdtempSync(join(directory, ".staging-"));
+  try {
+    const staged = { shasums: join(staging, SHASUMS_FILENAME), tarball: join(staging, EXPECTED_TARBALL_NAME), node: join(staging, nodeName) };
+    const cachedShasums = readOptionalRegular(finals.shasums, "Cached SHASUMS256.txt.asc");
+    const cachedTarball = readOptionalRegular(finals.tarball, `Cached ${EXPECTED_TARBALL_NAME}`);
+    let receipt;
+    if (cachedShasums && cachedTarball) {
+      writeNewFile(staged.shasums, cachedShasums.bytes, 0o600);
+      writeNewFile(staged.tarball, cachedTarball.bytes, 0o600);
+      receipt = await verify({ shasumsPath: staged.shasums, tarballPath: staged.tarball, outputNodePath: staged.node });
+    } else {
+      receipt = await verify({ downloadDir: staging, outputNodePath: staged.node, ...(fetchImpl ? { fetchImpl } : {}) });
+    }
+    const shasumsSha256 = sha256(readRegularFile(staged.shasums, { label: "Staged SHASUMS256.txt.asc" }).bytes);
+    await beforeAdoption?.({ staging, staged });
+    adoptNoClobber([
+      { staged: staged.shasums, final: finals.shasums, label: SHASUMS_FILENAME, sha256: shasumsSha256 },
+      { staged: staged.tarball, final: finals.tarball, label: EXPECTED_TARBALL_NAME, sha256: expected.tarballSha256 },
+      { staged: staged.node, final: finals.node, label: "authenticated Node runtime", sha256: expected.executableSha256, executable: true },
+    ]);
+    return receipt;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
   const value = (flag) => { const i = args.indexOf(flag); return i === -1 ? undefined : args[i + 1]; };
   const downloadDir = value("--authenticate-download");
@@ -331,23 +564,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
   const output = value("--output");
   try {
     if (!downloadDir || !outputNodePath) throw new Error("Usage: node-runtime-authority.mjs --authenticate-download <dir> --output-node <path> [--output <receipt.json>]");
-    mkdirSync(downloadDir, { recursive: true });
-    const shasumsPath = join(downloadDir, "SHASUMS256.txt.asc");
-    const tarballPath = join(downloadDir, EXPECTED_TARBALL_NAME);
-    if (!existsSync(shasumsPath) || !existsSync(tarballPath)) {
-      const base = `https://nodejs.org/dist/v${EXPECTED_NODE_VERSION}`;
-      for (const [url, path] of [[`${base}/SHASUMS256.txt.asc`, shasumsPath], [`${base}/${EXPECTED_TARBALL_NAME}`, tarballPath]]) {
-        const response = await fetch(url, { redirect: "error" });
-        if (!response.ok) throw new Error(`[NODE_AUTH_FAIL] Official Node release download failed: ${url} ${response.status}`);
-        const { writeFileSync } = await import("node:fs");
-        writeFileSync(path, new Uint8Array(await response.arrayBuffer()));
-      }
-    }
-    const receipt = await authenticateEmbeddedDarwinNode({ shasumsPath, tarballPath, outputNodePath });
+    const receipt = await authenticateDarwinNodeDownload({ downloadDir, outputNodePath });
     const text = `${JSON.stringify(receipt, null, 2)}\n`;
     if (output) {
       mkdirSync(dirname(resolve(output)), { recursive: true });
-      const { writeFileSync } = await import("node:fs");
       writeFileSync(resolve(output), text);
     }
     process.stdout.write(text);
