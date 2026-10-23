@@ -42,6 +42,10 @@ on:
         description: Retain passing candidates for 90 days (the public maximum) instead of 14
         type: boolean
         default: false
+      linux_closure:
+        description: Run the Linux ELF closure and pinned glibc consumer diagnostic (no release claim)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -625,6 +629,373 @@ jobs:
           if-no-files-found: warn
           retention-days: ${{ needs.plan.outputs.diagnostics_retention_days }}
           overwrite: false
+
+  linux_closure:
+    name: Linux ELF closure diagnostic (${{ matrix.arch }} / ${{ matrix.libc_lane }})
+    needs: [plan, linux-arm64, linux-x64]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        inputs.linux_closure == true &&
+        needs.plan.outputs.linux_arm64 == 'true' &&
+        needs.plan.outputs.linux_x64 == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Diagnostic lanes only. A baseline failure is retained negative evidence and never a release pass.
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
+            image: quay.io/pypa/manylinux_2_28_aarch64:2026.09.05-1@sha256:ad74e53b713f3b07d8c889c526dc0c6500da9827b45e38739570875fef52e28f
+            libc_lane: manylinux_2_28_baseline
+            glibc_floor: "2.28"
+            expected_runtime_glibc: "2.28"
+            expected_missing_gui: true
+            artifact: arm64
+            scenario: B
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
+            image: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+            libc_lane: debian_bookworm_glibc_2_36_newer
+            glibc_floor: ""
+            expected_runtime_glibc: "2.36"
+            expected_missing_gui: false
+            artifact: arm64
+            scenario: B
+          - arch: linux-x64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64:2026.09.05-1@sha256:53390351aeb4688114b02c36a23b3e6ce1166ee9b7afc5df1a4f776354fc764c
+            libc_lane: manylinux_2_28_baseline
+            glibc_floor: "2.28"
+            expected_runtime_glibc: "2.28"
+            expected_missing_gui: true
+            artifact: x64
+            scenario: C
+          - arch: linux-x64
+            runner: ubuntu-24.04
+            image: debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+            libc_lane: debian_bookworm_glibc_2_36_newer
+            glibc_floor: ""
+            expected_runtime_glibc: "2.36"
+            expected_missing_gui: false
+            artifact: x64
+            scenario: C
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+      options: --init
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # Download the exact same-run candidate and sealed evidence.
+    env:
+      NEBULAR_CLOSURE_ARCH: ${{ matrix.arch }}
+      NEBULAR_CLOSURE_IMAGE: ${{ matrix.image }}
+      NEBULAR_CLOSURE_LANE: ${{ matrix.libc_lane }}
+      NEBULAR_CLOSURE_GLIBC_FLOOR: ${{ matrix.glibc_floor }}
+      NEBULAR_CLOSURE_EXPECTED_RUNTIME_GLIBC: ${{ matrix.expected_runtime_glibc }}
+      NEBULAR_CLOSURE_EXPECTED_MISSING_GUI: ${{ matrix.expected_missing_gui }}
+      NEBULAR_CLOSURE_SCENARIO: ${{ matrix.scenario }}
+      NEBULAR_CLOSURE_PRODUCER_ARTIFACT_ID: ${{ matrix.artifact == 'arm64' && needs['linux-arm64'].outputs.artifact_id || needs['linux-x64'].outputs.artifact_id }}
+      NEBULAR_CLOSURE_PRODUCER_ARTIFACT_NAME: ${{ matrix.artifact == 'arm64' && needs.plan.outputs.linux_arm64_artifact || needs.plan.outputs.linux_x64_artifact }}
+      NEBULAR_CLOSURE_PRODUCER_EVIDENCE_SHA256: ${{ matrix.artifact == 'arm64' && needs['linux-arm64'].outputs.evidence_sha256 || needs['linux-x64'].outputs.evidence_sha256 }}
+      NEBULAR_RC_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - name: Prepare pinned diagnostic prerequisites
+        id: prerequisites
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          ROOT="$RUNNER_TEMP/nebular-closure"
+          REPORT="$ROOT/report"
+          mkdir -p "$REPORT" "$ROOT/artifact" "$ROOT/raw"
+          manager=unknown
+          install_status=0
+          smoke_install_status=0
+          gui_policy=baseline-no-gui-libraries
+          if [ "$NEBULAR_CLOSURE_LANE" = "debian_bookworm_glibc_2_36_newer" ]; then
+            gui_policy=debian-bookworm-consumer-gui-libraries
+          fi
+          if command -v apt-get >/dev/null 2>&1; then
+            manager=apt
+            apt-get update || install_status=$?
+            if [ "$install_status" -eq 0 ]; then
+              packages=(binutils ca-certificates file git procps tar xz-utils)
+              smoke_packages=(dbus dbus-x11 xauth xvfb)
+              if [ "$NEBULAR_CLOSURE_LANE" = "debian_bookworm_glibc_2_36_newer" ]; then
+                # The native producer requests libappindicator3-dev. Bookworm resolves that virtual
+                # dependency to Ayatana, whose runtime soname is libayatana-appindicator3.so.1.
+                packages+=(libayatana-appindicator3-1 libgtk-3-0 libjavascriptcoregtk-4.1-0 librsvg2-2 libsoup-3.0-0 libwebkit2gtk-4.1-0)
+              fi
+              apt-get install -y --no-install-recommends "${packages[@]}" || install_status=$?
+              if [ "$install_status" -eq 0 ]; then
+                apt-get install -y --no-install-recommends "${smoke_packages[@]}" || smoke_install_status=$?
+              fi
+            fi
+          elif command -v dnf >/dev/null 2>&1; then
+            manager=dnf
+            packages=(binutils ca-certificates file git procps tar xz)
+            smoke_packages=(dbus-daemon dbus-tools xorg-x11-server-Xvfb xorg-x11-xauth)
+            if [ "$NEBULAR_CLOSURE_LANE" = "debian_bookworm_glibc_2_36_newer" ]; then
+              printf '%s\n' 'consumer GUI package set is only defined for the pinned Debian image' > "$REPORT/unsupported-consumer-manager.txt"
+              install_status=1
+            else
+              dnf --setopt=install_weak_deps=False install -y "${packages[@]}" || install_status=$?
+              if [ "$install_status" -eq 0 ]; then
+                dnf --setopt=install_weak_deps=False install -y "${smoke_packages[@]}" || smoke_install_status=$?
+              fi
+            fi
+          elif command -v microdnf >/dev/null 2>&1; then
+            manager=microdnf
+            packages=(binutils ca-certificates file git procps tar xz)
+            smoke_packages=(dbus-daemon dbus-tools xorg-x11-server-Xvfb xorg-x11-xauth)
+            if [ "$NEBULAR_CLOSURE_LANE" = "debian_bookworm_glibc_2_36_newer" ]; then
+              printf '%s\n' 'consumer GUI package set is only defined for the pinned Debian image' > "$REPORT/unsupported-consumer-manager.txt"
+              install_status=1
+            else
+              microdnf --setopt=install_weak_deps=False install -y "${packages[@]}" || install_status=$?
+              if [ "$install_status" -eq 0 ]; then
+                microdnf --setopt=install_weak_deps=False install -y "${smoke_packages[@]}" || smoke_install_status=$?
+              fi
+            fi
+          else
+            printf '%s\n' 'no supported package manager in pinned closure image' > "$REPORT/no-package-manager.txt"
+            install_status=1
+          fi
+          missing=""
+          for tool in file readelf ldd sha256sum tar git; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing="${missing:+$missing,}$tool"
+            fi
+          done
+          if [ -n "$missing" ]; then install_status=1; fi
+          smoke_missing=""
+          for tool in xvfb-run dbus-run-session; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              smoke_missing="${smoke_missing:+$smoke_missing,}$tool"
+            fi
+          done
+          if [ "$NEBULAR_CLOSURE_LANE" = "debian_bookworm_glibc_2_36_newer" ] && { [ "$smoke_install_status" -ne 0 ] || [ -n "$smoke_missing" ]; }; then
+            install_status=1
+          fi
+          if command -v dpkg-query >/dev/null 2>&1; then
+            dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' | sort > "$REPORT/package-inventory.txt" || install_status=1
+          elif command -v rpm >/dev/null 2>&1; then
+            rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$REPORT/package-inventory.txt" || install_status=1
+          else
+            printf '%s\n' 'package inventory tool unavailable' > "$REPORT/package-inventory.txt"
+            install_status=1
+          fi
+          {
+            printf 'schema=nebular.linux-closure-prerequisites-v2\n'
+            printf 'manager=%s\ninstall_status=%s\nmissing_tools=%s\nsmoke_install_status=%s\nsmoke_missing_tools=%s\nsmoke_available=%s\n' "$manager" "$install_status" "$missing" "$smoke_install_status" "$smoke_missing" "$([ -z "$smoke_missing" ] && echo true || echo false)"
+            printf 'lane=%s\nexpected_missing_gui=%s\ngui_policy=%s\n' "$NEBULAR_CLOSURE_LANE" "$NEBULAR_CLOSURE_EXPECTED_MISSING_GUI" "$gui_policy"
+          } > "$REPORT/install-result.txt"
+          exit "$install_status"
+      - name: Check out the exact reviewed source
+        if: always()
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Trust exactly this job's workspace for Git
+        if: always()
+        run: |
+          case "$GITHUB_WORKSPACE" in /*) ;; *) echo "::error::GITHUB_WORKSPACE is not absolute"; exit 1 ;; esac
+          case "$GITHUB_WORKSPACE" in *'*'*) echo "::error::GITHUB_WORKSPACE contains a wildcard"; exit 1 ;; esac
+          test "$(pwd -P)" = "$GITHUB_WORKSPACE"
+          test -d "$GITHUB_WORKSPACE/.git"
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          git config --show-origin --get-all safe.directory
+          test -z "$(git config --get-all safe.directory | grep -Fxv -e "$GITHUB_WORKSPACE" || true)"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+      - name: Bind the source commit and tree
+        if: always()
+        run: |
+          test "$(git rev-parse HEAD)" = "$NEBULAR_RC_SOURCE_SHA"
+          SOURCE_TREE="$(git rev-parse 'HEAD^{tree}')"
+          test "$SOURCE_TREE" != ""
+          echo "NEBULAR_RC_SOURCE_TREE=$SOURCE_TREE" >> "$GITHUB_ENV"
+      - name: Set up the pinned diagnostic Node runtime
+        if: always()
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Record the pinned runtime and GUI-library observation
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          ROOT="$RUNNER_TEMP/nebular-closure"
+          REPORT="$ROOT/report"
+          cat /etc/os-release > "$REPORT/os-release.txt" 2>&1 || true
+          node --input-type=module - "$REPORT/system-library-probe.json" "$NEBULAR_CLOSURE_EXPECTED_MISSING_GUI" <<'NODE'
+          import { spawnSync } from "node:child_process";
+          import { writeFileSync } from "node:fs";
+          const [output, expected] = process.argv.slice(2);
+          const specs = [
+            ["gtk3", "libgtk-3.so.0"],
+            ["webkitgtk-4.1", "libwebkit2gtk-4.1.so.0"],
+            ["javascriptcoregtk-4.1", "libjavascriptcoregtk-4.1.so.0"],
+            ["libsoup-3", "libsoup-3.0.so.0"],
+            ["librsvg", "librsvg-2.so.2"],
+            ["appindicator", "libayatana-appindicator3.so.1"],
+          ];
+          const result = spawnSync("ldconfig", ["-p"], { encoding: "utf8" });
+          const catalogue = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+          const libraries = specs.map(([id, soname]) => ({ id, soname, available: result.status === 0 && catalogue.includes(soname) }));
+          const missing = libraries.filter((library) => !library.available).map((library) => library.id);
+          writeFileSync(output, `${JSON.stringify({ schema: "nebular.linux-system-library-probe-v1", expectedMissingGui: expected === "true", probeStatus: result.status, libraries, missing }, null, 2)}\n`, { flag: "wx" });
+          NODE
+      - name: Download the exact raw candidate for this architecture
+        if: matrix.artifact == 'arm64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['linux-arm64'].outputs.artifact_id }}
+          path: ${{ runner.temp }}/nebular-closure/artifact
+      - name: Download the exact raw candidate for this architecture
+        if: matrix.artifact == 'x64'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['linux-x64'].outputs.artifact_id }}
+          path: ${{ runner.temp }}/nebular-closure/artifact
+      - name: Bind the sealed archive and inspect every ELF member
+        id: closure
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          ROOT="$RUNNER_TEMP/nebular-closure"
+          REPORT="$ROOT/report"
+          mkdir -p "$REPORT" "$ROOT/raw"
+          SOURCE_TREE="${NEBULAR_RC_SOURCE_TREE:?source tree binding is missing}"
+          ARTIFACT_NAME="${NEBULAR_CLOSURE_PRODUCER_ARTIFACT_NAME:?producer artifact name binding is missing}"
+          case "$ARTIFACT_NAME" in
+            ""|.|..|*/*|*\\*) echo "::error::producer artifact name is not a single path component" >&2; exit 1 ;;
+          esac
+          ARTIFACT_ROOT="$ROOT/artifact/$ARTIFACT_NAME"
+          mapfile -d '' ARTIFACT_ENTRIES < <(find "$ROOT/artifact" -mindepth 1 -maxdepth 1 -print0)
+          test "${#ARTIFACT_ENTRIES[@]}" -eq 1
+          test "${ARTIFACT_ENTRIES[0]}" = "$ARTIFACT_ROOT"
+          test -d "$ARTIFACT_ROOT" && test ! -L "$ARTIFACT_ROOT"
+          closure_exit=0
+          node tools/native-rc-linux-closure.mjs \
+            --arch "$NEBULAR_CLOSURE_ARCH" \
+            --lane "$NEBULAR_CLOSURE_LANE" \
+            --image "$NEBULAR_CLOSURE_IMAGE" \
+            --candidate-dir "$ARTIFACT_ROOT/candidate" \
+            --package-record "$ARTIFACT_ROOT/evidence/package-record.json" \
+            --sealed-evidence "$ARTIFACT_ROOT/evidence/rc-evidence.json" \
+            --extract-dir "$ROOT/raw" \
+            --source-commit "$NEBULAR_RC_SOURCE_SHA" \
+            --source-tree "$SOURCE_TREE" \
+            --sealed-evidence-sha256 "$NEBULAR_CLOSURE_PRODUCER_EVIDENCE_SHA256" \
+            --expected-runtime-glibc "$NEBULAR_CLOSURE_EXPECTED_RUNTIME_GLIBC" \
+            --system-library-probe "$REPORT/system-library-probe.json" \
+            --glibc-floor "$NEBULAR_CLOSURE_GLIBC_FLOOR" \
+            --report "$REPORT/linux-closure.json" || closure_exit=$?
+          printf 'closure_exit=%s\n' "$closure_exit" > "$REPORT/closure-status.txt"
+      - name: Run the maintained consumer smoke harness
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          ROOT="$RUNNER_TEMP/nebular-closure"
+          REPORT="$ROOT/report"
+          RAW_ROOT="$ROOT/raw/theme-forge-nebular-fusion"
+          smoke_status=127
+          if [ ! -s "$REPORT/linux-closure.json" ]; then
+            printf '%s\n' 'consumer smoke not run because the closure report is missing' > "$REPORT/consumer.log"
+            printf '%s\n' '127' > "$REPORT/consumer-status.txt"
+            exit 0
+          fi
+          if node -e 'const report = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); process.exit(report.classification === "identity" ? 0 : 1);' "$REPORT/linux-closure.json"; then
+            printf '%s\n' 'consumer smoke skipped because candidate identity failed' > "$REPORT/consumer.log"
+            printf '%s\n' 'identity-skipped' > "$REPORT/consumer-status.txt"
+            exit 0
+          fi
+          if [ -d "$RAW_ROOT" ] && command -v node >/dev/null 2>&1 && command -v xvfb-run >/dev/null 2>&1 && command -v dbus-run-session >/dev/null 2>&1; then
+            mkdir -p "$REPORT/smoke"
+            smoke_status=0
+            xvfb-run -a -s '-screen 0 1280x800x24' dbus-run-session -- \
+              node tools/native-rc-smoke.mjs \
+                --platform "$NEBULAR_CLOSURE_ARCH" \
+                --scenario "$NEBULAR_CLOSURE_SCENARIO" \
+                --launch-root "$RAW_ROOT" \
+                --checkout . \
+                --evidence "$REPORT/smoke" \
+                --source raw-archive \
+                --label "$NEBULAR_CLOSURE_ARCH-$NEBULAR_CLOSURE_LANE" \
+              > "$REPORT/consumer.log" 2>&1 || smoke_status=$?
+          else
+            printf '%s\n' 'consumer prerequisites unavailable or exact payload root was not extracted' > "$REPORT/consumer.log"
+          fi
+          printf '%s\n' "$smoke_status" > "$REPORT/consumer-status.txt"
+          exit "$smoke_status"
+      - name: Finalize the fail-closed diagnostic result
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          ROOT="$RUNNER_TEMP/nebular-closure"
+          REPORT="$ROOT/report"
+          if [ ! -s "$REPORT/linux-closure.json" ]; then
+            printf '%s\n' '{"schema":"nebular.linux-elf-closure-v3","status":"fail","classification":"environment","negativeEvidence":false,"problems":["closure helper did not produce a report"]}' > "$REPORT/linux-closure.json"
+          fi
+          if [ ! -s "$REPORT/install-result.txt" ]; then printf '%s\n' 'install_status=missing' > "$REPORT/install-result.txt"; fi
+          if [ ! -s "$REPORT/closure-status.txt" ]; then printf '%s\n' 'closure_exit=missing' > "$REPORT/closure-status.txt"; fi
+          if [ ! -s "$REPORT/consumer-status.txt" ]; then printf '%s\n' '127' > "$REPORT/consumer-status.txt"; fi
+          node --input-type=module - "$REPORT/linux-closure.json" "$REPORT/install-result.txt" "$REPORT/closure-status.txt" "$REPORT/consumer-status.txt" "$REPORT/result.json" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const [closurePath, installPath, closureStatusPath, consumerStatusPath, resultPath] = process.argv.slice(2);
+          const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+          const install = readFileSync(installPath, "utf8");
+          const closureStatus = readFileSync(closureStatusPath, "utf8").trim();
+          const consumerStatus = readFileSync(consumerStatusPath, "utf8").trim();
+          const installOk = /^install_status=0$/m.test(install);
+          let classification = "environment";
+          if (installOk) {
+            classification = closure.classification ?? (closure.status === "pass" ? "pass" : "identity");
+            if (closure.status !== "pass" || closureStatus !== "closure_exit=0") classification = classification === "pass" ? "environment" : classification;
+            else if (consumerStatus !== "0") classification = "smoke";
+            else classification = "pass";
+          }
+          const consumerSkipped = consumerStatus === "identity-skipped";
+          const passed = installOk && closure.status === "pass" && closureStatus === "closure_exit=0" && consumerStatus === "0" && classification === "pass";
+          const result = { schema: "nebular.linux-closure-result-v3", status: passed ? "pass" : "fail", classification, negativeEvidence: classification.startsWith("closure-negative:"), installOk, producerArtifactId: process.env.NEBULAR_CLOSURE_PRODUCER_ARTIFACT_ID ?? null, producerArtifactName: process.env.NEBULAR_CLOSURE_PRODUCER_ARTIFACT_NAME ?? null, producerEvidenceSha256: process.env.NEBULAR_CLOSURE_PRODUCER_EVIDENCE_SHA256 ?? null, closureStatus: closure.status ?? "missing", consumerStatus, source: closure.source ?? null, runtimeGlibc: closure.runtimeGlibc ?? null, glibcMinimum: closure.glibcMinimum ?? null, environment: { osRelease: "os-release.txt", systemLibraryProbe: "system-library-probe.json" }, problems: [...(closure.problems ?? []), ...(consumerStatus !== "0" && !consumerSkipped ? ["consumer smoke failed"] : [])] };
+          writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
+          writeFileSync(resultPath.replace(/result\.json$/, "status.txt"), `${passed ? 0 : 1}\n`, { flag: "wx" });
+          process.exitCode = passed ? 0 : 1;
+          NODE
+      - name: Name this closure evidence attempt
+        id: closure-name
+        if: always()
+        shell: bash
+        run: echo "name=nebular-rc-diag-linux-closure-${NEBULAR_CLOSURE_ARCH}-${NEBULAR_CLOSURE_LANE}-${GITHUB_SHA:0:12}-r${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      - name: Upload closure evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.closure-name.outputs.name }}
+          path: ${{ runner.temp }}/nebular-closure/report/
+          if-no-files-found: error
+          retention-days: ${{ needs.plan.outputs.diagnostics_retention_days }}
+          compression-level: 0
+          overwrite: false
+      - name: Enforce the qualification result for this diagnostic lane
+        if: always()
+        shell: bash
+        run: |
+          test -s "$RUNNER_TEMP/nebular-closure/report/status.txt"
+          test "$(cat "$RUNNER_TEMP/nebular-closure/report/status.txt")" = 0
 
   rc-index:
     name: Release-candidate catalog
