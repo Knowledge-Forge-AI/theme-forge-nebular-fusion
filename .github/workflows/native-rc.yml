@@ -1,4 +1,4 @@
-name: GitHub token draft-asset read capability
+name: GitHub token direct binary asset capability
 
 on:
   workflow_dispatch:
@@ -157,13 +157,6 @@ jobs:
                   urllib.parse.quote(asset_id_text, safe=""),
               )
               url = "https://" + API + path
-              metadata_bytes, metadata_redirects = get_asset(url, token, "application/vnd.github+json", MAX)
-              metadata = json.loads(metadata_bytes.decode("utf-8"))
-              need(isinstance(metadata, dict), "metadata_shape")
-              need(metadata.get("id") == int(asset_id_text), "metadata_id")
-              need(metadata.get("name") == asset_name, "metadata_name")
-              need(metadata.get("size") == expected_size, "metadata_size")
-              need(metadata.get("state") == "uploaded", "metadata_state")
               asset_bytes, body_redirects = get_asset(url, token, "application/octet-stream", MAX)
               need(len(asset_bytes) == expected_size, "body_size")
               actual_sha = hashlib.sha256(asset_bytes).hexdigest()
@@ -176,7 +169,7 @@ jobs:
                   "assetName": asset_name,
                   "bytes": expected_size,
                   "sha256": actual_sha,
-                  "metadataRedirects": metadata_redirects,
+                  "metadataRequested": False,
                   "bodyRedirects": body_redirects,
                   "authorization": "contents:read",
                   "releaseEnumeration": False,
