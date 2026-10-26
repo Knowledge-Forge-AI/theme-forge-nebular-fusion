@@ -29,6 +29,8 @@ permissions:
 
 jobs:
   read-one-asset:
+    permissions:
+      contents: write
     name: Read one exact asset (${{ matrix.label }})
     strategy:
       fail-fast: false
@@ -171,7 +173,7 @@ jobs:
                   "sha256": actual_sha,
                   "metadataRequested": False,
                   "bodyRedirects": body_redirects,
-                  "authorization": "contents:read",
+                  "authorization": "contents:write; GET-only",
                   "releaseEnumeration": False,
                   "mutation": False,
               }, sort_keys=True, separators=(",", ":")))
