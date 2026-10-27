@@ -1,19 +1,55 @@
 // @vitest-environment node
 import { describe, expect, it, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   collectFrontendSupplementalNotices,
   generateReleaseNotices,
   renderThirdPartyNoticesJson,
 } from "../tools/release-notices.mjs";
 
-const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname);
-const SOURCE_STUDIO = join(REPO_ROOT, "apps/studio");
-const SOURCE_SUPPLEMENTAL = join(SOURCE_STUDIO, "legal/supplemental");
-const SOURCE_FIXTURE = join(REPO_ROOT, "packages/stellar-loom/fixture");
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+
+function resolveNoticeSourceLayout() {
+  const candidates = [
+    {
+      kind: "monorepo",
+      root: resolve(TEST_DIR, "../../.."),
+      studio: resolve(TEST_DIR, "../../..", "apps/studio"),
+      supplemental: resolve(TEST_DIR, "../../..", "apps/studio/legal/supplemental"),
+      fixture: resolve(TEST_DIR, "../../..", "packages/stellar-loom/fixture"),
+    },
+    {
+      kind: "publicComposition",
+      root: resolve(TEST_DIR, ".."),
+      studio: resolve(TEST_DIR, ".."),
+      supplemental: resolve(TEST_DIR, "..", "legal/supplemental"),
+      fixture: resolve(TEST_DIR, "..", "loom-preview-source"),
+    },
+  ];
+  const matches = candidates.filter((candidate) => (
+    existsSync(candidate.studio)
+    && existsSync(join(candidate.studio, "package.json"))
+    && existsSync(join(candidate.supplemental, "manifest.json"))
+    && existsSync(join(candidate.fixture, "package.json"))
+    && existsSync(join(candidate.fixture, "package-lock.json"))
+    && (candidate.kind === "monorepo"
+      ? existsSync(resolve(candidate.root, "apps/studio"))
+      : !existsSync(resolve(candidate.root, "apps/studio")))
+  ));
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one supported notice source layout, found ${matches.length}`);
+  }
+  return matches[0];
+}
+
+const SOURCE_LAYOUT = resolveNoticeSourceLayout();
+const SOURCE_STUDIO = SOURCE_LAYOUT.studio;
+const SOURCE_SUPPLEMENTAL = SOURCE_LAYOUT.supplemental;
+const SOURCE_FIXTURE = SOURCE_LAYOUT.fixture;
 const roots = [];
 
 afterEach(() => {
@@ -27,9 +63,13 @@ function sha256(bytes) {
 function setup() {
   const root = mkdtempSync(join(tmpdir(), "nebular-release-notices-"));
   roots.push(root);
-  const studio = join(root, "apps/studio");
-  const supplemental = join(studio, "legal/supplemental");
-  const fixture = join(root, "packages/stellar-loom/fixture");
+  const studio = SOURCE_LAYOUT.kind === "monorepo" ? join(root, "apps/studio") : root;
+  const supplemental = SOURCE_LAYOUT.kind === "monorepo"
+    ? join(studio, "legal/supplemental")
+    : join(root, "legal/supplemental");
+  const fixture = SOURCE_LAYOUT.kind === "monorepo"
+    ? join(root, "packages/stellar-loom/fixture")
+    : join(root, "loom-preview-source");
   mkdirSync(join(studio, "legal"), { recursive: true });
   cpSync(SOURCE_SUPPLEMENTAL, supplemental, { recursive: true });
   mkdirSync(studio, { recursive: true });

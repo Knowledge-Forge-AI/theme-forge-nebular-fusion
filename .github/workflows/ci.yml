@@ -240,7 +240,13 @@ jobs:
         run: node tools/ci/verify-tauri-resource-closure.mjs --build-ready
       - name: Rust qualification gates
         working-directory: src-tauri
+        env:
+          TFSB_APP_THEME_TEST_PAYLOAD_ROOT: ${{ github.workspace }}/src-tauri/solar-sail-payload
         run: |
+          test "$TFSB_APP_THEME_TEST_PAYLOAD_ROOT" = "$GITHUB_WORKSPACE/src-tauri/solar-sail-payload"
+          test -d "$TFSB_APP_THEME_TEST_PAYLOAD_ROOT"
+          test -f "$TFSB_APP_THEME_TEST_PAYLOAD_ROOT/solar-sail-binding.json"
+          test -f "$GITHUB_WORKSPACE/src-tauri/solar-sail-adapter/solar-sail-adapter.mjs"
           rustc --version | grep '^rustc 1.98.0 '
           cargo --version | grep '^cargo 1.98.0 '
           cargo fmt --all -- --check

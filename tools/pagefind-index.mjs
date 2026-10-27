@@ -13,9 +13,10 @@
 // (Linux arm64 and x64 differ only in the gzip header time). PAGEFIND_WASM_PAYLOADS pins those decoded
 // payloads so a cross-platform comparison can accept exactly these members and nothing else.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inspectSnapshot, readRegularSnapshot } from "./fs-snapshot.mjs";
 
@@ -66,6 +67,50 @@ export function pagefindOutputManifest(outputPath) {
   visit(outputPath);
   if (files.length === 0) throw new Error(`Pagefind output is empty: ${outputPath}`);
   return files.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+}
+
+/**
+ * Materialize the complete in-memory output returned by Pagefind's locked getFiles API.
+ * All members are validated before the fresh output directory is created, and each file is
+ * created with an exclusive synchronous write so an incomplete async writer cannot be promoted.
+ * @param {string} outputPath
+ * @param {{ path: string, content: Uint8Array }[]} files
+ * @returns {{ path: string, bytes: number, sha256: string }[]}
+ */
+export function materializePagefindFiles(outputPath, files) {
+  if (!Array.isArray(files) || files.length === 0) throw new Error("Pagefind getFiles returned no members");
+  const members = files.map((file, index) => {
+    if (!file || typeof file.path !== "string") throw new Error(`Pagefind getFiles member ${index} has no path`);
+    const path = file.path;
+    const segments = path.split("/");
+    if (!path || path.startsWith("/") || path.includes("\\") || path.includes("\0") || path.includes(":")) {
+      throw new Error(`Pagefind getFiles member has an unsafe path: ${path}`);
+    }
+    if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+      throw new Error(`Pagefind getFiles member has an unsafe path: ${path}`);
+    }
+    if (!(file.content instanceof Uint8Array)) throw new Error(`Pagefind getFiles member has non-byte content: ${path}`);
+    const content = Buffer.from(file.content);
+    if (content.length === 0) throw new Error(`Pagefind getFiles member is zero-byte: ${path}`);
+    return { path, content };
+  });
+  const paths = new Set(members.map(({ path }) => path));
+  if (paths.size !== members.length) throw new Error("Pagefind getFiles returned duplicate member paths");
+  for (const path of paths) {
+    const segments = path.split("/");
+    for (let length = 1; length < segments.length; length += 1) {
+      const parent = segments.slice(0, length).join("/");
+      if (paths.has(parent)) throw new Error(`Pagefind getFiles returned parent-colliding paths: ${parent} and ${path}`);
+    }
+  }
+  const ordered = members.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+  mkdirSync(outputPath, { mode: 0o755 });
+  for (const { path, content } of ordered) {
+    const destination = join(outputPath, ...path.split("/"));
+    mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
+    writeFileSync(destination, content, { flag: "wx", mode: 0o644 });
+  }
+  return ordered.map(({ path, content }) => ({ path, bytes: content.length, sha256: createHash("sha256").update(content).digest("hex") }));
 }
 
 /** @param {string} path @returns {string} */
@@ -122,10 +167,15 @@ export function sitePages(siteDir) {
 // Runs in a child Node process so the Pagefind service binary can be pinned through its documented
 // PAGEFIND_EXTENDED_BINARY_PATH override without touching this process's environment.
 const INDEXER = `
-const [library, siteDir, outputPath, pagesJson] = process.argv.slice(1);
+const [library, helper, siteDir, outputPath, pagesJson] = process.argv.slice(1);
 const { readFileSync } = await import("node:fs");
 const pagefind = await import(library);
-const fail = (label, response) => { if (response.errors.length) throw new Error(label + ": " + response.errors.join("; ")); return response; };
+const { materializePagefindFiles } = await import(helper);
+const fail = (label, response) => {
+  if (!response || !Array.isArray(response.errors)) throw new Error(label + ": malformed response");
+  if (response.errors.length) throw new Error(label + ": " + response.errors.join("; "));
+  return response;
+};
 let indexed = 0;
 try {
   const { index } = fail("createIndex", await pagefind.createIndex());
@@ -134,7 +184,8 @@ try {
     fail(sourcePath, await index.addHTMLFile({ sourcePath, content }));
     indexed += 1;
   }
-  fail("writeFiles", await index.writeFiles({ outputPath }));
+  const { files } = fail("getFiles", await index.getFiles());
+  materializePagefindFiles(outputPath, files);
 } finally {
   await pagefind.close();
 }
@@ -159,7 +210,7 @@ export function reindexPagefindSite(siteDir, { nodeModules }) {
   const cwd = mkdtempSync(join(tmpdir(), "nebular-pagefind-"));
   try {
     const library = pathToFileURL(join(nodeModules, "pagefind/lib/index.js")).href;
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", INDEXER, library, siteDir, staging, JSON.stringify(pages)], {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", INDEXER, library, import.meta.url, siteDir, staging, JSON.stringify(pages)], {
       cwd,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,

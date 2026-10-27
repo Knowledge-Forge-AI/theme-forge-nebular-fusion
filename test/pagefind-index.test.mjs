@@ -5,11 +5,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { PAGEFIND_WASM_PAYLOADS, pagefindOutputManifest, reindexPagefindSite, sitePages } from "../tools/pagefind-index.mjs";
+import { PAGEFIND_WASM_PAYLOADS, materializePagefindFiles, pagefindOutputManifest, reindexPagefindSite, sitePages } from "../tools/pagefind-index.mjs";
 
 const NODE_MODULES = new URL("../loom-preview-source/node_modules", import.meta.url).pathname;
 const installed = existsSync(join(NODE_MODULES, "pagefind/package.json"));
@@ -32,6 +32,49 @@ function site(order) {
   return root;
 }
 
+function fakePagefindNodeModules() {
+  const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-fake-"));
+  roots.push(root);
+  mkdirSync(join(root, "pagefind/lib"), { recursive: true });
+  writeFileSync(join(root, "pagefind/package.json"), '{"name":"pagefind","version":"1.5.2","type":"module"}\n');
+  const fakeIndex = [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    "let pendingWrite;",
+    'const css = Buffer.from("complete css\\n");',
+    'const entry = Buffer.from("{}\\n");',
+    "const completeFiles = () => ({ errors: [], files: [",
+    '  { path: "pagefind-component-ui.css", content: Buffer.from(css) },',
+    '  { path: "pagefind-entry.json", content: Buffer.from(entry) },',
+    "] });",
+    "export const createIndex = async () => ({ errors: [], index: {",
+    "  addHTMLFile: async () => ({ errors: [] }),",
+    "  getFiles: async () => completeFiles(),",
+    "  writeFiles: async ({ outputPath }) => {",
+    "    mkdirSync(outputPath, { recursive: true });",
+    '    writeFileSync(join(outputPath, "pagefind-component-ui.css"), Buffer.alloc(0));',
+    '    writeFileSync(join(outputPath, "pagefind-entry.json"), entry);',
+    '    pendingWrite = setTimeout(() => writeFileSync(join(outputPath, "pagefind-component-ui.css"), css), 1000);',
+    "    return { errors: [], outputPath };",
+    "  },",
+    "} });",
+    "export const close = async () => {",
+    "  if (pendingWrite) clearTimeout(pendingWrite);",
+    "  pendingWrite = undefined;",
+    "};",
+  ].join("\n");
+  writeFileSync(join(root, "pagefind/lib/index.js"), fakeIndex);
+  for (const platform of ["darwin-arm64", "linux-arm64", "linux-x64", "windows-x64"]) {
+    const packageRoot = join(root, "@pagefind", platform);
+    mkdirSync(join(packageRoot, "bin"), { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), `{"name":"@pagefind/${platform}","version":"1.5.2"}\n`);
+    const binary = join(packageRoot, "bin", "pagefind_extended");
+    writeFileSync(binary, "locked fake Pagefind executable sentinel\n");
+    chmodSync(binary, 0o755);
+  }
+  return root;
+}
+
 function inventory(root) {
   const files = {};
   const visit = (dir) => {
@@ -46,6 +89,38 @@ function inventory(root) {
 }
 
 describe("Pagefind output completeness contract", () => {
+  it("materializes complete in-memory members before promotion", () => {
+    const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-materialize-"));
+    roots.push(root);
+    const output = join(root, "pagefind");
+    materializePagefindFiles(output, [
+      { path: "index/pagefind-entry.json", content: Buffer.from("{}\n") },
+      { path: "pagefind-component-ui.css", content: Buffer.from("body {}\n") },
+    ]);
+    expect(pagefindOutputManifest(output)).toEqual([
+      { path: "index/pagefind-entry.json", bytes: 3, sha256: sha256(Buffer.from("{}\n")) },
+      { path: "pagefind-component-ui.css", bytes: 8, sha256: sha256(Buffer.from("body {}\n")) },
+    ]);
+  });
+
+  it("rejects empty, unsafe, duplicate, and parent-colliding members before output creation", () => {
+    const cases = [
+      [{ path: "empty.bin", content: Buffer.alloc(0) }],
+      [{ path: "../escape.bin", content: Buffer.from("x") }],
+      [{ path: "/absolute.bin", content: Buffer.from("x") }],
+      [{ path: "back\\slash.bin", content: Buffer.from("x") }],
+      [{ path: "same.bin", content: Buffer.from("x") }, { path: "same.bin", content: Buffer.from("y") }],
+      [{ path: "member", content: Buffer.from("x") }, { path: "member/child.bin", content: Buffer.from("y") }],
+    ];
+    for (const files of cases) {
+      const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-materialize-reject-"));
+      roots.push(root);
+      const output = join(root, "pagefind");
+      expect(() => materializePagefindFiles(output, files)).toThrow();
+      expect(existsSync(output)).toBe(false);
+    }
+  });
+
   it("rejects a zero-byte member before output promotion", () => {
     const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-output-contract-"));
     roots.push(root);
@@ -78,6 +153,19 @@ describe("Pagefind output completeness contract", () => {
     const fifo = join(root, "member.fifo");
     execFileSync("mkfifo", [fifo]);
     expect(() => pagefindOutputManifest(root)).toThrow(/unsupported type/);
+  });
+
+  it("materializes getFiles before the child closes a pending writer", () => {
+    const root = site(["index.html"]);
+    const nodeModules = fakePagefindNodeModules();
+    const result = reindexPagefindSite(root, { nodeModules });
+    expect(result.pages).toEqual(["index.html"]);
+    expect(readFileSync(join(root, "pagefind", "pagefind-component-ui.css"), "utf8")).toBe("complete css\n");
+    expect(pagefindOutputManifest(join(root, "pagefind")).map(({ path, bytes }) => ({ path, bytes }))).toEqual([
+      { path: "pagefind-component-ui.css", bytes: 13 },
+      { path: "pagefind-entry.json", bytes: 3 },
+    ]);
+    expect(readdirSync(root).some((name) => name.startsWith(".nebular-pagefind-stage-"))).toBe(false);
   });
 });
 

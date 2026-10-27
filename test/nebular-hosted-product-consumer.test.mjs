@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
@@ -51,7 +51,50 @@ import {
 } from "../tools/nebular-hosted-product-consumer.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, "../../..");
+const CONSUMER_LAYOUT_TOOL_FILES = [
+  "native-rc-package.mjs",
+  "platform-targets.mjs",
+  "native-launcher.mjs",
+  "native-runtime.mjs",
+  "fs-snapshot.mjs",
+  "candidate-provenance.mjs",
+];
+
+function resolveConsumerSourceLayout() {
+  const candidates = [
+    {
+      kind: "monorepo",
+      root: resolve(__dirname, "../../.."),
+      toolsRoot: resolve(__dirname, "../tools"),
+      packagePath: resolve(__dirname, "../package.json"),
+      tauriConfigPath: resolve(__dirname, "../src-tauri/tauri.conf.json"),
+    },
+    {
+      kind: "publicComposition",
+      root: resolve(__dirname, ".."),
+      toolsRoot: resolve(__dirname, "../tools"),
+      packagePath: resolve(__dirname, "../package.json"),
+      tauriConfigPath: resolve(__dirname, "../src-tauri/tauri.conf.json"),
+    },
+  ];
+  const matches = candidates.filter((candidate) => (
+    existsSync(resolve(candidate.root, "LICENSE"))
+    && existsSync(resolve(candidate.root, "NOTICE"))
+    && existsSync(candidate.packagePath)
+    && existsSync(candidate.tauriConfigPath)
+    && CONSUMER_LAYOUT_TOOL_FILES.every((file) => existsSync(resolve(candidate.toolsRoot, file)))
+    && (candidate.kind === "monorepo"
+      ? existsSync(resolve(candidate.root, "apps/studio"))
+      : !existsSync(resolve(candidate.root, "apps/studio")))
+  ));
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one supported consumer source layout, found ${matches.length}`);
+  }
+  return matches[0];
+}
+
+const CONSUMER_SOURCE_LAYOUT = resolveConsumerSourceLayout();
+const REPO_ROOT = CONSUMER_SOURCE_LAYOUT.root;
 const CONSUMER_TOOL_PATH = resolve(__dirname, "../tools/nebular-hosted-product-consumer.mjs");
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -1269,19 +1312,12 @@ try {
   await writeFile(join(checkoutDir, "README.md"), "test\n");
   await copyFile(join(REPO_ROOT, "LICENSE"), join(checkoutDir, "LICENSE"));
   await copyFile(join(REPO_ROOT, "NOTICE"), join(checkoutDir, "NOTICE"));
-  await copyFile(join(REPO_ROOT, "apps/studio/package.json"), join(checkoutDir, "package.json"));
-  await copyFile(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json"), join(tauriDir, "tauri.conf.json"));
+  await copyFile(CONSUMER_SOURCE_LAYOUT.packagePath, join(checkoutDir, "package.json"));
+  await copyFile(CONSUMER_SOURCE_LAYOUT.tauriConfigPath, join(tauriDir, "tauri.conf.json"));
 
   // Copy real maintained native-rc-package.mjs and its sibling modules into checkout/tools/
-  for (const toolFile of [
-    "native-rc-package.mjs",
-    "platform-targets.mjs",
-    "native-launcher.mjs",
-    "native-runtime.mjs",
-    "fs-snapshot.mjs",
-    "candidate-provenance.mjs",
-  ]) {
-    await copyFile(join(REPO_ROOT, "apps/studio/tools", toolFile), join(tools, toolFile));
+  for (const toolFile of CONSUMER_LAYOUT_TOOL_FILES) {
+    await copyFile(join(CONSUMER_SOURCE_LAYOUT.toolsRoot, toolFile), join(tools, toolFile));
   }
 
   const allResourceDirs = Object.keys(RESOURCE_PREPARERS);
