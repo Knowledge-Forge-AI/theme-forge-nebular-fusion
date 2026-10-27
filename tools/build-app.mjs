@@ -80,6 +80,8 @@ const pathPolicy = sourceAuthority ? await sourceBuildPathPolicy(sourceAuthority
 if (pathPolicy) flags.push(...sourcePathRemapFlags(pathPolicy,
   defaultRemaps.map(([path, replacement]) => ({ path, replacement }))));
 else for (const [source, replacement] of defaultRemaps) flags.push(`--remap-path-prefix=${source}=${replacement}`);
+// Omit Darwin linker debug-object records that retain absolute archive paths.
+if (productTarget.os === "darwin") flags.push("-Clink-arg=-Wl,-S");
 const forbiddenPaths = [homedir(), root, target, process.env.CARGO_HOME,
   ...(pathPolicy?.forbiddenPrefixes ?? [])].filter(Boolean);
 const tauriCargoTargetDir = rustTargetPlan.nestedCargoTargetDir

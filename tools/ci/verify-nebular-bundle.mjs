@@ -36,7 +36,7 @@ const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf
 // the eight-member runtime digest. A published archive pin binds all 63 dist
 // members, so its retained full-binding digest is a separate authority here.
 const PUBLISHED_SOLAR_SAIL_FULL_BINDING_SIZE = 10_170;
-const PUBLISHED_SOLAR_SAIL_FULL_BINDING_SHA256 = "614f12af277129fc655ac568e3bbeefbbe9f2550f4f20f10ff29e165092b3220";
+const PUBLISHED_SOLAR_SAIL_FULL_BINDING_SHA256 = "7248a3f6ac5de65b9e33b28717177b01d5adcb2d673ddaee19e0bec722d4e3fc";
 const PUBLISHED_SOLAR_SAIL_FULL_BINDING_MEMBER_COUNT = 63;
 const PUBLISHED_SOLAR_SAIL_FULL_BINDING_DIGEST = "0fdb11c3e4ebd0136e6c260f1a5c7c5626824aaff25ebccdf46545a0417f4676";
 
