@@ -717,7 +717,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
-    expect(createSpy).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(3));
     expect(revokeSpy).toHaveBeenCalledTimes(0);
 
     // 1. Packet replacement: remove candidate
@@ -728,7 +728,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
-    expect(createSpy).toHaveBeenCalledTimes(6);
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(6));
     expect(revokeSpy).toHaveBeenCalledTimes(3);
 
     // 2. Project identity change
@@ -750,7 +750,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
-    expect(createSpy).toHaveBeenCalledTimes(9);
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(9));
     expect(revokeSpy).toHaveBeenCalledTimes(6);
 
     // 3. Source identity change
@@ -772,7 +772,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
-    expect(createSpy).toHaveBeenCalledTimes(12);
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(12));
     expect(revokeSpy).toHaveBeenCalledTimes(9);
 
     // 4. Host restart (host.state becomes "starting")
@@ -804,7 +804,7 @@ describe("complete design-exchange controls", () => {
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
-    expect(createSpy).toHaveBeenCalledTimes(15);
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(15));
     expect(revokeSpy).toHaveBeenCalledTimes(12);
 
     // 5. Component unmount

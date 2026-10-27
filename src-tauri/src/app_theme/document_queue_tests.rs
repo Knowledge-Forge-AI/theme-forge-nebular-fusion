@@ -413,10 +413,12 @@ fn q5_preview_compile_and_document_cancellation_are_independent()
 
     // 2. Document cancel_documents() must not cancel a preview compile.
     runner.cancel_documents();
-    let mut spec = ThemeSpecificationDto::default();
-    spec.schema_version = "tfss.theme-v1".to_owned();
-    spec.name = "Preview Theme".to_owned();
-    spec.version = "0.1.0".to_owned();
+    let spec = ThemeSpecificationDto {
+        schema_version: "tfss.theme-v1".to_owned(),
+        name: "Preview Theme".to_owned(),
+        version: "0.1.0".to_owned(),
+        ..ThemeSpecificationDto::default()
+    };
     let compiled = runner.compile(spec, Some(11))?;
     assert_eq!(compiled.status, "success");
     assert!(compiled.valid);

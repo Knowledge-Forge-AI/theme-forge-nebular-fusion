@@ -10,10 +10,10 @@
 // Darwin: arm64 Mach-O; the finalized legal notices and launcher; strict deep codesign verification.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { identity, inventoryTree } from "./candidate-provenance.mjs";
+import { canonical, identity, inventoryTree } from "./candidate-provenance.mjs";
 import { readRegularSnapshot } from "./fs-snapshot.mjs";
 import { nativeLauncher } from "./native-launcher.mjs";
 import {
@@ -26,11 +26,14 @@ import {
   selectPayloadNativeRuntime,
   verifyRuntimeSourceSnapshot,
 } from "./native-runtime.mjs";
+import { buildElfPortabilityObservation, ELF_PORTABILITY_READELF_ARGS } from "./elf-portability.mjs";
 import { NODE_RELEASE_IDENTITY } from "./node-runtime-authority.mjs";
 import { PLATFORMS, verifyNativeExecutableHeader } from "./native-rc-package.mjs";
 import { resourceDirectories } from "./platform-targets.mjs";
 
 export const GLIBC_CEILING = "2.36"; // Debian 12 (bookworm), the pinned Linux build environment
+export const OBSERVATION_EXPORT_SCHEMA = "nebular.native-rc-observation-export-v1";
+const HEX64_RE = /^[a-f0-9]{64}$/u;
 
 export function compareVersions(left, right) {
   const [a, b] = [left, right].map((value) => value.split(".").map(Number));
@@ -63,6 +66,93 @@ export function selectPayloadInventoryForQualification(platform, {
     );
   }
   return platform.os === "linux" ? ordinaryInventory : null;
+}
+
+function observationPathInside(child, root) {
+  const resolvedChild = resolve(child);
+  const resolvedRoot = resolve(root);
+  return resolvedChild === resolvedRoot || resolvedChild.startsWith(`${resolvedRoot}${sep}`);
+}
+
+function observationBytes(value) {
+  return Buffer.from(`${canonical(value)}\n`);
+}
+
+function validateObservationOutputPath(outputDir, payloadRoot) {
+  if (typeof outputDir !== "string" || !outputDir.trim()) {
+    throw new Error("Observation export requires a non-empty observationOutputDir path");
+  }
+  const resolvedOutput = resolve(outputDir);
+  const resolvedPayload = resolve(payloadRoot);
+  let realPayload = resolvedPayload;
+  try {
+    realPayload = realpathSync(resolvedPayload);
+  } catch {
+    // Keep resolvedPayload when the payload root has not been materialized yet.
+  }
+  if (observationPathInside(resolvedOutput, resolvedPayload) || observationPathInside(resolvedOutput, realPayload)) {
+    throw new Error("Observation export directory must be outside the payload");
+  }
+  const parent = dirname(resolvedOutput);
+  const parentStat = lstatSync(parent, { bigint: true });
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw new Error("Observation export parent must be a real directory");
+  }
+  const realParent = realpathSync(parent);
+  if (observationPathInside(realParent, resolvedPayload) || observationPathInside(realParent, realPayload)) {
+    throw new Error("Observation export parent resolves inside the payload");
+  }
+  return resolvedOutput;
+}
+
+function writeObservationExport({ outputDir, payloadRoot, platform, sourceCandidate, result, floorObservation, portabilityObservation, runtimeInputSha256 }) {
+  if (platform.os !== "linux") throw new Error("Observation export is supported only for Linux qualification");
+  if (typeof sourceCandidate !== "string" || !HEX64_RE.test(sourceCandidate)) {
+    throw new Error("Observation export requires a lowercase 64-hex sourceCandidate identity");
+  }
+  const resolvedOutput = validateObservationOutputPath(outputDir, payloadRoot);
+  if (!floorObservation || floorObservation.schema !== "nebular-native-runtime-consumer-floor-observation-v1") {
+    throw new Error("Observation export is missing the complete runtime floor observation");
+  }
+  if (!portabilityObservation || portabilityObservation.schema !== "nebular-native-elf-portability-observation-set-v1") {
+    throw new Error("Observation export is missing the complete ELF portability observation");
+  }
+  const floorUnsigned = { ...floorObservation };
+  delete floorUnsigned.observationIdentity;
+  if (identity(floorUnsigned) !== floorObservation.observationIdentity) throw new Error("Runtime floor observation identity is not canonical");
+  const portabilityUnsigned = { ...portabilityObservation };
+  delete portabilityUnsigned.identity;
+  if (identity(portabilityUnsigned) !== portabilityObservation.identity) throw new Error("ELF portability observation identity is not canonical");
+  if (!result.nativePayload || !HEX64_RE.test(result.nativePayload.identity)) throw new Error("Observation export requires an admitted native payload identity");
+  const floorBytes = observationBytes(floorObservation);
+  const portabilityBytes = observationBytes(portabilityObservation);
+  const manifestUnsigned = {
+    schema: OBSERVATION_EXPORT_SCHEMA,
+    platform: result.platform,
+    target: platform.triple,
+    sourceCandidate,
+    qualification: {
+      schema: result.schema,
+      identity: identity(result),
+      status: result.status,
+      executableSha256: result.executableSha256,
+      glibcMinimum: result.glibcMinimum,
+      nativePayload: result.nativePayload,
+      materialDigest: result.materialDigest,
+    },
+    runtimeInputSha256: runtimeInputSha256 ?? null,
+    observations: {
+      runtimeFloor: { file: "runtime-floor-observation.json", identity: floorObservation.observationIdentity, sha256: createHash("sha256").update(floorBytes).digest("hex") },
+      elfPortability: { file: "elf-portability-observation.json", identity: portabilityObservation.identity, sha256: createHash("sha256").update(portabilityBytes).digest("hex") },
+    },
+  };
+  const manifest = { ...manifestUnsigned, identity: identity(manifestUnsigned) };
+  mkdirSync(resolvedOutput, { mode: 0o700 });
+  writeFileSync(join(resolvedOutput, "runtime-floor-observation.json"), floorBytes, { flag: "wx", mode: 0o600 });
+  writeFileSync(join(resolvedOutput, "elf-portability-observation.json"), portabilityBytes, { flag: "wx", mode: 0o600 });
+  // The manifest is written last; without it no partial observation set is admitted.
+  writeFileSync(join(resolvedOutput, "identity-manifest.json"), observationBytes(manifest), { flag: "wx", mode: 0o600 });
+  return manifest;
 }
 
 export const PRIVATE_PROBE_TIMEOUT_MS = 30_000;
@@ -492,6 +582,8 @@ export function paths(platform, payload) {
  *   nativeRuntime?: string,
  *   nativeRuntimeSha256?: string,
  *   expectedNativePayloadSha256?: string,
+ *   observationOutputDir?: string,
+ *   sourceCandidate?: string,
  *   commandRunner?: (command: string, args: string[], env?: Record<string, string>, options?: { deadline: number, signal: AbortSignal }) => Promise<{ status: number | null, stdout: string, stderr: string, error?: string, bounded: true, timedOut: boolean, outputLimitExceeded: boolean, cleanupKnown: boolean, outputComplete: boolean, forcedCleanup: boolean }> | { status: number | null, stdout: string, stderr: string, error?: string, bounded: true, timedOut: boolean, outputLimitExceeded: boolean, cleanupKnown: boolean, outputComplete: boolean, forcedCleanup: boolean }
  * }} options
  */
@@ -502,10 +594,24 @@ export async function qualifyPayload({
   nativeRuntime,
   nativeRuntimeSha256,
   expectedNativePayloadSha256,
+  observationOutputDir,
+  sourceCandidate,
   commandRunner = run,
 }) {
   const platform = PLATFORMS[key];
   if (!platform) throw new Error(`Unsupported platform ${key}`);
+  if (sourceCandidate !== undefined && observationOutputDir === undefined) {
+    throw new Error("sourceCandidate requires observationOutputDir");
+  }
+  if (observationOutputDir !== undefined) {
+    if (platform.os !== "linux") {
+      throw new Error("Observation export is supported only for Linux qualification");
+    }
+    if (typeof sourceCandidate !== "string" || !HEX64_RE.test(sourceCandidate)) {
+      throw new Error("Observation export requires a lowercase 64-hex sourceCandidate identity");
+    }
+    validateObservationOutputPath(observationOutputDir, payload);
+  }
   const resolvedPayload = resolve(payload);
   const hasRuntimeInput = nativeRuntime !== undefined || nativeRuntimeSha256 !== undefined;
   const hasExpectedPayload = expectedNativePayloadSha256 !== undefined;
@@ -530,6 +636,8 @@ export async function qualifyPayload({
     : null;
 
   let primaryError = null;
+  let capturedObservations = null;
+  let runtimeSnapshotVerified = false;
   try {
     const runtimeSelection = await selectPayloadNativeRuntime(
       resolvedPayload,
@@ -559,6 +667,9 @@ export async function qualifyPayload({
     } else {
       if (authenticatedRuntime) {
         throw new Error("Authenticated native runtime input was supplied, but payload does not contain a private runtime");
+      }
+      if (observationOutputDir !== undefined) {
+        throw new Error("Observation export requires a passing private-runtime closure");
       }
       if (platform.os === "linux" || hasExpectedPayload) {
         const ordinaryInventory = await inventoryNativePayload(resolvedPayload);
@@ -641,23 +752,114 @@ export async function qualifyPayload({
         await check("private-runtime-closure", async () => {
           const elfRecords = {};
           const allLddRows = [];
-          const elfTargets = [
-            ["bin/theme-forge-nebular-fusion", located.executable],
-            ["bin/tfsb-studio-service", located.sidecar],
-          ];
+          /** @type {Array<Record<string, any>>} */
+          const portabilityRecords = [];
+          /** @type {Map<string, { relativePath: string, absolutePath: string, snapshot: { size: number, sha256: string, header: Buffer }, aliases: string[] }>} */
+          const elfTargetByPath = new Map();
+          /** @type {Map<string, { path: string, bytes: number, sha256: string }>} */
+          const inventoryFilesByPath = new Map(runtimeSelection.inventory.files.map((file) => [file.path, file]));
+          /** @type {Map<string, { size: number, sha256: string, header: Buffer }>} */
+          const snapshotsByPath = new Map();
+          /** @type {Map<string, string[]>} */
+          const aliasesByCanonical = new Map();
+          for (const alias of runtimeSelection.inventory.aliases) {
+            const rows = aliasesByCanonical.get(alias.canonical) ?? [];
+            rows.push(alias.path);
+            aliasesByCanonical.set(alias.canonical, rows);
+          }
+          for (const rows of aliasesByCanonical.values()) rows.sort();
+          /**
+           * Read only authenticated inventory members. The inventory was already
+           * admitted as a complete payload; this pass names those rows directly
+           * and binds each held snapshot back to its authenticated bytes/hash.
+           * @param {string} relativePath
+           * @param {{ size: number, sha256: string, bytes: Buffer } | undefined} [suppliedSnapshot]
+           */
+          const readInventoryRegular = (relativePath, suppliedSnapshot = undefined) => {
+            const inventoryFile = inventoryFilesByPath.get(relativePath);
+            if (!inventoryFile) throw new Error(`Authenticated payload inventory is missing regular ${relativePath}`);
+            const existing = snapshotsByPath.get(relativePath);
+            if (existing) return existing;
+            const fullSnapshot = suppliedSnapshot ?? readRegularSnapshot(join(resolvedPayload, relativePath), {
+              label: relativePath,
+              maxBytes: 512 * 1024 * 1024,
+            });
+            if (fullSnapshot.size !== inventoryFile.bytes || fullSnapshot.sha256 !== inventoryFile.sha256) {
+              throw new Error(`Authenticated payload inventory mismatch at ${relativePath}`);
+            }
+            // Keep only the authenticated identity and an owned header copy;
+            // Buffer.subarray() would retain the complete backing payload.
+            const compactSnapshot = {
+              size: fullSnapshot.size,
+              sha256: fullSnapshot.sha256,
+              header: Buffer.from(fullSnapshot.bytes.subarray(0, 64)),
+            };
+            snapshotsByPath.set(relativePath, compactSnapshot);
+            return compactSnapshot;
+          };
+          /**
+           * @param {string} relativePath
+           * @param {string} absolutePath
+           * @param {{ size: number, sha256: string, header: Buffer }} snapshot
+           * @param {string[]} [aliases]
+           */
+          const addElfTarget = (relativePath, absolutePath, snapshot, aliases = []) => {
+            const existing = elfTargetByPath.get(absolutePath);
+            if (existing) {
+              existing.aliases = [...new Set([...existing.aliases, ...aliases])].sort();
+              return;
+            }
+            elfTargetByPath.set(absolutePath, { relativePath, absolutePath, snapshot, aliases: [...aliases].sort() });
+          };
+          const executableInventory = readInventoryRegular("bin/theme-forge-nebular-fusion", executable);
+          addElfTarget(
+            "bin/theme-forge-nebular-fusion",
+            located.executable,
+            executableInventory,
+            aliasesByCanonical.get("bin/theme-forge-nebular-fusion") ?? [],
+          );
+          const sidecarSnapshot = readRegularSnapshot(located.sidecar, { label: "sidecar runtime", maxBytes: 512 * 1024 * 1024 });
+          const sidecarInventory = readInventoryRegular("bin/tfsb-studio-service", sidecarSnapshot);
+          addElfTarget(
+            "bin/tfsb-studio-service",
+            located.sidecar,
+            sidecarInventory,
+            aliasesByCanonical.get("bin/tfsb-studio-service") ?? [],
+          );
           for (const reg of runtimeSelection.material.regulars) {
             const absReg = join(resolvedPayload, reg.path);
-            const snap = readRegularSnapshot(absReg, { label: reg.path, maxBytes: 512 * 1024 * 1024 });
-            const isElf = snap.bytes.length >= 4 && snap.bytes[0] === 0x7f && snap.bytes[1] === 0x45 && snap.bytes[2] === 0x4c && snap.bytes[3] === 0x46;
+            const snap = readInventoryRegular(reg.path);
+            const isElf = snap.header.length >= 4 && snap.header[0] === 0x7f && snap.header[1] === 0x45 && snap.header[2] === 0x4c && snap.header[3] === 0x46;
             if (reg.role || isElf) {
-              verifyNativeExecutableHeader(snap.bytes, platform);
-              elfTargets.push([reg.path, absReg]);
+              verifyNativeExecutableHeader(snap.header, platform);
+              addElfTarget(reg.path, absReg, snap, aliasesByCanonical.get(reg.path) ?? []);
             }
           }
-          for (const [relPath, absPath] of elfTargets) {
-            const readelfRes = await invokeBounded(commandRunner, "readelf", ["-h", "-l", "-d", "-V", "--wide", absPath], undefined, commandDeadline);
+          // Observe every additional ELF regular named by the authenticated
+          // payload inventory, including resources or sidecars outside the
+          // private-runtime material roles. No second filesystem walk occurs.
+          for (const file of runtimeSelection.inventory.files) {
+            const snap = readInventoryRegular(file.path);
+            const isElf = snap.header.length >= 4 && snap.header[0] === 0x7f && snap.header[1] === 0x45 && snap.header[2] === 0x4c && snap.header[3] === 0x46;
+            if (!isElf) continue;
+            const absFile = join(resolvedPayload, file.path);
+            if (elfTargetByPath.has(absFile)) continue;
+            verifyNativeExecutableHeader(snap.header, platform);
+            addElfTarget(file.path, absFile, snap, aliasesByCanonical.get(file.path) ?? []);
+          }
+          for (const { relativePath: relPath, absolutePath: absPath, snapshot, aliases } of elfTargetByPath.values()) {
+            const readelfRes = await invokeBounded(commandRunner, "readelf", [...ELF_PORTABILITY_READELF_ARGS, absPath], undefined, commandDeadline);
             if (readelfRes.status !== 0) throw new Error(`readelf failed for ${relPath}: ${readelfRes.stderr || readelfRes.error}`);
             elfRecords[relPath] = parseElfMetadata(readelfRes.stdout, platform.triple);
+            portabilityRecords.push(buildElfPortabilityObservation({
+              relativePath: relPath,
+              aliases,
+              target: platform.triple,
+              bytes: snapshot.size,
+              sha256: snapshot.sha256,
+              stdout: readelfRes.stdout,
+              stderr: readelfRes.stderr,
+            }));
             const lddRes = await invokeBounded(commandRunner, "ldd", [absPath], runtimeEnv, commandDeadline);
             if (lddRes.status !== 0) throw new Error(`ldd failed for ${relPath}: ${lddRes.stderr || lddRes.error}`);
             allLddRows.push(...parseLddProviders(lddRes.stdout).map((row) => ({ ...row, subjectRelativePath: relPath })));
@@ -692,6 +894,19 @@ export async function qualifyPayload({
               throw new Error(`glibc floor ${closure.maxGlibcObserved} exceeds the ${GLIBC_CEILING} build environment`);
             }
           }
+          const portabilityUnsigned = {
+            schema: "nebular-native-elf-portability-observation-set-v1",
+            target: platform.triple,
+            expectedNativePayload: runtimeSelection.inventory.identity,
+            readelfArgs: [...ELF_PORTABILITY_READELF_ARGS],
+            records: portabilityRecords.sort((left, right) => (left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0)),
+            admission: "not-claimed",
+          };
+          const portabilityObservation = {
+            ...portabilityUnsigned,
+            identity: identity(portabilityUnsigned),
+          };
+          capturedObservations = { floorObservation, portabilityObservation };
           return {
             materialDigest: runtimeSelection.material.materialDigest,
             observationIdentity: floorObservation.observationIdentity,
@@ -699,6 +914,7 @@ export async function qualifyPayload({
             subjectResolutionRows: floorObservation.subjectResolutionRows,
             toolEvidence: floorObservation.toolEvidence,
             classifications: closure.classifications,
+            portabilityObservation,
           };
         });
       }
@@ -725,7 +941,7 @@ export async function qualifyPayload({
       ? { identity: payloadInventory.identity, files: payloadInventory.files.length }
       : null;
     const materialDigest = runtimeSelection.nativeRuntime ? runtimeSelection.material.materialDigest : null;
-    return {
+    const result = {
       schema: "nebular.native-rc-qualification-v1",
       platform: key,
       status: passed ? "pass" : "fail",
@@ -735,11 +951,29 @@ export async function qualifyPayload({
       materialDigest,
       checks,
     };
+    if (authenticatedRuntime) {
+      runtimeSnapshotVerified = true;
+      await verifyRuntimeSourceSnapshot(authenticatedRuntime);
+    }
+    if (passed && observationOutputDir !== undefined) {
+      if (!capturedObservations) throw new Error("Observation export requires a passing private-runtime closure");
+      writeObservationExport({
+        outputDir: observationOutputDir,
+        payloadRoot: resolvedPayload,
+        platform,
+        sourceCandidate,
+        result,
+        floorObservation: capturedObservations.floorObservation,
+        portabilityObservation: capturedObservations.portabilityObservation,
+        runtimeInputSha256: authenticatedRuntime?.inputSha256,
+      });
+    }
+    return result;
   } catch (err) {
     primaryError = err;
     throw err;
   } finally {
-    if (authenticatedRuntime) {
+    if (authenticatedRuntime && !runtimeSnapshotVerified) {
       try {
         await verifyRuntimeSourceSnapshot(authenticatedRuntime);
       } catch (postErr) {
@@ -751,7 +985,15 @@ export async function qualifyPayload({
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  const value = (flag) => { const index = args.indexOf(flag); return index === -1 ? undefined : args[index + 1]; };
+  const value = (flag) => {
+    const index = args.indexOf(flag);
+    if (index === -1) return undefined;
+    const next = args[index + 1];
+    if (next === undefined || next.startsWith("--")) {
+      throw new Error(`Missing value for ${flag}`);
+    }
+    return next;
+  };
   try {
     const result = await qualifyPayload({
       platform: value("--platform"),
@@ -760,6 +1002,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       nativeRuntime: value("--native-runtime"),
       nativeRuntimeSha256: value("--native-runtime-sha256"),
       expectedNativePayloadSha256: value("--expected-native-payload-sha256"),
+      observationOutputDir: value("--observation-output-dir"),
+      sourceCandidate: value("--source-candidate"),
     });
     if (value("--output")) writeFileSync(resolve(value("--output")), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
     process.stdout.write(`${JSON.stringify({ status: result.status, glibcMinimum: result.glibcMinimum, failed: result.checks.filter((entry) => !entry.ok) })}\n`);

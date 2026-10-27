@@ -1424,7 +1424,7 @@ mod tests {
         let mut unknown = scene.clone();
         unknown
             .as_object_mut()
-            .expect("scene object")
+            .ok_or_else(|| io::Error::other("scene object"))?
             .insert("unexpected".to_owned(), serde_json::json!(true));
         assert!(serde_json::from_value::<super::PinnedSceneBinding>(unknown).is_err());
 
@@ -1435,7 +1435,7 @@ mod tests {
         let mut missing_required = scene;
         missing_required
             .as_object_mut()
-            .expect("scene object")
+            .ok_or_else(|| io::Error::other("scene object"))?
             .remove("adapterSha256");
         assert!(serde_json::from_value::<super::PinnedSceneBinding>(missing_required).is_err());
 

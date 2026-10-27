@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Native release-candidate automation: lane planning, deterministic packaging, smoke receipt judgement,
 // the evidence seal and the release-candidate catalog.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +19,7 @@ import { buildIndex } from "../tools/native-rc-index.mjs";
 import { nativeLauncher } from "../tools/native-launcher.mjs";
 import { NODE_RELEASE_IDENTITY, readRegularFile } from "../tools/node-runtime-authority.mjs";
 import { createPreviewHashBudget, inspectBoundedPreviewTree } from "../tools/prepare-app-resources.mjs";
+import { buildElfPortabilityObservation, ELF_PORTABILITY_READELF_ARGS, parseElfPortability } from "../tools/elf-portability.mjs";
 import {
   MAX_RUNTIME_INPUT_BYTES,
   PRIVATE_RUNTIME_PREFIX,
@@ -53,6 +54,145 @@ const scratch = (name) => { const root = mkdtempSync(join(tmpdir(), `native-rc-$
 const physicalScratch = (name) => { const root = mkdtempSync(join(realpathSync(tmpdir()), `native-rc-${name}-`)); roots.push(root); return root; };
 const write = (path, content, mode) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); if (mode) chmodSync(path, mode); };
 const plan = (eventName, inputs = {}, overrides = {}) => planLanes({ eventName, inputs, sha: SHA, runId: 123, runAttempt: 1, version: "0.6.1", ...overrides });
+
+const ELF_PORTABILITY_X86_HEADER = [
+  "ELF Header:",
+  "  Class:                             ELF64",
+  "  Machine:                           Advanced Micro Devices X86-64",
+  "  Type:                              DYN (Shared object file)",
+  "Program Headers:",
+  "      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]",
+  "Dynamic section at offset 0x100 contains 2 entries:",
+  " 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]",
+  " 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]",
+  "Version needs section '.gnu.version_r' contains 2 entries:",
+  "  0x0020: Version: 1  File: libc.so.6  Cnt: 2",
+  "  0x0030:   Name: GLIBC_2.36  Flags: none  Version: 2",
+  "  0x0040:   Name: GLIBC_PRIVATE  Flags: none  Version: 3",
+].join("\n");
+
+describe("ELF portability observation parser", () => {
+  it("parses x86 ISA levels, GNU properties, attributes, and GLIBC_PRIVATE without admission", () => {
+    const parsed = parseElfPortability([
+      ELF_PORTABILITY_X86_HEADER,
+      "Displaying notes found in: .note.gnu.property",
+      "  Owner                Data size  Description",
+      "  GNU                  0x00000010 NT_GNU_PROPERTY_TYPE_0",
+      "      Properties: x86 ISA needed: x86-64-v3, x86 feature: IBT",
+      "Attribute Section: .gnu.attributes",
+      "File Attributes",
+      "  Tag_CPU_arch: v8",
+    ].join("\n"), "x86_64-unknown-linux-gnu");
+    expect(parsed.gnuProperty.status).toBe("present");
+    expect(parsed.gnuProperty.x86IsaNeeded.levels).toEqual(["x86-64-v3"]);
+    expect(parsed.gnuProperty.x86Features.values).toEqual(["IBT"]);
+    expect(parsed.attributes.status).toBe("present");
+    expect(parsed.glibcPrivateVersionNeeds).toEqual([{ provider: "libc.so.6", name: "GLIBC_PRIVATE" }]);
+    expect(parsed.cpuBaseline.status).toBe("observed");
+    expect(parsed.cpuBaseline.admission).toBe("not-claimed");
+  });
+
+  it("keeps known and above-known x86 properties observable but unresolved when unknown", () => {
+    for (const level of ["baseline", "v2", "v3", "v4"]) {
+      const observed = parseElfPortability([
+        ELF_PORTABILITY_X86_HEADER,
+        "Displaying notes found in: .note.gnu.property",
+        `      Properties: x86 ISA needed: x86-64-${level}`,
+      ].join("\n"), "x86_64-unknown-linux-gnu");
+      expect(observed.gnuProperty.x86IsaNeeded.status).toBe("known");
+      expect(observed.gnuProperty.x86IsaNeeded.levels).toEqual([`x86-64-${level}`]);
+      expect(observed.cpuBaseline.admission).toBe("not-claimed");
+    }
+    const unknown = parseElfPortability([
+      ELF_PORTABILITY_X86_HEADER,
+      "Displaying notes found in: .note.gnu.property",
+      "      Properties: x86 ISA needed: x86-64-v5",
+    ].join("\n"), "x86_64-unknown-linux-gnu");
+    expect(unknown.gnuProperty.x86IsaNeeded.status).toBe("unknown");
+    expect(unknown.gnuProperty.x86IsaNeeded.values).toEqual(["x86-64-v5"]);
+    expect(unknown.cpuBaseline.status).toBe("unresolved");
+  });
+
+  it("does not infer needed ISA from paths, SONAMEs, or ISA-used markers", () => {
+    const observed = parseElfPortability([
+      ELF_PORTABILITY_X86_HEADER,
+      " 0x000000000000000e (SONAME)             Library soname: [libx86-64-v3.so]",
+      " 0x000000000000000f (RPATH)              Library rpath: [/opt/x86-64-v3]",
+      "Displaying notes found in: .note.gnu.property",
+      "      Properties: x86 ISA used: x86-64-v3",
+    ].join("\n"), "x86_64-unknown-linux-gnu");
+    expect(observed.gnuProperty.x86IsaNeeded.status).toBe("unknown");
+    expect(observed.gnuProperty.x86IsaNeeded.values).toEqual([]);
+    expect(observed.gnuProperty.x86IsaUsed.levels).toEqual(["x86-64-v3"]);
+  });
+
+  it("distinguishes absent notes from unavailable note evidence", () => {
+    const absent = parseElfPortability(`${ELF_PORTABILITY_X86_HEADER}\nNo note sections\nNo attributes`, "x86_64-unknown-linux-gnu");
+    expect(absent.gnuProperty.status).toBe("absent");
+    expect(absent.attributes.status).toBe("absent");
+    expect(absent.cpuBaseline.status).toBe("unresolved");
+
+    const unknown = parseElfPortability(ELF_PORTABILITY_X86_HEADER, "x86_64-unknown-linux-gnu");
+    expect(unknown.gnuProperty.status).toBe("unknown");
+    expect(unknown.attributes.status).toBe("unknown");
+    expect(unknown.cpuBaseline.status).toBe("unresolved");
+  });
+
+  it("records AArch64 attributes and a digest of the complete readelf stream", () => {
+    const text = [
+      ELF_PORTABILITY_X86_HEADER.replace("Advanced Micro Devices X86-64", "AArch64").replace("/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1"),
+      "Displaying notes found in: .note.gnu.property",
+      "      Properties: AArch64 feature: BTI, PAC",
+      "Attribute Section: .gnu.attributes",
+      "File Attributes",
+      "  Tag_CPU_arch: v8",
+      "  Tag_CPU_arch_profile: Application",
+    ].join("\n");
+    const observation = buildElfPortabilityObservation({
+      relativePath: "opt/nebular-private/lib/libfixture.so.0",
+      aliases: ["opt/nebular-private/lib/libfixture.so"],
+      target: "aarch64-unknown-linux-gnu",
+      bytes: 1234,
+      sha256: "a".repeat(64),
+      stdout: text,
+      stderr: "",
+    });
+    expect(observation.gnuProperty.aarch64Features.values).toEqual(["BTI", "PAC"]);
+    expect(observation.attributes.cpuArch[0]).toBe("v8");
+    expect(observation.attributes.cpuProfile[0]).toBe("Application");
+    expect(observation.readelf.args).toEqual(ELF_PORTABILITY_READELF_ARGS);
+    expect(observation.readelf.streamSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(observation.readelf.notesStatus).toBe("present");
+    expect(observation.aliases).toEqual(["opt/nebular-private/lib/libfixture.so"]);
+  });
+
+  it("rejects malformed streams, unbound identities, and noncanonical paths", () => {
+    expect(() => parseElfPortability("ELF Header:\\n  Class: ELF64", "x86_64-unknown-linux-gnu")).toThrow(/Malformed readelf header output/);
+    expect(() => buildElfPortabilityObservation({
+      relativePath: "bin/fixture",
+      target: "x86_64-unknown-linux-gnu",
+      bytes: 1,
+      sha256: "not-a-digest",
+      stdout: ELF_PORTABILITY_X86_HEADER,
+    })).toThrow(/sha256 is invalid/);
+    expect(() => buildElfPortabilityObservation({
+      relativePath: "bin\\\\fixture",
+      target: "x86_64-unknown-linux-gnu",
+      bytes: 1,
+      sha256: "a".repeat(64),
+      aliases: ["/absolute/alias"],
+      stdout: ELF_PORTABILITY_X86_HEADER,
+    })).toThrow(/canonical relative path/);
+    expect(() => buildElfPortabilityObservation({
+      relativePath: "bin/fixture",
+      target: "x86_64-unknown-linux-gnu",
+      bytes: 1,
+      sha256: "a".repeat(64),
+      aliases: ["bin/../escape"],
+      stdout: ELF_PORTABILITY_X86_HEADER,
+    })).toThrow(/empty, dot, or dotdot/);
+  });
+});
 
 it("refuses a protected preview leaf before any leaf filesystem read", async () => {
   const root = physicalScratch("protected-preview-leaf");
@@ -1078,7 +1218,7 @@ describe("closed-input native pins", () => {
 });
 
 describe("linux private-runtime RC integration", () => {
-  function populatePrivateLinuxPayload(root, { ordinaryLauncher = false } = {}) {
+  function populatePrivateLinuxPayload(root, { ordinaryLauncher = false, extraPayloadElf = false } = {}) {
     const platform = PLATFORMS["linux-x64"];
     const target = platform.target;
     const elf = Buffer.alloc(64);
@@ -1098,6 +1238,9 @@ describe("linux private-runtime RC integration", () => {
       "THIRD_PARTY_NOTICES/index.txt",
     ]) {
       write(join(root, "lib/theme-forge-nebular-fusion", resource), "{}", 0o644);
+    }
+    if (extraPayloadElf) {
+      write(join(root, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"), elf, 0o644);
     }
     mkdirSync(join(root, "opt"), { recursive: true, mode: 0o755 });
     chmodSync(join(root, "opt"), 0o755);
@@ -1235,14 +1378,14 @@ describe("linux private-runtime RC integration", () => {
       }
     };
 
-    await runMutationCase("short", (path) => truncateSync(path, 1), /truncated|size changed|drift|Malformed|keys differ/i);
-    await runMutationCase("grow", (path) => appendFileSync(path, Buffer.from("x")), /grew|size changed|drift|Malformed|keys differ/i);
+    await runMutationCase("short", (path) => truncateSync(path, 1), /truncated|size changed|drift|Malformed|keys differ|Native runtime input SHA-256 mismatch/i);
+    await runMutationCase("grow", (path) => appendFileSync(path, Buffer.from("x")), /grew|size changed|drift|Malformed|keys differ|Native runtime input SHA-256 mismatch/i);
     await runMutationCase("replacement", (path) => {
       const replacement = `${path}.replacement`;
       renameSync(path, replacement);
       writeFileSync(path, Buffer.from("replacement\n"));
-    }, /drift|changed|Malformed|keys differ|ENOENT/i);
-    await runMutationCase("identity", (path) => chmodSync(path, 0o4755), /privilege|drift|changed|Malformed|keys differ/i);
+    }, /drift|changed|Malformed|keys differ|ENOENT|Native runtime input SHA-256 mismatch/i);
+    await runMutationCase("identity", (path) => chmodSync(path, 0o4755), /privilege|drift|changed|Malformed|keys differ|Native runtime input SHA-256 mismatch/i);
   });
 
   it("packages private-runtime Linux payloads, preserves SONAME aliases, and refuses ordinary launchers, malformed markers, or missing roles", async () => {
@@ -1441,8 +1584,7 @@ describe("linux private-runtime RC integration", () => {
   });
 
   it("qualifyPayload enforces paired local nativeRuntime vs consumer expectedNativePayloadSha256 and validates private closure", async () => {
-    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-qualify"));
-    const payloadInv = await inventoryNativePayload(payload);
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-qualify"), { extraPayloadElf: true });
     const studio = new URL("..", import.meta.url).pathname;
     const checkout = scratch("checkout-qualify");
     write(join(checkout, "src-tauri/tauri.conf.json"), readFileSync(join(studio, "src-tauri/tauri.conf.json")));
@@ -1457,6 +1599,17 @@ describe("linux private-runtime RC integration", () => {
     ]) {
       write(join(checkout, "src-tauri", resource), "{}", 0o644);
     }
+    for (const resource of [
+      "loom-adapter/fixture.json",
+      "solar-sail-payload/fixture.json",
+      "solar-sail-adapter/fixture.json",
+      "scene-payload/fixture.json",
+      "release-notices/fixture.json",
+    ]) {
+      write(join(checkout, "src-tauri", resource), "{}", 0o644);
+      write(join(payload, "lib/theme-forge-nebular-fusion", resource), "{}", 0o644);
+    }
+    const payloadInv = await inventoryNativePayload(payload);
 
     // Missing both local runtime authority and expectedNativePayloadSha256 is refused
     await expect(qualifyPayload({ platform: "linux-x64", payload, checkout }))
@@ -1480,8 +1633,11 @@ describe("linux private-runtime RC integration", () => {
     write(hostLibc, Buffer.alloc(64), 0o755);
     write(hostLoader, Buffer.alloc(64), 0o755);
     const boundedResult = result => ({ ...result, error: result.error ?? null, bounded: true, timedOut: false, outputLimitExceeded: false, cleanupKnown: true, outputComplete: true, forcedCleanup: false });
+    const readelfCalls = [];
+    const lddCalls = [];
     const mockRunner = (program, args) => {
       if (program === "readelf") {
+        readelfCalls.push([...args]);
         const subject = args.at(-1);
         const stdout = subject === hostLibc
           ? [
@@ -1518,6 +1674,7 @@ describe("linux private-runtime RC integration", () => {
         return boundedResult({ status: 0, stdout, stderr: "" });
       }
       if (program === "ldd") {
+        lddCalls.push([...args]);
         return boundedResult({
           status: 0,
           stdout: [
@@ -1540,14 +1697,247 @@ describe("linux private-runtime RC integration", () => {
     expect(qualified.checks.find(c => c.id === "launcher")?.ok).toBe(true);
     expect(qualified.checks.find(c => c.id === "glibc-floor")?.ok).toBe(true);
     expect(qualified.checks.find(c => c.id === "linkage")?.ok).toBe(true);
-    expect(qualified.checks.find(c => c.id === "private-runtime-closure")?.ok).toBe(true);
+    const closureCheck = qualified.checks.find(c => c.id === "private-runtime-closure");
+    expect(closureCheck?.ok).toBe(true);
+    expect(closureCheck?.detail.portabilityObservation.schema).toBe("nebular-native-elf-portability-observation-set-v1");
+    expect(closureCheck?.detail.portabilityObservation.records.length).toBeGreaterThan(0);
+    expect(closureCheck?.detail.portabilityObservation.records.every(record => record.readelf.streamSha256.match(/^[a-f0-9]{64}$/))).toBe(true);
+    const extraRecord = closureCheck?.detail.portabilityObservation.records.find(record => record.relativePath === "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper");
+    expect(extraRecord).toBeDefined();
+    expect(extraRecord?.sha256).toBe(sha256(readFileSync(join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"))));
+    expect(readelfCalls.some(args => args.at(-1) === join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"))).toBe(true);
+    expect(lddCalls.some(args => args.at(-1) === join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"))).toBe(true);
+    expect(readelfCalls.some(args => args.includes("-n") && args.includes("-A") && args.at(-1) === join(runtimeLib, "libwebkit2gtk-4.1.so.0.19.9"))).toBe(true);
+
+    // The fixture intentionally uses a 64-byte fake sidecar, so import a fresh
+    // qualifier instance with its Node authority narrowed to that fixture. This
+    // keeps the export test synthetic and avoids reading/copying a real Node
+    // runtime merely to exercise the observation hand-off.
+    const fakeSidecar = Buffer.alloc(64);
+    Buffer.from([0x7f, 69, 76, 70, 2, 1, 1]).copy(fakeSidecar);
+    fakeSidecar.writeUInt16LE(3, 16);
+    fakeSidecar.writeUInt16LE(62, 18);
+    const fakeSidecarSha256 = sha256(fakeSidecar);
+    vi.resetModules();
+    vi.doMock("../tools/node-runtime-authority.mjs", async () => {
+      const actual = await vi.importActual("../tools/node-runtime-authority.mjs");
+      const target = actual.NODE_RELEASE_IDENTITY.targets["x86_64-unknown-linux-gnu"];
+      return {
+        ...actual,
+        NODE_RELEASE_IDENTITY: Object.freeze({
+          ...actual.NODE_RELEASE_IDENTITY,
+          targets: Object.freeze({
+            ...actual.NODE_RELEASE_IDENTITY.targets,
+            "x86_64-unknown-linux-gnu": Object.freeze({
+              ...target,
+              executableSha256: fakeSidecarSha256,
+              executableSize: fakeSidecar.length,
+            }),
+          }),
+        }),
+      };
+    });
+    let qualifyForExport;
+    try {
+      ({ qualifyPayload: qualifyForExport } = await import("../tools/native-rc-qualify.mjs?observation-export-fixture"));
+    } finally {
+      vi.doUnmock("../tools/node-runtime-authority.mjs");
+      vi.resetModules();
+    }
+    const sourceCandidate = "a".repeat(64);
+    const observationRoot = join(scratch("observation-export"), "set");
+    const exported = await qualifyForExport({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: observationRoot,
+      sourceCandidate,
+      commandRunner: mockRunner,
+    });
+    expect(exported.status).toBe("pass");
+    expect(exported.checks.find(c => c.id === "private-runtime-closure")?.ok).toBe(true);
+    const floorPath = join(observationRoot, "runtime-floor-observation.json");
+    const portabilityPath = join(observationRoot, "elf-portability-observation.json");
+    const manifestPath = join(observationRoot, "identity-manifest.json");
+    const exportedFloor = JSON.parse(readFileSync(floorPath, "utf8"));
+    const exportedPortability = JSON.parse(readFileSync(portabilityPath, "utf8"));
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(exportedFloor.observedProviderRows.length).toBeGreaterThan(0);
+    expect(exportedPortability.records.length).toBeGreaterThan(0);
+    expect(manifest.schema).toBe("nebular.native-rc-observation-export-v1");
+    expect(manifest.target).toBe("x86_64-unknown-linux-gnu");
+    expect(manifest.sourceCandidate).toBe(sourceCandidate);
+    expect(manifest.qualification.identity).toBe(identity(exported));
+    expect(manifest.qualification.nativePayload.identity).toBe(payloadInv.identity);
+    expect(manifest.observations.runtimeFloor.identity).toBe(exportedFloor.observationIdentity);
+    expect(manifest.observations.elfPortability.identity).toBe(exportedPortability.identity);
+    expect(manifest.observations.runtimeFloor.sha256).toBe(sha256(readFileSync(floorPath)));
+    expect(manifest.observations.elfPortability.sha256).toBe(sha256(readFileSync(portabilityPath)));
+    const unsignedManifest = { ...manifest };
+    delete unsignedManifest.identity;
+    expect(identity(unsignedManifest)).toBe(manifest.identity);
+    const unsignedFloor = { ...exportedFloor };
+    delete unsignedFloor.observationIdentity;
+    expect(identity(unsignedFloor)).toBe(exportedFloor.observationIdentity);
+    const unsignedPortability = { ...exportedPortability };
+    delete unsignedPortability.identity;
+    expect(identity(unsignedPortability)).toBe(exportedPortability.identity);
+    await expect(qualifyForExport({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: observationRoot,
+      sourceCandidate,
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/EEXIST|already exists/);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: join(scratch("observation-missing-source"), "set"),
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/sourceCandidate identity/);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: join(scratch("observation-git40"), "set"),
+      sourceCandidate: "a".repeat(40),
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/lowercase 64-hex sourceCandidate identity/);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: join(scratch("observation-uppercase"), "set"),
+      sourceCandidate: "A".repeat(64),
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/lowercase 64-hex sourceCandidate identity/);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      sourceCandidate,
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/sourceCandidate requires observationOutputDir/);
+    await expect(qualifyPayload({
+      platform: "darwin-arm64",
+      payload,
+      checkout,
+      observationOutputDir: join(scratch("observation-darwin"), "set"),
+      sourceCandidate,
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/supported only for Linux qualification/);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: join(payload, "inside-export"),
+      sourceCandidate,
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/outside the payload/);
+    const payloadLinkRoot = scratch("payload-symlink-root");
+    const symlinkedPayload = join(payloadLinkRoot, "linked-payload");
+    symlinkSync(payload, symlinkedPayload);
+    const insideParent = join(payload, "nested-export");
+    mkdirSync(insideParent, { recursive: true });
+    try {
+      await expect(qualifyPayload({
+        platform: "linux-x64",
+        payload: symlinkedPayload,
+        checkout,
+        expectedNativePayloadSha256: payloadInv.identity,
+        observationOutputDir: join(insideParent, "set"),
+        sourceCandidate,
+        commandRunner: mockRunner,
+      })).rejects.toThrow(/outside the payload|resolves inside the payload/);
+    } finally {
+      rmSync(insideParent, { recursive: true, force: true });
+    }
+    const symlinkParentRoot = scratch("observation-symlink-parent");
+    const realParentDir = join(symlinkParentRoot, "real");
+    const linkedParentDir = join(symlinkParentRoot, "linked");
+    mkdirSync(realParentDir, { recursive: true });
+    symlinkSync(realParentDir, linkedParentDir);
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: join(linkedParentDir, "set"),
+      sourceCandidate,
+      commandRunner: mockRunner,
+    })).rejects.toThrow(/parent must be a real directory/);
+
+    const runtimeSource = populatePrivateLinuxPayload(scratch("runtime-source-export"));
+    const runtimeInput = nativeRuntimeInput(runtimeSource.root, runtimeSource.material);
+    const authObservationRoot = join(scratch("observation-export-authenticated"), "set");
+    const authExported = await qualifyForExport({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      nativeRuntime: runtimeInput.inputPath,
+      nativeRuntimeSha256: runtimeInput.expectedSha256,
+      observationOutputDir: authObservationRoot,
+      sourceCandidate,
+      commandRunner: mockRunner,
+    });
+    expect(authExported.status).toBe("pass");
+    const authManifest = JSON.parse(readFileSync(join(authObservationRoot, "identity-manifest.json"), "utf8"));
+    expect(authManifest.runtimeInputSha256).toBe(runtimeInput.expectedSha256);
+
+    const mutatedRuntimeInput = nativeRuntimeInput(runtimeSource.root, runtimeSource.material);
+    const mutatedRuntimeObservationRoot = join(scratch("observation-export-mutated-runtime"), "set");
+    let runtimeInputMutated = false;
+    await expect(qualifyForExport({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      nativeRuntime: mutatedRuntimeInput.inputPath,
+      nativeRuntimeSha256: mutatedRuntimeInput.expectedSha256,
+      observationOutputDir: mutatedRuntimeObservationRoot,
+      sourceCandidate,
+      commandRunner: (program, args) => {
+        if (!runtimeInputMutated && program === "readelf") {
+          runtimeInputMutated = true;
+          appendFileSync(mutatedRuntimeInput.inputPath, Buffer.from("x"));
+        }
+        return mockRunner(program, args);
+      },
+    })).rejects.toThrow(/Native runtime input descriptor drifted after initial authentication/);
+    expect(existsSync(mutatedRuntimeObservationRoot)).toBe(false);
+
+    const cliTrailingFlag = spawnSync(
+      process.execPath,
+      [
+        new URL("../tools/native-rc-qualify.mjs", import.meta.url).pathname,
+        "--platform",
+        "linux-x64",
+        "--payload",
+        payload,
+        "--observation-output-dir",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(cliTrailingFlag.status).toBe(1);
+    expect(cliTrailingFlag.stderr).toMatch(/Missing value for --observation-output-dir/);
 
     // Parseable provider output with a nonzero readelf status is never accepted as floor evidence.
+    const failedObservationRoot = join(scratch("observation-failed"), "set");
     const providerReadelfFailure = await qualifyPayload({
       platform: "linux-x64",
       payload,
       checkout,
       expectedNativePayloadSha256: payloadInv.identity,
+      observationOutputDir: failedObservationRoot,
+      sourceCandidate,
       commandRunner: (program, args) => {
         if (program === "readelf" && args.includes("-V")) {
           return boundedResult({ status: 1, stdout: "ELF Header:\n  Class: ELF64\n", stderr: "provider readelf failed" });
@@ -1557,6 +1947,7 @@ describe("linux private-runtime RC integration", () => {
     });
     expect(providerReadelfFailure.status).toBe("fail");
     expect(providerReadelfFailure.checks.find(c => c.id === "private-runtime-closure")?.detail).toMatch(/did not complete safely/);
+    expect(existsSync(failedObservationRoot)).toBe(false);
 
     // A runner that omits the bounded lifecycle contract cannot become a qualification pass.
     const unbounded = await qualifyPayload({
@@ -1578,6 +1969,49 @@ describe("linux private-runtime RC integration", () => {
     });
     expect(incompleteLifecycle.status).toBe("fail");
     expect(incompleteLifecycle.checks.find(c => c.id === "glibc:gui")?.detail).toMatch(/omitted explicit timedOut/);
+
+    // Inventory admission completes before commandRunner is first invoked;
+    // removing a named member afterward must fail at the authenticated read.
+    const extraPath = join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper");
+    const originalExtraBytes = Buffer.from(readFileSync(extraPath));
+    let removedAfterAdmission = false;
+    const missingAfterAdmission = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: (program, args) => {
+        if (!removedAfterAdmission && program === "readelf") {
+          removedAfterAdmission = true;
+          rmSync(extraPath);
+        }
+        return mockRunner(program, args);
+      },
+    });
+    expect(missingAfterAdmission.status).toBe("fail");
+    expect(missingAfterAdmission.checks.find(c => c.id === "private-runtime-closure")?.detail).toMatch(/missing|ENOENT|regular/i);
+    writeFileSync(extraPath, originalExtraBytes, { mode: 0o644 });
+
+    // A same-sized replacement after admission must not be accepted under the
+    // original inventory identity, even though its ELF header remains present.
+    let mutatedAfterAdmission = false;
+    const mutatedBytes = Buffer.from(originalExtraBytes);
+    mutatedBytes[7] = 0x7f;
+    const mutatedAfterAdmissionResult = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: (program, args) => {
+        if (!mutatedAfterAdmission && program === "readelf") {
+          mutatedAfterAdmission = true;
+          writeFileSync(extraPath, mutatedBytes, { mode: 0o644 });
+        }
+        return mockRunner(program, args);
+      },
+    });
+    expect(mutatedAfterAdmissionResult.status).toBe("fail");
+    expect(mutatedAfterAdmissionResult.checks.find(c => c.id === "private-runtime-closure")?.detail).toMatch(/inventory mismatch/i);
   });
 
   it("checks expected payload identity for ordinary Darwin payloads", async () => {

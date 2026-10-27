@@ -218,8 +218,41 @@ const linuxCommit = "86e01ee2cc47e13a1f5910748cdcad023366ef6b";
 const linuxTree = "2222222222222222222222222222222222222222";
 const linuxCandidate = "9ce10142eb22369c65c4581db45ab5213cb1593152a1675b6f93802f70993e86";
 
+const retainedDarwinExecutableSha256 = "4c8ce3b880e87943f1e09614ff6a9639f3bbe0111b4bba61e00a3f4ec811f1b9";
+const retainedDarwinNativePayloadSha256 = "b621e93397130738cea0f64f56959286b398861e0b190c73674449757b1eecaa";
+const targetSources = {
+  "darwin-arm64": {
+    authority: "retained-darwin-b954",
+    sourceCommit: darwinCommit,
+    sourceTree: darwinTree,
+    sourceCandidate: darwinCandidate,
+    nativePayloadSha256: retainedDarwinNativePayloadSha256,
+    executableSha256: retainedDarwinExecutableSha256,
+    packageManifestSha256: digest("8"),
+  },
+  "linux-arm64": {
+    authority: "current-linux-source",
+    sourceCommit: linuxCommit,
+    sourceTree: linuxTree,
+    sourceCandidate: linuxCandidate,
+    nativePayloadSha256: digest("9"),
+    executableSha256: digest("0"),
+    packageManifestSha256: digest("a"),
+  },
+  "linux-x64": {
+    authority: "current-linux-source",
+    sourceCommit: linuxCommit,
+    sourceTree: linuxTree,
+    sourceCandidate: linuxCandidate,
+    nativePayloadSha256: digest("b"),
+    executableSha256: digest("e"),
+    packageManifestSha256: digest("f"),
+  },
+};
+
+async function runConsumerContract() {
 const fixture = JSON.parse(
-  await readFile(new URL("./fixtures/nebular-hosted-product-consumer/source-listing.json", import.meta.url), "utf8"),
+  await readFile(resolve(__dirname, "fixtures/nebular-hosted-product-consumer/source-listing.json"), "utf8"),
 );
 assert.equal(fixture.purpose.includes("never release evidence"), true);
 const listing = Buffer.from(fixture.listing, "utf8");
@@ -254,39 +287,6 @@ const correspondingSourceOfferBody = {
 const correspondingSourceOffer = {
   ...correspondingSourceOfferBody,
   manifestSha256: sha256(Buffer.from(canonical(correspondingSourceOfferBody))),
-};
-
-const retainedDarwinExecutableSha256 = "4c8ce3b880e87943f1e09614ff6a9639f3bbe0111b4bba61e00a3f4ec811f1b9";
-const retainedDarwinNativePayloadSha256 = "b621e93397130738cea0f64f56959286b398861e0b190c73674449757b1eecaa";
-
-const targetSources = {
-  "darwin-arm64": {
-    authority: "retained-darwin-b954",
-    sourceCommit: darwinCommit,
-    sourceTree: darwinTree,
-    sourceCandidate: darwinCandidate,
-    nativePayloadSha256: retainedDarwinNativePayloadSha256,
-    executableSha256: retainedDarwinExecutableSha256,
-    packageManifestSha256: digest("8"),
-  },
-  "linux-arm64": {
-    authority: "current-linux-source",
-    sourceCommit: linuxCommit,
-    sourceTree: linuxTree,
-    sourceCandidate: linuxCandidate,
-    nativePayloadSha256: digest("9"),
-    executableSha256: digest("0"),
-    packageManifestSha256: digest("a"),
-  },
-  "linux-x64": {
-    authority: "current-linux-source",
-    sourceCommit: linuxCommit,
-    sourceTree: linuxTree,
-    sourceCandidate: linuxCandidate,
-    nativePayloadSha256: digest("b"),
-    executableSha256: digest("e"),
-    packageManifestSha256: digest("f"),
-  },
 };
 
 const asset = (platform, kind, index) => ({
@@ -2627,8 +2627,7 @@ try {
   await rm(fetchTemp, { recursive: true, force: true });
 }
 
-process.stdout.write(
-  JSON.stringify({
+return {
     status: "pass",
     refusalCases: 69,
     sourceInventoryCases: 2,
@@ -2636,5 +2635,16 @@ process.stdout.write(
     fetchCases: 5,
     endToEndQualifyCases: 4,
     cliSubcommandCases: 5,
-  }) + "\n",
-);
+  };
+}
+
+if (typeof describe === "function" && typeof it === "function") {
+  describe("nebular hosted product consumer contract", () => {
+    it("executes the complete standalone contract as a registered Vitest test", async () => {
+      await runConsumerContract();
+    });
+  });
+} else {
+  const summary = await runConsumerContract();
+  process.stdout.write(JSON.stringify(summary) + "\n");
+}

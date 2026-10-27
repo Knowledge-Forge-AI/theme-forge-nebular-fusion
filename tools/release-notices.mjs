@@ -20,6 +20,7 @@ import { existsSync, readdirSync, readFileSync, lstatSync, constants, openSync, 
 import { chmod, cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRegularSnapshot } from "./fs-snapshot.mjs";
 import { targetForHost, readCandidateVersion, requireCandidateVersion } from "./platform-targets.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -31,6 +32,64 @@ export const CARGO_METADATA_FORMAT = "1";
 
 const MAX_PATH_BYTES = 512;
 const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9._@+-]+$/;
+const REQUIRED_CURRENT_FRONTEND_IDENTITIES = Object.freeze([
+  "@astrojs/starlight@0.42.0",
+  "@pagefind/default-ui@1.5.2",
+  "astro@7.3.3",
+  "pagefind@1.5.2",
+]);
+const DEFAULT_UI_BUNDLED_DEPENDENCIES = Object.freeze([
+  {
+    package: "svelte",
+    version: "4.2.20",
+    license: "MIT",
+    lockPackagePath: "node_modules/svelte",
+    source: "https://github.com/sveltejs/svelte",
+    revision: "svelte@4.2.20",
+    licensePath: "LICENSE.md",
+    noticeFile: "svelte-4.2.20-LICENSE.md",
+  },
+  {
+    package: "bcp-47",
+    version: "2.1.0",
+    license: "MIT",
+    lockPackagePath: "node_modules/bcp-47",
+    source: "https://github.com/wooorm/bcp-47",
+    revision: "2.1.0",
+    licensePath: "license",
+    noticeFile: "bcp-47-2.1.0-license",
+  },
+  {
+    package: "is-alphabetical",
+    version: "2.0.1",
+    license: "MIT",
+    lockPackagePath: "node_modules/is-alphabetical",
+    source: "https://github.com/wooorm/is-alphabetical",
+    revision: "2.0.1",
+    licensePath: "license",
+    noticeFile: "is-alphabetical-2.0.1-license",
+  },
+  {
+    package: "is-alphanumerical",
+    version: "2.0.1",
+    license: "MIT",
+    lockPackagePath: "node_modules/is-alphanumerical",
+    source: "https://github.com/wooorm/is-alphanumerical",
+    revision: "2.0.1",
+    licensePath: "license",
+    noticeFile: "is-alphanumerical-2.0.1-license",
+  },
+  {
+    package: "is-decimal",
+    version: "2.0.1",
+    license: "MIT",
+    lockPackagePath: "node_modules/is-decimal",
+    source: "https://github.com/wooorm/is-decimal",
+    revision: "2.0.1",
+    licensePath: "license",
+    noticeFile: "is-decimal-2.0.1-license",
+  },
+]);
 
 /** @typedef {{pkg: string, dep_kinds?: Array<{kind: string | null}>}} CargoDependency */
 /** @typedef {{id: string, deps: CargoDependency[]}} CargoResolveNode */
@@ -39,20 +98,31 @@ const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9._@+-]+$/;
 /** @typedef {{id: string, name: string, version: string, license: string | null, license_file: string | null, manifest_path: string | null, isProcMacro: boolean, crateDir: string | null}} ResolvedCrate */
 /** @typedef {{licenseFiles: string[], hasLicenseText: boolean, isMissingRequiredMaterial: boolean, failureReason: string | null}} LicenseInventory */
 /** @typedef {{name: string, version: string, license: string | null, revision: string, files: Array<{path: string, size: number, sha256: string}>}} SupplementalPackage */
-/** @typedef {{schema?: string, packages: SupplementalPackage[]}} SupplementalManifest */
-/** @typedef {{fileName: string, sourcePath: string | null, relativePath: string}} NoticeFile */
+/** @typedef {{package: string, version: string, repository: string, revision: string, path: string, url: string}} SupplementalFrontendUpstream */
+/** @typedef {{path: string, size: number, sha256: string, role?: string, upstream?: SupplementalFrontendUpstream}} SupplementalFrontendFile */
+/** @typedef {{path: string, size: number, sha256: string}} SupplementalFrontendManifest */
+/** @typedef {{path: string, size: number, sha256: string}} SupplementalFrontendProvenanceFile */
+/** @typedef {{package: string, version: string, license: string, lockPackagePath: string, source: string, revision: string, licensePath: string, noticeFile: string}} SupplementalFrontendBundledDependency */
+/** @typedef {{repository: string, revision: string, path: string}} SupplementalFrontendDependencyLock */
+/** @typedef {{kind: string, parentPackage: string, parentManifestSha256: string, sourceFiles: SupplementalFrontendProvenanceFile[], emittedMembers: SupplementalFrontendProvenanceFile[], licenseCoverage: string, dependencyLock?: SupplementalFrontendDependencyLock, bundledDependencies?: SupplementalFrontendBundledDependency[]}} SupplementalFrontendProvenance */
+/** @typedef {{name: string, version: string, license: string, role: string, lockPackagePath: string, licenseSourcePackage?: string, embeddedProvenance?: SupplementalFrontendProvenance, packageManifest: SupplementalFrontendManifest, files: SupplementalFrontendFile[]}} SupplementalFrontendPackage */
+/** @typedef {{packagePath: string, lockPath: string}} SupplementalFrontendFixtureBinding */
+/** @typedef {{sourceBindings: {monorepo: SupplementalFrontendFixtureBinding, publicComposition: SupplementalFrontendFixtureBinding}, packageSize: number, packageSha256: string, lockSize: number, lockSha256: string}} SupplementalFrontendFixture */
+/** @typedef {{schema?: string, packages: SupplementalPackage[], frontendFixture?: SupplementalFrontendFixture, frontendPackages?: SupplementalFrontendPackage[]}} SupplementalManifest */
+/** @typedef {{fileName: string, sourcePath: string | null, relativePath: string, bytes?: Buffer}} NoticeFile */
 /** @typedef {{name: string, sourcePath: string, relativePath: string}} RootNotice */
 /** @typedef {{name: string, version: string, license: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} NpmNoticePackage */
 /** @typedef {{name: string, version: string, license: string | null, isProcMacro: boolean, checksum: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} CrateNoticePackage */
 /** @typedef {{name: string, version: string, license: string | null, failureReason: string | null}} MissingMaterial */
 /** @typedef {string | {relativePath: string}} ManifestFile */
 /** @typedef {{name: string, version: string, license?: string | null, files?: string[]}} MockNpmPackage */
-/** @typedef {{rootPackageId?: string, cargoMetadata?: CargoMetadata, cargoLockContent?: string, fileExistenceMap?: Record<string, boolean>, mockNpmPackages?: Record<string, MockNpmPackage>, mockCrateFiles?: Record<string, string[]>, supplementalLicenses?: Record<string, string[]>, repoRoot?: string, studioRoot?: string, outDir?: string, writeFiles?: boolean, failOnMissing?: boolean, allowExternalOutDir?: boolean}} NoticeOptions */
+/** @typedef {{rootPackageId?: string, cargoMetadata?: CargoMetadata, cargoLockContent?: string, fileExistenceMap?: Record<string, boolean>, mockNpmPackages?: Record<string, MockNpmPackage>, mockCrateFiles?: Record<string, string[]>, supplementalLicenses?: Record<string, string[]>, repoRoot?: string, studioRoot?: string, outDir?: string, writeFiles?: boolean, failOnMissing?: boolean, allowExternalOutDir?: boolean, frontendSupplemental?: boolean}} NoticeOptions */
 /** @typedef {{name: string, version: string, license?: string | null, files?: ManifestFile[], hasLicenseText?: boolean}} ManifestNpmPackage */
 /** @typedef {{name: string, version: string, license?: string | null, checksum?: string | null, isProcMacro?: boolean, files?: ManifestFile[], hasLicenseText?: boolean}} ManifestCrate */
 /** @typedef {{name?: string, version?: string, license?: string, files?: ManifestFile[]}} ManifestRoot */
 /** @typedef {{status?: string, missingRequiredMaterial?: MissingMaterial[]}} ManifestValidation */
-/** @typedef {{root?: ManifestRoot, npm?: ManifestNpmPackage[], crates?: ManifestCrate[], validation?: ManifestValidation}} ManifestData */
+/** @typedef {{name: string, version: string, license: string, role: string, files: ManifestFile[], hasLicenseText: boolean, lockPackagePath: string, packageManifestSha256: string, fixtureLockSha256: string, licenseSourcePackage?: string, embeddedProvenance?: SupplementalFrontendProvenance}} ManifestFrontendPackage */
+/** @typedef {{root?: ManifestRoot, npm?: ManifestNpmPackage[], frontend?: ManifestFrontendPackage[], crates?: ManifestCrate[], validation?: ManifestValidation}} ManifestData */
 
 /**
  * Validates and normalizes a relative path string.
@@ -515,6 +585,22 @@ export function renderThirdPartyNoticesJson(manifestData) {
     },
   };
 
+  if (manifestData.frontend && manifestData.frontend.length > 0) {
+    cleanManifest.frontend = manifestData.frontend.map((pkg) => ({
+      name: pkg.name,
+      version: pkg.version,
+      license: pkg.license,
+      role: pkg.role,
+      lockPackagePath: pkg.lockPackagePath,
+      fixtureLockSha256: pkg.fixtureLockSha256,
+      packageManifestSha256: pkg.packageManifestSha256,
+      ...(pkg.licenseSourcePackage ? { licenseSourcePackage: pkg.licenseSourcePackage } : {}),
+      ...(pkg.embeddedProvenance ? { embeddedProvenance: pkg.embeddedProvenance } : {}),
+      files: (pkg.files || []).map((f) => normalizeSafeRelativePath(typeof f === "string" ? f : f.relativePath)).sort(),
+      hasLicenseText: Boolean(pkg.hasLicenseText),
+    })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+
   return `${JSON.stringify(cleanManifest, null, 2)}\n`;
 }
 
@@ -564,6 +650,21 @@ export function renderThirdPartyNoticesMarkdown(manifestData) {
     lines.push(`| **${pkg.name}** | ${pkg.version} | ${pkg.license || "*(unspecified)*"} | ${fileList} |`);
   }
   lines.push("");
+
+  const frontendPackages = [...(manifestData.frontend || [])].sort((a, b) => (a.name < b.name ? -1 : 1));
+  if (frontendPackages.length > 0) {
+    lines.push("## Distributed Preview Frontend Components (npm)");
+    lines.push("");
+    lines.push("These records cover static runtime code and search assets emitted into the application frontend. Build-only compiler, platform binary, and development packages are not listed here.");
+    lines.push("");
+    lines.push("| Package | Version | License | Role | Copied Notice Files |");
+    lines.push("| :--- | :--- | :--- | :--- | :--- |");
+    for (const pkg of frontendPackages) {
+      const fileList = (pkg.files || []).map((f) => `\`${typeof f === "string" ? f : f.relativePath}\``).join(", ") || "*(none)*";
+      lines.push(`| **${pkg.name}** | ${pkg.version} | ${pkg.license} | ${pkg.role} | ${fileList} |`);
+    }
+    lines.push("");
+  }
 
   lines.push("---");
   lines.push("");
@@ -665,6 +766,264 @@ export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
 }
 
 /**
+ * Parses the npm lockfile's package table without resolving or rewriting it.
+ * The complete fixture digest is checked by the caller before these entries are used.
+ * @param {string} lockContent
+ * @returns {Record<string, {version?: string, license?: string, integrity?: string}>}
+ */
+export function parsePackageLockPackages(lockContent) {
+  if (typeof lockContent !== "string") throw new Error("Fixture package-lock content is not text");
+  let lock;
+  try {
+    lock = JSON.parse(lockContent);
+  } catch {
+    throw new Error("Fixture package-lock content is not valid JSON");
+  }
+  if (!lock || typeof lock !== "object" || !lock.packages || typeof lock.packages !== "object" || Array.isArray(lock.packages)) {
+    throw new Error("Fixture package-lock has no packages table");
+  }
+  return /** @type {Record<string, {version?: string, license?: string, integrity?: string}>} */ (lock.packages);
+}
+
+/** @param {string} baseDir @param {string} pathStr @param {{label: string, size?: number, sha256?: string, maxBytes?: number}} options */
+function readBoundedSupplementalFile(baseDir, pathStr, options) {
+  const path = joinSafeRelative(baseDir, pathStr);
+  const snapshot = readRegularSnapshot(path, {
+    bindPath: true,
+    label: options.label,
+    maxBytes: options.maxBytes ?? 1024 * 1024,
+  });
+  if (!snapshot) throw new Error(`${options.label} is missing: ${pathStr}`);
+  if (options.size !== undefined && snapshot.size !== options.size) {
+    throw new Error(`${options.label} size mismatch: ${pathStr}`);
+  }
+  if (options.sha256 !== undefined && snapshot.sha256 !== options.sha256) {
+    throw new Error(`${options.label} digest mismatch: ${pathStr}`);
+  }
+  return { path, snapshot };
+}
+
+/** @param {string} repoRoot @param {SupplementalFrontendFixture} fixture @returns {{context: "monorepo" | "publicComposition", binding: SupplementalFrontendFixtureBinding}} */
+function resolveFrontendFixtureBinding(repoRoot, fixture) {
+  if (!fixture || typeof fixture !== "object" || !fixture.sourceBindings || typeof fixture.sourceBindings !== "object") {
+    throw new Error("Frontend fixture source bindings are missing");
+  }
+  const monorepo = fixture.sourceBindings.monorepo;
+  const publicComposition = fixture.sourceBindings.publicComposition;
+  if (!monorepo || typeof monorepo.packagePath !== "string" || typeof monorepo.lockPath !== "string"
+    || !publicComposition || typeof publicComposition.packagePath !== "string" || typeof publicComposition.lockPath !== "string") {
+    throw new Error("Frontend fixture source bindings are invalid");
+  }
+  const monorepoPackage = joinSafeRelative(repoRoot, monorepo.packagePath);
+  const monorepoLock = joinSafeRelative(repoRoot, monorepo.lockPath);
+  const publicPackage = joinSafeRelative(repoRoot, publicComposition.packagePath);
+  const publicLock = joinSafeRelative(repoRoot, publicComposition.lockPath);
+  const monorepoLayout = existsSync(join(repoRoot, "apps/studio")) && existsSync(monorepoPackage) && existsSync(monorepoLock);
+  const publicLayout = existsSync(join(repoRoot, "loom-preview-source")) && existsSync(publicPackage) && existsSync(publicLock);
+  if (monorepoLayout === publicLayout) {
+    throw new Error("Frontend fixture source layout is missing or ambiguous");
+  }
+  return monorepoLayout
+    ? { context: "monorepo", binding: monorepo }
+    : { context: "publicComposition", binding: publicComposition };
+}
+
+/** @param {string} repoRoot @param {SupplementalFrontendFixture} fixture @returns {{context: "monorepo" | "publicComposition", packagePath: string, package: Record<string, unknown>, lockPath: string, lockContent: string, lockPackages: Record<string, {version?: string, license?: string, integrity?: string}>}} */
+function readFrontendFixture(repoRoot, fixture) {
+  const resolved = resolveFrontendFixtureBinding(repoRoot, fixture);
+  const packageFile = readBoundedSupplementalFile(repoRoot, resolved.binding.packagePath, {
+    label: "Frontend fixture package manifest",
+    size: fixture.packageSize,
+    sha256: fixture.packageSha256,
+    maxBytes: 1024 * 1024,
+  });
+  const lockFile = readBoundedSupplementalFile(repoRoot, resolved.binding.lockPath, {
+    label: "Frontend fixture package lock",
+    size: fixture.lockSize,
+    sha256: fixture.lockSha256,
+    maxBytes: 16 * 1024 * 1024,
+  });
+  let packageJson;
+  try {
+    packageJson = JSON.parse(packageFile.snapshot.bytes.toString("utf8"));
+  } catch {
+    throw new Error("Frontend fixture package manifest is not valid JSON");
+  }
+  return {
+    context: resolved.context,
+    packagePath: packageFile.path,
+    package: packageJson,
+    lockPath: lockFile.path,
+    lockContent: lockFile.snapshot.bytes.toString("utf8"),
+    lockPackages: parsePackageLockPackages(lockFile.snapshot.bytes.toString("utf8")),
+  };
+}
+
+/** @param {unknown} provenance @param {string} identity @param {string} packageManifestSha256 */
+function validateFrontendProvenance(provenance, identity, packageManifestSha256) {
+  if (provenance === undefined) return;
+  if (!provenance || typeof provenance !== "object"
+    || provenance.kind !== "svelte-compiled-default-ui"
+    || provenance.parentPackage !== identity
+    || provenance.parentManifestSha256 !== packageManifestSha256
+    || typeof provenance.licenseCoverage !== "string" || provenance.licenseCoverage.length === 0
+    || !Array.isArray(provenance.sourceFiles) || provenance.sourceFiles.length === 0
+    || !Array.isArray(provenance.emittedMembers) || provenance.emittedMembers.length === 0) {
+    throw new Error(`Invalid frontend embedded provenance: ${identity}`);
+  }
+  const validateFiles = (files, label, pathPattern) => {
+    const paths = new Set();
+    for (const file of files) {
+      if (!file || typeof file.path !== "string" || typeof file.size !== "number" || !Number.isSafeInteger(file.size)
+        || file.size < 0 || !/^[a-f0-9]{64}$/.test(file.sha256) || !pathPattern.test(file.path)) {
+        throw new Error(`Invalid frontend embedded provenance ${label}: ${identity}`);
+      }
+      const safePath = normalizeSafeRelativePath(file.path);
+      if (paths.has(safePath)) throw new Error(`Duplicate frontend embedded provenance path: ${safePath}`);
+      paths.add(safePath);
+    }
+  };
+  validateFiles(provenance.sourceFiles, "source file", /^@pagefind\/default-ui\/svelte\/[A-Za-z0-9._+-]+\.svelte$/u);
+  validateFiles(provenance.emittedMembers, "emitted member", /^(?:_astro\/[A-Za-z0-9._+-]+\.js|pagefind\/pagefind-ui\.(?:js|css))$/u);
+  if (identity === "@pagefind/default-ui@1.5.2") {
+    if (!provenance.dependencyLock || provenance.dependencyLock.repository !== "https://github.com/Pagefind/pagefind"
+      || provenance.dependencyLock.revision !== "v1.5.2"
+      || provenance.dependencyLock.path !== "pagefind_ui/default/package-lock.json"
+      || !Array.isArray(provenance.bundledDependencies)
+      || JSON.stringify(provenance.bundledDependencies) !== JSON.stringify(DEFAULT_UI_BUNDLED_DEPENDENCIES)) {
+      throw new Error(`Invalid bundled dependency provenance: ${identity}`);
+    }
+  }
+}
+
+/**
+ * Reads the authenticated frontend package/license supplements. These records are optional for
+ * legacy synthetic notice fixtures, but when the current tracked manifest is present every record
+ * must join to the exact fixture package/lock bytes and every text byte must be descriptor-bound.
+ * @param {string} studioRoot
+ * @param {string} repoRoot
+ * @param {string} supplementalRoot
+ * @param {SupplementalManifest} supplements
+ * @returns {ManifestFrontendPackage[]}
+ */
+export function collectFrontendSupplementalNotices(studioRoot, repoRoot, supplementalRoot, supplements) {
+  const records = supplements.frontendPackages;
+  if (records === undefined) return [];
+  if (!Array.isArray(records) || records.length === 0) throw new Error("Frontend supplemental package records are missing");
+  if (!supplements.frontendFixture) throw new Error("Frontend supplemental fixture binding is missing");
+
+  const fixture = readFrontendFixture(repoRoot, supplements.frontendFixture);
+  const rootPackage = fixture.package;
+  if (rootPackage.name !== "@knowledge-forge-ai/tfsl-fixture" || rootPackage.version !== "0.0.0-tfsb53b") {
+    throw new Error("Frontend fixture package identity mismatch");
+  }
+
+  const declaredIdentities = new Set(records.map((record) => `${record?.name ?? ""}@${record?.version ?? ""}`));
+  /** @type {Set<string>} */
+  const identities = new Set();
+  /** @type {Set<string>} */
+  const outputPaths = new Set();
+  /** @type {ManifestFrontendPackage[]} */
+  const result = [];
+  for (const record of records) {
+    if (!record || typeof record !== "object" || typeof record.name !== "string" || typeof record.version !== "string" || typeof record.license !== "string") {
+      throw new Error("Invalid frontend supplemental package record");
+    }
+    const identity = `${record.name}@${record.version}`;
+    if (identities.has(identity)) throw new Error(`Duplicate frontend supplemental package: ${identity}`);
+    identities.add(identity);
+    if (record.licenseSourcePackage && !declaredIdentities.has(record.licenseSourcePackage)) {
+      throw new Error(`Frontend license source package is not declared: ${record.licenseSourcePackage}`);
+    }
+    if (!/^node_modules\/(?:@[^/]+\/)?[^/]+$/.test(record.lockPackagePath)) {
+      throw new Error(`Invalid frontend lock package path: ${record.lockPackagePath}`);
+    }
+    const locked = fixture.lockPackages[record.lockPackagePath];
+    if (!locked || locked.version !== record.version || locked.license !== record.license) {
+      throw new Error(`Frontend package does not match the authenticated fixture lock: ${identity}`);
+    }
+    if (!record.packageManifest || typeof record.packageManifest.path !== "string") {
+      throw new Error(`Frontend package manifest binding is missing: ${identity}`);
+    }
+    const packageManifest = readBoundedSupplementalFile(supplementalRoot, record.packageManifest.path, {
+      label: `Frontend package manifest ${identity}`,
+      size: record.packageManifest.size,
+      sha256: record.packageManifest.sha256,
+      maxBytes: 1024 * 1024,
+    });
+    let packageJson;
+    try {
+      packageJson = JSON.parse(packageManifest.snapshot.bytes.toString("utf8"));
+    } catch {
+      throw new Error(`Frontend package manifest is not valid JSON: ${identity}`);
+    }
+    if (packageJson.name !== record.name || packageJson.version !== record.version || packageJson.license !== record.license) {
+      throw new Error(`Frontend package manifest identity mismatch: ${identity}`);
+    }
+    validateFrontendProvenance(record.embeddedProvenance, identity, packageManifest.snapshot.sha256);
+    if (!Array.isArray(record.files) || record.files.length === 0) {
+      throw new Error(`Frontend package has no license material: ${identity}`);
+    }
+    const dirName = sanitizeNpmPackageDirName(record.name, record.version);
+    const files = [];
+    const bundledNoticeFiles = new Set(record.embeddedProvenance?.bundledDependencies?.map((dependency) => dependency.noticeFile) || []);
+    const bundledNoticeCounts = new Map();
+    for (const file of record.files) {
+      if (!file || typeof file.path !== "string" || typeof file.size !== "number" || typeof file.sha256 !== "string") {
+        throw new Error(`Invalid frontend license file record: ${identity}`);
+      }
+      if (file.role === "bundled-third-party-license-full") {
+        const upstream = file.upstream;
+        if (!upstream || upstream.package !== "mark.js" || upstream.version !== "8.11.1"
+          || upstream.repository !== "https://github.com/julmot/mark.js"
+          || upstream.revision !== "8.11.1" || upstream.path !== "LICENSE"
+          || upstream.url !== "https://raw.githubusercontent.com/julmot/mark.js/8.11.1/LICENSE") {
+          throw new Error(`Unbound full third-party license provenance: ${identity}`);
+        }
+      }
+      if (bundledNoticeFiles.has(basename(file.path))) {
+        if (file.role !== "bundled-third-party-license") {
+          throw new Error(`Bundled third-party license role is missing: ${identity}`);
+        }
+        bundledNoticeCounts.set(basename(file.path), (bundledNoticeCounts.get(basename(file.path)) || 0) + 1);
+      } else if (record.embeddedProvenance && file.role === "bundled-third-party-license") {
+        throw new Error(`Unbound bundled third-party license provenance: ${identity}`);
+      }
+      const source = readBoundedSupplementalFile(supplementalRoot, file.path, {
+        label: `Frontend license material ${identity}`,
+        size: file.size,
+        sha256: file.sha256,
+        maxBytes: 4 * 1024 * 1024,
+      });
+      const fileName = basename(file.path);
+      const relativePath = normalizeSafeRelativePath(`npm-frontend/${dirName}/${fileName}`);
+      if (outputPaths.has(relativePath)) throw new Error(`Duplicate frontend notice output path: ${relativePath}`);
+      outputPaths.add(relativePath);
+      files.push({ fileName, sourcePath: source.path, relativePath, bytes: source.snapshot.bytes });
+    }
+    for (const noticeFile of bundledNoticeFiles) {
+      if (bundledNoticeCounts.get(noticeFile) !== 1) {
+        throw new Error(`Bundled third-party license material is missing: ${identity}`);
+      }
+    }
+    result.push({
+      name: record.name,
+      version: record.version,
+      license: record.license,
+      role: record.role,
+      files,
+      hasLicenseText: true,
+      lockPackagePath: record.lockPackagePath,
+      packageManifestSha256: record.packageManifest.sha256,
+      fixtureLockSha256: supplements.frontendFixture.lockSha256,
+      ...(record.licenseSourcePackage ? { licenseSourcePackage: record.licenseSourcePackage } : {}),
+      ...(record.embeddedProvenance ? { embeddedProvenance: record.embeddedProvenance } : {}),
+    });
+  }
+  return result.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/**
  * Main generator function.
  * Deterministically generates release-notices directory containing:
  * - root/ (copied first-party notices)
@@ -676,6 +1035,7 @@ export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
 /** @param {NoticeOptions} [options] */
 export async function generateReleaseNotices(options = {}) {
   const studioRoot = resolve(options.studioRoot || STUDIO_ROOT);
+  const repoRoot = resolve(options.repoRoot || findRepositoryRoot(studioRoot));
   const candidateVersion = readCandidateVersion(studioRoot);
   const outDir = resolve(options.outDir || DEFAULT_OUTPUT_DIR);
   const writeFiles = options.writeFiles !== false;
@@ -694,10 +1054,18 @@ export async function generateReleaseNotices(options = {}) {
   const supplementalManifest = join(supplementalRoot, "manifest.json");
   /** @type {SupplementalManifest} */
   let supplements = { packages: [] };
-  try {
-    supplements = JSON.parse(readFileSync(supplementalManifest, "utf8"));
-  } catch (err) {
-    if (/** @type {NodeJS.ErrnoException} */ (err).code !== "ENOENT") throw err;
+  const supplementalManifestSnapshot = readRegularSnapshot(supplementalManifest, {
+    bindPath: true,
+    missingOk: true,
+    label: "Supplemental license manifest",
+    maxBytes: 16 * 1024 * 1024,
+  });
+  if (supplementalManifestSnapshot) {
+    try {
+      supplements = JSON.parse(supplementalManifestSnapshot.bytes.toString("utf8"));
+    } catch {
+      throw new Error("Supplemental license manifest is not valid JSON");
+    }
   }
   if (supplements.schema && supplements.schema !== "tfsb.supplemental-license-material-v1") {
     throw new Error("Invalid supplemental license schema");
@@ -793,6 +1161,12 @@ export async function generateReleaseNotices(options = {}) {
 
   // 5. Collect npm notices
   const npmNotices = collectNpmDistributedNotices(studioRoot, options);
+  const useFrontendSupplemental = options.frontendSupplemental === true
+    || (options.frontendSupplemental !== false && options.cargoMetadata === undefined);
+  const frontendNotices = useFrontendSupplemental && supplements.frontendPackages
+    ? collectFrontendSupplementalNotices(studioRoot, repoRoot, supplementalRoot, supplements)
+    : [];
+  const requiresCurrentFrontendNotices = options.frontendSupplemental === true || options.cargoMetadata === undefined;
   if (!options.cargoMetadata) {
     const requiredRoot = ["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md", "node-LICENSE.txt"];
     if (requiredRoot.some(name => !rootNotices.some(item => item.name === name))) {
@@ -801,6 +1175,12 @@ export async function generateReleaseNotices(options = {}) {
     if (npmNotices.length !== 4 || npmNotices.some(item => !item.hasLicenseText)) {
       throw new Error("Required distributed frontend license material is absent");
     }
+  }
+  if (requiresCurrentFrontendNotices
+    && (frontendNotices.length !== REQUIRED_CURRENT_FRONTEND_IDENTITIES.length
+      || frontendNotices.map((item) => `${item.name}@${item.version}`).join("\n") !== REQUIRED_CURRENT_FRONTEND_IDENTITIES.join("\n")
+      || frontendNotices.some(item => !item.hasLicenseText))) {
+    throw new Error("Required distributed frontend runtime identity material is absent");
   }
 
   // 6. Build manifest structure
@@ -819,6 +1199,21 @@ export async function generateReleaseNotices(options = {}) {
       files: pkg.files.map((f) => f.relativePath),
       hasLicenseText: pkg.hasLicenseText,
     })),
+    ...(frontendNotices.length > 0 ? {
+      frontend: frontendNotices.map((pkg) => ({
+        name: pkg.name,
+        version: pkg.version,
+        license: pkg.license,
+        role: pkg.role,
+        lockPackagePath: pkg.lockPackagePath,
+        packageManifestSha256: pkg.packageManifestSha256,
+        fixtureLockSha256: pkg.fixtureLockSha256,
+        ...(pkg.licenseSourcePackage ? { licenseSourcePackage: pkg.licenseSourcePackage } : {}),
+        ...(pkg.embeddedProvenance ? { embeddedProvenance: pkg.embeddedProvenance } : {}),
+        files: pkg.files.map(({ fileName, relativePath }) => ({ fileName, relativePath })),
+        hasLicenseText: pkg.hasLicenseText,
+      })),
+    } : {}),
     crates: crateInventory.map((c) => ({
       name: c.name,
       version: c.version,
@@ -846,9 +1241,10 @@ export async function generateReleaseNotices(options = {}) {
     const expectedPaths = new Set([
       ...rootNotices.map(item => item.relativePath),
       ...npmNotices.flatMap(item => item.files.map(file => file.relativePath)),
+      ...frontendNotices.flatMap(item => item.files.map(file => file.relativePath)),
       ...crateInventory.flatMap(item => item.files.map(file => file.relativePath)),
       "THIRD-PARTY-NOTICES.json", "THIRD-PARTY-NOTICES.md",
-      ...(existsSync(supplementalManifest) ? ["supplemental-license-provenance.json"] : []),
+      ...(supplementalManifestSnapshot ? ["supplemental-license-provenance.json"] : []),
     ]);
     /** @param {string} directory @param {string} [prefix] */
     const inspectExisting = (directory, prefix = "") => {
@@ -874,8 +1270,8 @@ export async function generateReleaseNotices(options = {}) {
     };
     inspectExisting(outDir);
     await mkdir(outDir, { recursive: true });
-    if (existsSync(supplementalManifest)) {
-      await cp(supplementalManifest, join(outDir, "supplemental-license-provenance.json"));
+    if (supplementalManifestSnapshot) {
+      await writeFile(join(outDir, "supplemental-license-provenance.json"), supplementalManifestSnapshot.bytes);
       writtenFiles.push("supplemental-license-provenance.json");
     }
 
@@ -905,6 +1301,19 @@ export async function generateReleaseNotices(options = {}) {
           const dest = joinSafeRelative(outDir, file.relativePath);
           await mkdir(dirname(dest), { recursive: true });
           await cp(file.sourcePath, dest);
+          await chmod(dest, 0o644);
+          writtenFiles.push(file.relativePath);
+        }
+      }
+    }
+
+    // Copy authenticated static frontend runtime license material.
+    for (const pkg of frontendNotices) {
+      for (const file of pkg.files) {
+        if (file.bytes) {
+          const dest = joinSafeRelative(outDir, file.relativePath);
+          await mkdir(dirname(dest), { recursive: true });
+          await writeFile(dest, file.bytes);
           await chmod(dest, 0o644);
           writtenFiles.push(file.relativePath);
         }
