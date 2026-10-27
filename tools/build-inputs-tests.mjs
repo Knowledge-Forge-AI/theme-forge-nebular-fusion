@@ -9,6 +9,16 @@ import { digest, identity, inventoryTree, seal, sourceResourcePlans } from "./ca
 import { TARGETS, CANDIDATE_VERSION } from "./platform-targets.mjs";
 import { parseNativeBuildArgs, buildNativeCandidate, inspectAncestorCargoConfigs } from "./native-candidate-build.mjs";
 import { verifyProducedOutput } from "./verify-produced-output.mjs";
+import {
+  PRIVATE_RUNTIME_PREFIX,
+  PRIVATE_RUNTIME_MARKER,
+  REQUIRED_RUNTIME_DIRECTORIES,
+  REQUIRED_EXECUTABLE_RUNTIME_ROLES,
+  REQUIRED_RUNTIME_ROLES,
+  externalFloorForTarget,
+  computeMaterialDigest,
+  inventoryNativePayload,
+} from "./native-runtime.mjs";
 import { runOwnedBuild } from "./owned-build-process.mjs";
 import { produceBuildReceipt } from "./build-receipt.mjs";
 import { createBuildSettings, normalizeCargoConfig, validateBuildSettings, buildSettingsClaims, inventoryPath, inventoryLocator } from "./build-settings.mjs";
@@ -272,6 +282,51 @@ test("environment semantic compile settings mutation changes identity and reject
 
   // Runtime environment drift rejects mismatch
   inputs.execution.environment.MACOSX_DEPLOYMENT_TARGET = "14.0";
+  await assert.rejects(validateBuildInputs(inputs), /MACOSX_DEPLOYMENT_TARGET semantic setting mismatch/);
+});
+
+test("Darwin deployment target settings may raise but not lower the 13.0 product floor", async t => {
+  const { inputs } = await fixture(t);
+  const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  assert.equal(config.bundle.macOS.minimumSystemVersion, "13.0");
+  const bind = async value => {
+    const environment = { MACOSX_DEPLOYMENT_TARGET: value };
+    inputs.settings = await createBuildSettings({ environment });
+    inputs.execution = { environment: structuredClone(environment) };
+  };
+  // Absence remains governed by generic settings parity.
+  assert.equal(Object.hasOwn((await validateBuildInputs(inputs)).claims.settings.environment.semantic, "MACOSX_DEPLOYMENT_TARGET"), false);
+  // "100.0" sorts below "13.0" as a string; acceptance proves numeric comparison.
+  for (const value of ["13.0", "13.0.1", "13.1", "14.0", "100.0"]) {
+    await bind(value);
+    assert.equal((await validateBuildInputs(inputs)).claims.settings.environment.semantic.MACOSX_DEPLOYMENT_TARGET, value);
+  }
+  // "9.0" sorts above "13.0" as a string; rejection proves numeric comparison.
+  for (const value of ["12.0", "11.0", "12.9.9", "9.0"]) {
+    await bind(value);
+    assert.throws(() => buildInputClaims(inputs), /Darwin MACOSX_DEPLOYMENT_TARGET .* is below product floor 13\.0/);
+    await assert.rejects(validateBuildInputs(inputs), /below product floor 13\.0/);
+  }
+  for (const value of ["", "13", "13.", "13.0.0.0", "v13.0", "013.0", "13.0 ", "thirteen"]) {
+    await bind(value);
+    assert.throws(() => buildInputClaims(inputs), /Darwin MACOSX_DEPLOYMENT_TARGET must be numeric major\.minor\[\.patch\]/);
+    await assert.rejects(validateBuildInputs(inputs), /must be numeric major\.minor\[\.patch\]/);
+  }
+});
+
+test("non-Darwin targets do not inherit the Darwin deployment floor and keep exact parity", async t => {
+  const { inputs } = await fixture(t);
+  inputs.target = TARGETS[1].triple;
+  for (const name of COMPONENTS) inputs.components[name].target = TARGETS[1].triple;
+  for (const value of ["11.0", ""]) {
+    const environment = { MACOSX_DEPLOYMENT_TARGET: value };
+    inputs.settings = await createBuildSettings({ environment });
+    inputs.execution = { environment: structuredClone(environment) };
+    const validated = await validateBuildInputs(inputs);
+    assert.equal(validated.target.os, "linux");
+    assert.equal(validated.claims.settings.environment.semantic.MACOSX_DEPLOYMENT_TARGET, value);
+  }
+  inputs.execution.environment.MACOSX_DEPLOYMENT_TARGET = "12.0";
   await assert.rejects(validateBuildInputs(inputs), /MACOSX_DEPLOYMENT_TARGET semantic setting mismatch/);
 });
 
@@ -697,4 +752,217 @@ test("authenticated Cargo paths are remapped and scanned independently of stagin
   await assert.rejects(sourceBuildPathPolicy(inputs), /Internal locator bytes mismatch/);
   inputs.settings.cargo.locators.push({ path: sibling, identity: nestedId });
   await assert.rejects(sourceBuildPathPolicy(inputs), /coverage mismatch/);
+});
+
+test("produceBuildReceipt and verifyProducedOutput bind Linux private-runtime SONAME aliases and refuse alias tampering", async t => {
+  const { root, inputs } = await fixture(t);
+  const linuxTarget = TARGETS[2]; // x86_64-unknown-linux-gnu
+  inputs.mode = "nix-source";
+  inputs.target = linuxTarget.triple;
+  for (const name of COMPONENTS) inputs.components[name].target = linuxTarget.triple;
+  const studioRoot = join(root, "stage-linux");
+  const payloadRoot = join(root, "payload-linux");
+  const output = join(root, "receipt-linux");
+  await mkdir(output, { recursive: true });
+  const plan = inputs.source.resourcePlans[inputs.target];
+  for (const path of plan.resources) {
+    await mkdir(join(studioRoot, "src-tauri", path), { recursive: true });
+    await writeFile(join(studioRoot, "src-tauri", path, "resource"), path);
+    await mkdir(join(payloadRoot, "lib/theme-forge-nebular-fusion", path), { recursive: true });
+    await writeFile(join(payloadRoot, "lib/theme-forge-nebular-fusion", path, "resource"), path);
+  }
+  await mkdir(join(studioRoot, "src-tauri/binaries"), { recursive: true });
+  await writeFile(join(studioRoot, "src-tauri", `${plan.externalBin[0]}-${inputs.target}`), "runtime");
+  await mkdir(join(payloadRoot, "bin"), { recursive: true });
+  await writeFile(join(payloadRoot, "bin/tfsb-studio-service"), "runtime", { mode: 0o755 });
+  const elfBytes = Buffer.alloc(32);
+  elfBytes.set([127, 69, 76, 70, 2, 1], 0);
+  elfBytes.writeUInt16LE(62, 18);
+  await writeFile(join(payloadRoot, "bin/theme-forge-nebular-fusion"), elfBytes, { mode: 0o755 });
+
+  // Ordinary payload without aliases has identical inventoryTree and inventoryNativePayload
+  assert.equal((await inventoryNativePayload(payloadRoot)).identity, (await inventoryTree(payloadRoot)).identity);
+
+  // Add private runtime under opt/nebular-private + native-runtime.json
+  await mkdir(join(payloadRoot, "opt"), { recursive: true, mode: 0o755 });
+  await chmod(join(payloadRoot, "opt"), 0o755);
+  const directories = [];
+  for (const dir of REQUIRED_RUNTIME_DIRECTORIES) {
+    const absDir = join(payloadRoot, dir);
+    await mkdir(absDir, { recursive: true, mode: 0o755 });
+    await chmod(absDir, 0o755);
+    directories.push({ path: dir, mode: 0o755 });
+  }
+  const regulars = [];
+  for (const role of REQUIRED_RUNTIME_ROLES) {
+    const absPath = join(payloadRoot, role);
+    const executable = REQUIRED_EXECUTABLE_RUNTIME_ROLES.includes(role);
+    const mode = executable ? 0o755 : 0o644;
+    const content = executable ? "#!/bin/sh\nexit 0\n" : `role:${role}\n`;
+    await writeFile(absPath, content, { mode });
+    await chmod(absPath, mode);
+    regulars.push({
+      path: role,
+      bytes: Buffer.byteLength(content),
+      sha256: digest(content),
+      mode,
+      role: executable ? "helper-executable" : "shared-object",
+    });
+  }
+  // Include a second regular file with identical bytes to test alias terminal path swap
+  const altWebkitRel = "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0.19.10";
+  const webkitContent = `role:${REQUIRED_RUNTIME_ROLES[1]}\n`;
+  await writeFile(join(payloadRoot, altWebkitRel), webkitContent, { mode: 0o644 });
+  await chmod(join(payloadRoot, altWebkitRel), 0o644);
+  regulars.push({
+    path: altWebkitRel,
+    bytes: Buffer.byteLength(webkitContent),
+    sha256: digest(webkitContent),
+    mode: 0o644,
+  });
+  regulars.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+  const aliases = [
+    {
+      path: "opt/nebular-private/lib/libjavascriptcoregtk-4.1.so.0",
+      target: "libjavascriptcoregtk-4.1.so.0.9.11",
+      canonical: "opt/nebular-private/lib/libjavascriptcoregtk-4.1.so.0.9.11",
+    },
+    {
+      path: "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0",
+      target: "libwebkit2gtk-4.1.so.0.19.9",
+      canonical: "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0.19.9",
+    },
+  ];
+  for (const alias of aliases) {
+    await symlink(alias.target, join(payloadRoot, alias.path));
+  }
+  const externalFloor = externalFloorForTarget(linuxTarget.triple).map(soname => ({
+    soname,
+    basis: `debian-bookworm:${soname}`,
+    sha256: digest(`floor:${soname}:${linuxTarget.triple}`),
+    bytes: 4096,
+  }));
+  const unsignedMaterial = {
+    schema: "nebular-native-runtime-material-v1",
+    target: linuxTarget.triple,
+    prefix: PRIVATE_RUNTIME_PREFIX,
+    directories,
+    regulars,
+    aliases,
+    requiredRoles: [...REQUIRED_RUNTIME_ROLES],
+    externalFloor,
+  };
+  const material = {
+    ...unsignedMaterial,
+    materialDigest: computeMaterialDigest(unsignedMaterial),
+  };
+  await writeFile(join(payloadRoot, PRIVATE_RUNTIME_MARKER), JSON.stringify(material, null, 2) + "\n", { mode: 0o644 });
+
+  // inventoryTree still rejects the alias-containing fixture
+  await assert.rejects(inventoryTree(payloadRoot), /nonregular inventory member/);
+
+  const produced = await produceBuildReceipt({ inputs, studioRoot, payloadRoot, output });
+  const expectedPayloadInv = await inventoryNativePayload(payloadRoot);
+  assert.equal(produced.receipt.nativePayload, expectedPayloadInv.identity);
+  const writtenPayload = JSON.parse(await readFile(join(output, "native-payload.json"), "utf8"));
+  assert.deepEqual(writtenPayload, expectedPayloadInv);
+
+  const installed = join(root, "installed-linux");
+  await mkdir(join(installed, "share/nebular"), { recursive: true });
+  await cp(output, join(installed, "share/nebular"), { recursive: true });
+  await cp(payloadRoot, join(installed, "share/nebular/native"), { recursive: true, verbatimSymlinks: true });
+  assert.equal((await verifyProducedOutput(installed, linuxTarget.system)).buildReceipt, produced.receipt.identity);
+
+  const installedNative = join(installed, "share/nebular/native");
+  const installedLib = join(installedNative, "opt/nebular-private/lib");
+
+  // 1. Raw alias target drift (pointing to ./libwebkit2gtk-4.1.so.0.19.9 is refused)
+  await rm(join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  await symlink("./libwebkit2gtk-4.1.so.0.19.9", join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  await assert.rejects(verifyProducedOutput(installed, linuxTarget.system), /alias target|dot segment|mismatch/i);
+
+  // 2. Terminal target path drift (pointing to a different file with identical bytes, even if native-runtime.json is updated, fails against receipt)
+  await rm(join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  await symlink("libwebkit2gtk-4.1.so.0.19.10", join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  const swappedMat = structuredClone(material);
+  const swappedAlias = swappedMat.aliases.find(a => a.path === "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0");
+  swappedAlias.target = "libwebkit2gtk-4.1.so.0.19.10";
+  swappedAlias.canonical = altWebkitRel;
+  swappedMat.materialDigest = computeMaterialDigest(swappedMat);
+  await writeFile(join(installedNative, PRIVATE_RUNTIME_MARKER), JSON.stringify(swappedMat, null, 2) + "\n", { mode: 0o644 });
+  await assert.rejects(verifyProducedOutput(installed, linuxTarget.system), /Produced payload mismatch/);
+
+  // Restore valid alias and marker
+  await rm(join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  await symlink("libwebkit2gtk-4.1.so.0.19.9", join(installedLib, "libwebkit2gtk-4.1.so.0"));
+  await writeFile(join(installedNative, PRIVATE_RUNTIME_MARKER), JSON.stringify(material, null, 2) + "\n", { mode: 0o644 });
+  assert.equal((await verifyProducedOutput(installed, linuxTarget.system)).buildReceipt, produced.receipt.identity);
+
+  // 3. Target body drift
+  await writeFile(join(installedLib, "libwebkit2gtk-4.1.so.0.19.9"), "tampered-webkit-bytes", { mode: 0o644 });
+    await assert.rejects(verifyProducedOutput(installed, linuxTarget.system), /regular mismatch|declared metadata mismatch|Produced payload mismatch/);
+  await writeFile(join(installedLib, "libwebkit2gtk-4.1.so.0.19.9"), webkitContent, { mode: 0o644 });
+
+  // 4. Target executable mode drift
+  await chmod(join(installedNative, "opt/nebular-private/libexec/sandbox/bwrap"), 0o644);
+    await assert.rejects(verifyProducedOutput(installed, linuxTarget.system), /regular mismatch|declared metadata mismatch|Produced payload mismatch/);
+  await chmod(join(installedNative, "opt/nebular-private/libexec/sandbox/bwrap"), 0o755);
+
+  // 5. Injected extra alias
+  await symlink("libwebkit2gtk-4.1.so.0.19.9", join(installedLib, "libextra.so.0"));
+  await assert.rejects(verifyProducedOutput(installed, linuxTarget.system), /undeclared member|alias count .* does not match|Produced payload mismatch/);
+});
+
+test("parseNativeBuildArgs and buildNativeCandidate enforce nativeRuntime and preparedPreviewInputs option contracts", async t => {
+  assert.throws(
+    () => parseNativeBuildArgs(["--target", "linux-x64", "--build-inputs", "in.json", "--output", "out", "--native-runtime", "rt.json"]),
+    /must be supplied together/
+  );
+  assert.throws(
+    () => parseNativeBuildArgs([
+      "--target", "darwin-arm64", "--build-inputs", "in.json", "--output", "out",
+      "--native-runtime", "rt.json", "--native-runtime-sha256", h,
+      "--prepared-preview-inputs", "prev.json",
+    ]),
+    /mutually exclusive/
+  );
+  const parsedPreview = parseNativeBuildArgs([
+    "--target", "darwin-arm64", "--build-inputs", "in.json", "--output", "out", "--prepared-preview-inputs", "prev.json",
+  ]);
+  assert.equal(parsedPreview.preparedPreviewInputs, "prev.json");
+
+  const { root, inputs } = await fixture(t);
+  const npm = join(root, "npm-cli");
+  await writeFile(npm, "npm");
+  inputs.toolchains.node.npm = { path: npm, identity: digest("npm") };
+  const inputsPath = join(root, "inputs-darwin.json");
+  await writeFile(inputsPath, JSON.stringify(inputs));
+
+  // Darwin rejects --native-runtime
+  await assert.rejects(
+    buildNativeCandidate({
+      target: "darwin-arm64",
+      buildInputs: inputsPath,
+      output: join(root, "out-rt-darwin"),
+      nativeRuntime: join(root, "rt.json"),
+      nativeRuntimeSha256: h,
+    }),
+    /only supported for Linux targets/
+  );
+
+  // nix-source rejects --prepared-preview-inputs
+  const nixInputs = structuredClone(inputs);
+  nixInputs.mode = "nix-source";
+  const nixInputsPath = join(root, "inputs-nix.json");
+  await writeFile(nixInputsPath, JSON.stringify(nixInputs));
+  await assert.rejects(
+    buildNativeCandidate({
+      target: "darwin-arm64",
+      buildInputs: nixInputsPath,
+      output: join(root, "out-preview-nix"),
+      preparedPreviewInputs: join(root, "prev.json"),
+    }),
+    /only admitted for Darwin portable-source builds/
+  );
 });

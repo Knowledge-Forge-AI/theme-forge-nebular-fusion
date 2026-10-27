@@ -13,8 +13,21 @@ export const SCENE_MEMBERS = [
   "scene/import-svg", "scene/index", "scene/layout", "scene/path-canonical",
   "scene/transforms", "scene/validate",
 ];
+/** @typedef {{ name: string, sha256: string, bytes: number }} SceneInputRecord */
+/** @typedef {{ path: string, sha256: string, bytes: number }} SceneExecutableFile */
+/** @typedef {{
+ *   core: string,
+ *   xmldom: string,
+ *   toml: string,
+ *   output: string,
+ *   work: string,
+ *   sourceTreeDigest: string,
+ * }} SceneInputOptions */
+
+/** @param {Buffer} bytes @returns {string} */
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
+/** @param {string} archive @param {string} destination @returns {Promise<void>} */
 async function extract(archive, destination) {
   // Review all archive members before extracting any; no links or special files.
   execFileSync("python3", ["-c", String.raw`
@@ -35,10 +48,13 @@ with tarfile.open(sys.argv[1],'r:gz') as t:
 `, archive, destination], { stdio: "pipe", timeout: 10_000 });
 }
 
+/** @param {SceneInputOptions} options @returns {Promise<{ sha256: string, bytes: number, sourceTreeDigest: string, executableFiles: number }>} */
 export async function buildSceneInput({ core, xmldom, toml, output, work, sourceTreeDigest }) {
   if (!/^[a-f0-9]{64}$/.test(sourceTreeDigest)) throw new Error("Explicit scene source inventory digest required");
   await mkdir(work, { recursive: false });
+  /** @type {Array<[string, string]>} */
   const archives = [[core,"core"],[xmldom,"xmldom"],[toml,"toml"]];
+  /** @type {SceneInputRecord[]} */
   const inputs = [];
   for (const [path,name] of archives) {
     const bytes = await readFile(path);
@@ -59,12 +75,16 @@ export async function buildSceneInput({ core, xmldom, toml, output, work, source
   }
   for (const name of ["LICENSE","NOTICE","COMMERCIAL-LICENSE.md"]) await cp(join(work,"core",name),join(target,name));
   await writeFile(join(target,"package.json"),JSON.stringify({name:corePackage.name,version:corePackage.version,type:"module",license:corePackage.license,exports:{"./scene/v1":"./dist/scene/index.js"}})+"\n");
-  for (const [name,packageName,version] of [["xmldom","@xmldom/xmldom","0.9.12"],["toml","smol-toml","1.8.0"]]) {
+  /** @type {Array<[string, string, string]>} */
+  const dependencies = [["xmldom","@xmldom/xmldom","0.9.12"],["toml","smol-toml","1.9.1"]];
+  for (const [name,packageName,version] of dependencies) {
     const pkg=JSON.parse(await readFile(join(work,name,"package.json"),"utf8"));
     if(pkg.name!==packageName||pkg.version!==version) throw new Error("Dependency identity mismatch");
     await cp(join(work,name),join(tree,"node_modules",packageName),{recursive:true,errorOnExist:true,force:false});
   }
+  /** @type {SceneExecutableFile[]} */
   const executableFiles=[];
+  /** @param {string} dir @param {string} [prefix] @returns {Promise<void>} */
   async function inspect(dir,prefix="") {
     for(const entry of await readdir(dir,{withFileTypes:true})) {
       const relative=prefix+entry.name, path=join(dir,entry.name);
@@ -96,6 +116,10 @@ if(process.argv[1]===fileURLToPath(import.meta.url)) {
   const values=process.argv.slice(2);
   if(values.length!==7) throw new Error("Expected core archive, xmldom archive, toml archive, output archive, fresh work directory, source digest, receipt");
   const [core,xmldom,toml,output,work,sourceTreeDigest,receipt]=values;
+  if(core===undefined || xmldom===undefined || toml===undefined || output===undefined
+    || work===undefined || sourceTreeDigest===undefined || receipt===undefined) {
+    throw new Error("Expected seven defined Scene input arguments");
+  }
   const result=await buildSceneInput({core,xmldom,toml,output,work,sourceTreeDigest});
   await writeFile(receipt,JSON.stringify(result,null,2)+"\n",{flag:"wx"});
   console.log(JSON.stringify(result));

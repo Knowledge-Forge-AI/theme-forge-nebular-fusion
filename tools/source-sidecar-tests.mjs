@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { EXPECTED_V8_VERSION, locateCachedPortableNode } from "./node-runtime-authority.mjs";
 import { inventoryTree, seal, sourceResourcePlans } from "./candidate-provenance.mjs";
 import { createBuildSettings } from "./build-settings.mjs";
+import { CANDIDATE_VERSION } from "./platform-targets.mjs";
 import { parseVerificationArguments, verifySidecar } from "./sidecar-verify.mjs";
 
 import {
@@ -43,7 +44,7 @@ async function createNodeRuntimeStub(dir, target, { version = NODE_VERSION, v8 =
   return stubPath;
 }
 
-async function createSourceFixture(target = TARGETS[0]) {
+async function createSourceFixture(target = TARGETS[0], { burstVersion = "0.5.0" } = {}) {
   const fixtureDir = await mkdtemp(join(tempBase, "tfsb-source-sidecar-fixture-"));
   const studioRoot = resolve(fixtureDir, "apps/studio");
   const burstRoot = resolve(fixtureDir, "components/burst");
@@ -61,7 +62,7 @@ async function createSourceFixture(target = TARGETS[0]) {
   // Burst package.json & dist
   await writeFile(
     resolve(burstRoot, "package.json"),
-    JSON.stringify({ name: "@knowledge-forge-ai/theme-forge-stellar-burst", version: "0.5.0", type: "module" }, null, 2)
+    JSON.stringify({ name: "@knowledge-forge-ai/theme-forge-stellar-burst", version: burstVersion, type: "module" }, null, 2)
   );
   await mkdir(resolve(burstRoot, "dist/service-protocol"), { recursive: true });
   await cp(
@@ -382,6 +383,83 @@ test("source-built sidecar preparation with rootTarball truthfully binds archive
   }
 });
 
+test("current Burst 0.7.0 sidecar round-trips production identity", async () => {
+  const target = TARGETS[0];
+  const fx = await createSourceFixture(target, { burstVersion: "0.7.0" });
+  const sourceId = sha256(Buffer.from(`source-candidate-070-${target.triple}`));
+  try {
+    const burstPkg = JSON.parse(await readFile(resolve(fx.burstRoot, "package.json"), "utf8"));
+    assert.equal(burstPkg.version, "0.7.0");
+
+    const result = await prepareSidecar({
+      release: true,
+      studioRoot: fx.studioRoot,
+      componentRoots: { burst: fx.burstRoot, raster: fx.rasterRoot },
+      nodePath: fx.nodePath,
+      sourceIdentity: sourceId,
+      target,
+    });
+
+    assert.ok(result.manifestDigest);
+    assert.equal(result.target, target.triple);
+    assert.equal(result.sidecarBinary, `tfsb-studio-service-${target.triple}`);
+
+    const binaryPath = resolve(fx.studioRoot, `src-tauri/binaries/tfsb-studio-service-${target.triple}`);
+    const payloadRoot = resolve(fx.studioRoot, "src-tauri/sidecar-payload");
+    assert.ok(existsSync(binaryPath), `Binary must exist at ${binaryPath}`);
+    assert.ok(existsSync(payloadRoot), "sidecar-payload directory must exist");
+
+    const rawManifest = await readFile(resolve(payloadRoot, "manifest.json"), "utf8");
+    const manifest = JSON.parse(rawManifest);
+    assert.equal(manifest.core.name, "@knowledge-forge-ai/theme-forge-stellar-burst");
+    assert.equal(manifest.core.version, "0.7.0");
+    assert.equal(manifest.core.tarball, undefined);
+
+    validateManifestShape(manifest);
+    const verified = await verifyDistribution({ binaryPath, payloadRoot });
+    assert.equal(verified.manifestDigest, result.manifestDigest);
+
+    const unsupportedManifest = structuredClone(manifest);
+    unsupportedManifest.core.version = "0.7.1";
+    assert.throws(() => validateManifestShape(unsupportedManifest), /fixed identity/);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+test("unsupported Burst 0.7.1 rejected before any published pair", async () => {
+  const target = TARGETS[0];
+  const fx = await createSourceFixture(target, { burstVersion: "0.7.1" });
+  const sourceId = sha256(Buffer.from(`source-candidate-071-${target.triple}`));
+  try {
+    await assert.rejects(
+      prepareSidecar({
+        release: true,
+        studioRoot: fx.studioRoot,
+        componentRoots: { burst: fx.burstRoot, raster: fx.rasterRoot },
+        nodePath: fx.nodePath,
+        sourceIdentity: sourceId,
+        target,
+      }),
+      /sidecar package identity does not match the closed release input/
+    );
+
+    const tauriRoot = resolve(fx.studioRoot, "src-tauri");
+    const binaryPath = resolve(tauriRoot, "binaries", sidecarBinaryName(target));
+    const payloadRoot = resolve(tauriRoot, "sidecar-payload");
+    assert.equal(existsSync(binaryPath), false, "Rejected Burst version must not publish sidecar binary");
+    assert.equal(existsSync(payloadRoot), false, "Rejected Burst version must not publish sidecar payload");
+    const tauriEntries = await readdir(tauriRoot);
+    assert.equal(
+      tauriEntries.some((entry) => entry.startsWith(".sidecar-stage-")),
+      false,
+      "Rejected Burst version must clean up temporary sidecar stage directory"
+    );
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 test("probeRuntime validates target platform and architecture for all three targets", async () => {
   const tempDir = await mkdtemp(join(tempBase, "tfsb-probe-test-"));
   try {
@@ -486,13 +564,15 @@ test("Nix native authority validates actual producer provenance and rejects subs
     for (const [name, product] of [["burst", "stellar-burst"], ["loom", "stellar-loom"], ["solar", "solar-sail"]]) {
       const root = name === "burst" ? fx.burstRoot : join(fx.fixtureDir, name);
       await mkdir(root, { recursive: true });
-      await writeFile(join(root, "package.json"), JSON.stringify({ name: `@knowledge-forge-ai/theme-forge-${product}`, version: "0.6.0", type: "module" }));
+      const version = JSON.parse(await readFile(join(repoRoot, name === "burst" ? "package.json" : `packages/${product}/package.json`), "utf8")).version;
+      await writeFile(join(root, "package.json"), JSON.stringify({ name: `@knowledge-forge-ai/theme-forge-${product}`, version, type: "module" }));
       components[name] = { root, sourceRoot, source: (await inventoryTree(sourceRoot)).identity,
-        output: (await inventoryTree(root)).identity, target: target.triple, version: "0.6.0", producer: h };
+        output: (await inventoryTree(root)).identity, target: target.triple, version, producer: h };
     }
-    const source = seal("nebular-source-candidate-v1", { version: "0.6.0", composition: h, locks: { cargo: h, frontend: h },
+    const sourceFields = { version: CANDIDATE_VERSION, composition: h, locks: { cargo: h, frontend: h },
       components: Object.fromEntries(Object.entries(components).map(([k, v]) => [k, v.source])), recipe: h,
-      resourcePlans: sourceResourcePlans(JSON.parse(await readFile(join(repoRoot, "apps/studio/src-tauri/tauri.conf.json"), "utf8"))) });
+      resourcePlans: sourceResourcePlans(JSON.parse(await readFile(join(repoRoot, "apps/studio/src-tauri/tauri.conf.json"), "utf8"))) };
+    const source = seal("nebular-source-candidate-v1", sourceFields);
     const toolchains = Object.fromEntries(await Promise.all(["node", "rust", "cargo", "compiler", "linker", "pkgConfig", "systemLibraries"].map(async key => {
       const path = key === "compiler" ? compiler : process.execPath;
       return [key, { path, identity: sha256(await readFile(path)) }];
@@ -505,6 +585,8 @@ test("Nix native authority validates actual producer provenance and rejects subs
     const validNative = await readFile(nativePath);
     const portableNative = await readFile(join(repoRoot, "native/directory-snapshot/prebuilds", target.addon, "native-addon-posix-openat-v1.node"));
     assert.notEqual(sha256(validNative), sha256(portableNative));
+    await assert.rejects(validateSourceBuiltNative({ ...inputs, source: seal("nebular-source-candidate-v1",
+      { ...sourceFields, version: "0.6.0" }) }), /source candidate mismatch/);
     const nativeAuthority = await validateSourceBuiltNative(inputs);
     assert.equal(nativeAuthority.nativeSha256, sha256(validNative));
     const prepared = await prepareSidecar({ release: true, studioRoot: fx.studioRoot, nodePath: process.execPath,

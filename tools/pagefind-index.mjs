@@ -40,8 +40,13 @@ export const PAGEFIND_WASM_PAYLOADS = Object.freeze({
 
 export const PAGEFIND_WASM_MEMBER = /(^|\/)pagefind\/wasm\.[a-z0-9_-]+\.pagefind$/u;
 
+/** @param {string} path @returns {string} */
 function packageVersion(path) {
-  return JSON.parse(readRegularSnapshot(path, { label: "Pagefind package manifest", maxBytes: 1024 * 1024 }).bytes.toString("utf8")).version;
+  const snapshot = readRegularSnapshot(path, { label: "Pagefind package manifest", maxBytes: 1024 * 1024 });
+  if (!snapshot) throw new Error(`Pagefind package manifest is missing: ${path}`);
+  const version = JSON.parse(snapshot.bytes.toString("utf8")).version;
+  if (typeof version !== "string") throw new Error(`Pagefind package manifest has no version: ${path}`);
+  return version;
 }
 
 /**
@@ -66,9 +71,11 @@ export function pagefindBinary(nodeModules, { platform = process.platform, arch 
   throw new Error(`No Pagefind binary in ${platformPackage}`);
 }
 
-/** Every HTML page below siteDir (outside its pagefind output), as sorted portable relative paths. */
+/** @param {string} siteDir @returns {string[]} Every HTML page below siteDir, as sorted portable relative paths. */
 export function sitePages(siteDir) {
+  /** @type {string[]} */
   const pages = [];
+  /** @param {string} directory */
   const visit = (directory) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);

@@ -30,6 +30,39 @@ import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
 import { validateBuildInputs } from "./build-inputs.mjs";
 import { inventoryTree } from "./candidate-provenance.mjs";
 
+/**
+ * @typedef {{ readonly system: string, readonly triple: string, readonly os: "darwin" | "linux", readonly cpu: "arm64" | "x64", readonly addon: string, readonly format: string }} PlatformTarget
+ * @typedef {{ path: string, size: number, mode: number, sha256: string }} FileRecord
+ * @typedef {{ sha1: string, sha256: string, sri: string, size: number }} PackageIdentity
+ * @typedef {{ [key: string]: unknown }} JsonRecord
+ * @typedef {{ filename: string, sha256: string }} ArchiveBinding
+ * @typedef {{ filename: string, sha256: string, packageSha256: string, packageLockSha256: string }} RasterBinding
+ * @typedef {{ sourceTree: string, provenance?: string, composedTreeDigest?: string, publicMergeCommit?: string, compositionManifestSha256?: string, compositionTarball?: { filename: string, sha256: string }, publicStagingCommit?: unknown, packageJsonSha256: string, packageLockSha256?: string }} StellarBindingInput
+ * @typedef {{ schema: string, schemaVersion: number, product: string, input: StellarBindingInput, package: ArchiveBinding, raster: RasterBinding, canonicalEpochMs: number }} StellarBinding
+ * @typedef {{ compiler: { identity: string, path: string } }} AuthorityToolchains
+ * @typedef {{ sourceRoot: string, source: string }} AuthorityBurstComponent
+ * @typedef {{ mode: "portable-source" | "nix-source", source: { identity: string }, components: { burst: AuthorityBurstComponent }, toolchains: AuthorityToolchains }} AuthorityInputs
+ * @typedef {{ inputs: AuthorityInputs, roots: { burst: string }, tools: { compiler: string, node: string, embeddedRuntime?: string }, target: PlatformTarget }} ValidatedBuildAuthority
+ * @typedef {{ [key: string]: unknown }} BuildInputs
+ * @typedef {{ target: string, source: string, root: string, nativeSha256: string, nativeBytes: number, manifestSha256: string, prefix: string, runtimeSha256: string, runtimeBytes: number }} NativeAuthority
+ * @typedef {{ inventorySha256: string, requestsSha256: string, resultsSha256: string }} ProtocolRecord
+ * @typedef {{ "1.0": ProtocolRecord, "1.1": ProtocolRecord, "1.2": ProtocolRecord }} ProtocolMap
+ * @typedef {keyof ProtocolMap} ProtocolVersion
+ * @typedef {{ actualInputDigest: string, model: string, baseCommit?: string, sourceCandidate?: string, sourceIdentity?: string }} ManifestSource
+ * @typedef {{ name: string, version: string, tarball?: PackageIdentity }} ManifestCore
+ * @typedef {{ mode: number, sha256: string, size: number, target: string, v8: string, version: string }} ManifestRuntime
+ * @typedef {{ abi: number, backend: string, sha256: string, size: number, target: string }} ManifestNative
+ * @typedef {{ name: string, packageJsonSha256: string, version: string }} ManifestRaster
+ * @typedef {{ name: string, version: string, wasmSha256: string, wasmSize: number }} ManifestResvg
+ * @typedef {{ bytes: number, fileCount: number, inventoryDigest: string }} ManifestTotals
+ * @typedef {{ schema: string, schemaVersion: number, target: string, runtimeKind: string, source: ManifestSource, core: ManifestCore, runtime: ManifestRuntime, entrypoint: string, protocol: ProtocolMap, native: ManifestNative, raster: ManifestRaster, resvg: ManifestResvg, files: FileRecord[], totals: ManifestTotals, manifestDigest: string }} SidecarManifest
+ * @typedef {{ release?: boolean, studioRoot?: string, repositoryRoot?: string, nodePath?: string, rootTarball?: string, sourceIdentity?: string, componentRoots?: { burst: string, raster: string }, target?: string | PlatformTarget, mode?: "portable-source" | "nix-source", buildInputs?: BuildInputs, testOnlyAllowNonProductionIdentity?: boolean }} PrepareSidecarOptions
+ * @typedef {{ authInputs: string, rootTarball: string }} StandaloneInputOptions
+ * @typedef {{ binding: StellarBinding, corePackageRoot: string, rasterPackageRoot: string, coreTarballIdentity: PackageIdentity, cleanup: () => Promise<void> }} StandaloneInputs
+ * @typedef {{ binarySource: string, payloadSource: string, binaryDestination: string, payloadDestination: string, inject?: (stage: string, context: JsonRecord) => Promise<void> | void }} ReplaceGeneratedPairOptions
+ * @typedef {{ binaryPath: string, payloadRoot: string, testOnlyAllowNonProductionIdentity?: boolean, mode?: "portable-source" | "nix-source", buildInputs?: BuildInputs }} VerifyDistributionOptions
+ */
+
 export const TARGET = "aarch64-apple-darwin";
 export const RUNTIME_KIND = "node-runtime-payload-v1";
 export { NODE_VERSION };
@@ -43,14 +76,16 @@ export const MAX_PATH_BYTES = 512;
 
 export { TARGETS };
 
+/** @param {string | PlatformTarget} [target] */
 export function sidecarBinaryName(target = TARGETS[0]) {
   const triple = typeof target === "string" ? target : target?.triple;
   if (!triple) throw new Error("target triple is required to determine sidecar binary name");
   return `tfsb-studio-service-${triple}`;
 }
 
+/** @param {unknown} target @returns {PlatformTarget} */
 export function validateTarget(target) {
-  if (!target || typeof target !== "object") throw new Error("target must be a valid platform-targets TARGETS record");
+  if (!isRecord(target)) throw new Error("target must be a valid platform-targets TARGETS record");
   const found = TARGETS.find(
     (t) =>
       t.triple === target.triple &&
@@ -65,8 +100,13 @@ export function validateTarget(target) {
   return found;
 }
 
+/** @param {string | PlatformTarget | undefined} target @returns {PlatformTarget} */
 export function resolveTarget(target) {
-  if (!target) return TARGETS[0];
+  if (!target) {
+    const defaultTarget = TARGETS[0];
+    if (!defaultTarget) throw new Error("platform targets are unavailable");
+    return defaultTarget;
+  }
   if (typeof target === "string") {
     const found = TARGETS.find((t) => t.triple === target || t.system === target);
     if (!found) throw new Error(`unsupported or invalid target: ${target}`);
@@ -75,6 +115,7 @@ export function resolveTarget(target) {
   return validateTarget(target);
 }
 
+/** @param {unknown} value @returns {string} */
 export function validateSourceIdentity(value) {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
     throw new Error("explicit sourceIdentity must be a canonical 64-hex SHA-256 digest");
@@ -101,40 +142,52 @@ const RASTER_FILES = ["package.json", "index.js", "index.d.ts", "LICENSE", "NOTI
 const STELLAR_BINDING_SCHEMA = "tfsb.nebular-stellar-input-binding-v1";
 const STELLAR_PRODUCT = "theme-forge-stellar-burst";
 const NEBULAR_PRODUCT = "theme-forge-nebular-fusion";
+/** @type {readonly ProtocolVersion[]} */
+const PROTOCOL_VERSIONS = ["1.0", "1.1", "1.2"];
 
 // Select the declared standalone layout first; an unrelated ancestor package
 // never establishes repository ownership. The private layout is exactly apps/studio.
+/** @param {string} studioRoot @returns {string} */
 export function repositoryRootForStudio(studioRoot) {
   const appRoot = resolve(studioRoot);
   if (existsSync(resolve(appRoot, "authenticated-inputs/stellar-binding.json"))) return appRoot;
   return resolve(appRoot, "../..", "apps/studio") === appRoot ? resolve(appRoot, "../..") : appRoot;
 }
 
+/** @param {unknown} value @returns {string} */
 export function canonicalJson(value) {
   if (value === undefined) throw new Error("canonical JSON cannot encode undefined");
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
   if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+    const record = /** @type {JsonRecord} */ (value);
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
   }
-  return JSON.stringify(value);
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("canonical JSON cannot encode value");
+  return serialized;
 }
 
+/** @param {Buffer | Uint8Array | string} bytes @returns {string} */
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** @param {Buffer | Uint8Array | string} bytes @returns {string} */
 export function sha1(bytes) {
   return createHash("sha1").update(bytes).digest("hex");
 }
 
+/** @param {string} left @param {string} right @returns {number} */
 function asciiCompare(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/** @param {Buffer | Uint8Array | string} bytes @returns {string} */
 function sri(bytes) {
   return `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
 }
 
+/** @param {string} path @returns {string} */
 function normalizeRelative(path) {
   const normalized = path.split(sep).join("/").normalize("NFC");
   const components = normalized.split("/");
@@ -146,6 +199,7 @@ function normalizeRelative(path) {
   return normalized;
 }
 
+/** @param {string} path @param {number} [maximum] @returns {Promise<import("node:fs").Stats>} */
 async function requireRegular(path, maximum = MAX_FILE_BYTES) {
   const info = await lstat(path);
   if (info.isSymbolicLink() || !info.isFile()) throw new Error(`sidecar input is not a regular file: ${basename(path)}`);
@@ -153,11 +207,13 @@ async function requireRegular(path, maximum = MAX_FILE_BYTES) {
   return info;
 }
 
+/** @param {import("node:fs").Stats | null} left @param {import("node:fs").Stats | null} right @returns {boolean} */
 function sameIdentity(left, right) {
   return left !== null && right !== null && left.dev === right.dev && left.ino === right.ino && left.size === right.size
     && left.mode === right.mode && left.mtimeMs === right.mtimeMs;
 }
 
+/** @param {string} path @param {number} [maximum] @returns {Promise<{ bytes: Buffer, info: import("node:fs").Stats }>} */
 async function readRegular(path, maximum = MAX_FILE_BYTES) {
   const before = await requireRegular(path, maximum);
   const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -176,8 +232,10 @@ async function readRegular(path, maximum = MAX_FILE_BYTES) {
   }
 }
 
+/** @param {string} path @returns {Promise<void>} */
 async function rejectSymlinkAncestors(path) {
   const absolute = resolve(path);
+  /** @type {string} */
   let current = sep;
   for (const component of absolute.split(sep).filter(Boolean)) {
     current = resolve(current, component);
@@ -186,6 +244,7 @@ async function rejectSymlinkAncestors(path) {
   }
 }
 
+/** @param {string} source @param {string} destination @param {number} [mode] @returns {Promise<void>} */
 async function copyRegular(source, destination, mode = 0o644) {
   await requireRegular(source);
   await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
@@ -193,6 +252,7 @@ async function copyRegular(source, destination, mode = 0o644) {
   await chmod(destination, mode);
 }
 
+/** @param {string} sourceRoot @param {string} destinationRoot @param {Set<string>} seen @returns {Promise<void>} */
 async function copyClosedTree(sourceRoot, destinationRoot, seen) {
   const rootInfo = await lstat(sourceRoot);
   if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) throw new Error(`sidecar tree root is invalid: ${basename(sourceRoot)}`);
@@ -216,8 +276,11 @@ async function copyClosedTree(sourceRoot, destinationRoot, seen) {
   }
 }
 
+/** @param {string} payloadRoot @returns {Promise<FileRecord[]>} */
 async function inventory(payloadRoot) {
+  /** @type {FileRecord[]} */
   const files = [];
+  /** @param {string} directory @returns {Promise<void>} */
   async function visit(directory) {
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => asciiCompare(left.name, right.name));
@@ -245,6 +308,7 @@ async function inventory(payloadRoot) {
   return files;
 }
 
+/** @param {string[]} argv @returns {Map<string, string>} */
 function parseArgs(argv) {
   const allowed = new Set(["node", "root-tarball", "target"]);
   if (argv.length % 2 !== 0) throw new Error("sidecar preparation requires paired explicit arguments");
@@ -262,6 +326,7 @@ function parseArgs(argv) {
   return values;
 }
 
+/** @param {string} nodePath @param {string | PlatformTarget} [target] @returns {{ node: string, v8: string, arch: string, platform: string }} */
 export function probeRuntime(nodePath, target = TARGETS[0]) {
   const probe = spawnSync(nodePath, ["-p", "JSON.stringify({node:process.versions.node,v8:process.versions.v8,arch:process.arch,platform:process.platform})"], {
     encoding: "utf8",
@@ -270,13 +335,14 @@ export function probeRuntime(nodePath, target = TARGETS[0]) {
   });
   if (probe.status !== 0 || probe.error) throw new Error("the explicit Node runtime probe failed");
   const identity = JSON.parse(probe.stdout.trim());
-  const effectiveTarget = typeof target === "string" ? resolveTarget(target) : target;
+  const effectiveTarget = resolveTarget(target);
   if (identity.node !== NODE_VERSION || identity.arch !== effectiveTarget.cpu || identity.platform !== effectiveTarget.os) {
     throw new Error(`the explicit Node runtime has the wrong version or target: expected ${NODE_VERSION} ${effectiveTarget.os}/${effectiveTarget.cpu}, got ${identity.node} ${identity.platform}/${identity.arch}`);
   }
   return identity;
 }
 
+/** @param {string} repositoryRoot @returns {Promise<string>} */
 export async function gitIdentity(repositoryRoot) {
   const candidatePath = resolve(repositoryRoot, "authenticated-inputs/source-candidate.json");
   if (existsSync(candidatePath)) {
@@ -287,6 +353,7 @@ export async function gitIdentity(repositoryRoot) {
     // baseCommit records Git lineage; actualInputDigest below binds prepared bytes.
     return declaredDigest(candidate.lineageCommit, "source candidate lineage", 40);
   }
+  /** @param {string[]} args @returns {string} */
   const run = (args) => {
     const result = spawnSync("git", args, { cwd: repositoryRoot, encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
     if (result.status !== 0) throw new Error("source Git identity is unavailable");
@@ -295,19 +362,23 @@ export async function gitIdentity(repositoryRoot) {
   return run(["rev-parse", "HEAD"]);
 }
 
+/** @param {string} path @returns {Promise<PackageIdentity>} */
 async function packageIdentity(path) {
   const bytes = (await readRegular(path)).bytes;
   return { sha1: sha1(bytes), sha256: sha256(bytes), sri: sri(bytes), size: bytes.length };
 }
 
+/** @param {string} path */
 async function readPackage(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+/** @param {unknown} value @returns {value is JsonRecord} */
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** @param {unknown} value @param {string} label @param {number} [length] @returns {string} */
 function declaredDigest(value, label, length = 64) {
   if (typeof value !== "string" || !new RegExp(`^[0-9a-f]{${length}}$`).test(value)) {
     throw new Error(`standalone sidecar ${label} is invalid`);
@@ -315,6 +386,7 @@ function declaredDigest(value, label, length = 64) {
   return value;
 }
 
+/** @param {unknown} value @param {string} label @returns {string} */
 function declaredArchiveFilename(value, label) {
   if (typeof value !== "string" || value !== basename(value) || !/^[A-Za-z0-9._+-]+\.tgz$/u.test(value)) {
     throw new Error(`standalone sidecar ${label} filename is invalid`);
@@ -322,6 +394,7 @@ function declaredArchiveFilename(value, label) {
   return value;
 }
 
+/** @param {unknown} value @param {string} label @returns {string} */
 function declaredCompositionArchiveFilename(value, label) {
   if (typeof value !== "string" || value !== basename(value) || !/^[A-Za-z0-9._+-]+\.tar\.gz$/u.test(value)) {
     throw new Error(`standalone sidecar ${label} filename is invalid`);
@@ -329,6 +402,7 @@ function declaredCompositionArchiveFilename(value, label) {
   return value;
 }
 
+/** @param {string} root @param {string} directory @param {unknown} filename @param {string} label @returns {string} */
 function declaredArchivePath(root, directory, filename, label) {
   const safeFilename = declaredArchiveFilename(filename, label);
   const path = resolve(root, directory, safeFilename);
@@ -336,6 +410,7 @@ function declaredArchivePath(root, directory, filename, label) {
   return path;
 }
 
+/** @param {string} command @param {string[]} args @param {string} cwd @param {NodeJS.ProcessEnv} env @returns {string} */
 function runLocalCommand(command, args, cwd, env) {
   const result = spawnSync(command, args, {
     cwd,
@@ -351,6 +426,7 @@ function runLocalCommand(command, args, cwd, env) {
   return result.stdout;
 }
 
+/** @param {string} scratchRoot @param {NodeJS.ProcessEnv} [base] @returns {NodeJS.ProcessEnv} */
 function standaloneNpmEnvironment(scratchRoot, base = process.env) {
   const env = { ...base };
   const userConfig = resolve(scratchRoot, "npmrc");
@@ -367,6 +443,7 @@ function standaloneNpmEnvironment(scratchRoot, base = process.env) {
   return env;
 }
 
+/** @param {string} archivePath @param {string} destination @param {string} label @returns {Promise<string>} */
 async function extractDeclaredArchive(archivePath, destination, label) {
   await rejectSymlinkAncestors(archivePath);
   await requireRegular(archivePath, MAX_FILE_BYTES);
@@ -391,12 +468,14 @@ async function extractDeclaredArchive(archivePath, destination, label) {
   return packageRoot;
 }
 
+/** @param {unknown} value @returns {void} */
 function validatePendingPublication(value) {
   if (!isRecord(value) || value.status !== "pending" || value.value !== null || value.requiredBefore !== "TFSB49C staging publication") {
     throw new Error("standalone sidecar Stellar publication binding is not pending");
   }
 }
 
+/** @param {unknown} binding @returns {Pick<StellarBinding, "input" | "package" | "raster">} */
 export function validateStellarBinding(binding) {
   if (!isRecord(binding) || binding.schema !== STELLAR_BINDING_SCHEMA || binding.schemaVersion !== 1 || binding.product !== NEBULAR_PRODUCT) {
     throw new Error("standalone sidecar Stellar input binding is invalid");
@@ -422,26 +501,45 @@ export function validateStellarBinding(binding) {
     declaredDigest(input.compositionTarball.sha256, "Stellar composition archive digest");
     validatePendingPublication(input.publicStagingCommit);
   }
-  declaredDigest(input.packageJsonSha256, "core package digest");
-  if (input.packageLockSha256) {
-    declaredDigest(input.packageLockSha256, "core lock digest");
-  }
+  const packageJsonSha256 = declaredDigest(input.packageJsonSha256, "core package digest");
+  const packageLockSha256 = input.packageLockSha256 === undefined
+    ? undefined
+    : declaredDigest(input.packageLockSha256, "core lock digest");
 
 
   if (!isRecord(binding.package)) throw new Error("standalone sidecar core package binding is missing");
-  declaredArchiveFilename(binding.package.filename, "core package archive");
-  declaredDigest(binding.package.sha256, "core package archive digest");
+  const packageBinding = {
+    filename: declaredArchiveFilename(binding.package.filename, "core package archive"),
+    sha256: declaredDigest(binding.package.sha256, "core package archive digest"),
+  };
   if (!isRecord(binding.raster)) throw new Error("standalone sidecar raster package binding is missing");
-  declaredArchiveFilename(binding.raster.filename, "raster package archive");
-  declaredDigest(binding.raster.sha256, "raster package archive digest");
-  declaredDigest(binding.raster.packageSha256, "raster package digest");
-  declaredDigest(binding.raster.packageLockSha256, "raster lock digest");
-  if (!Number.isSafeInteger(binding.canonicalEpochMs) || binding.canonicalEpochMs < 0) {
+  const rasterBinding = {
+    filename: declaredArchiveFilename(binding.raster.filename, "raster package archive"),
+    sha256: declaredDigest(binding.raster.sha256, "raster package archive digest"),
+    packageSha256: declaredDigest(binding.raster.packageSha256, "raster package digest"),
+    packageLockSha256: declaredDigest(binding.raster.packageLockSha256, "raster lock digest"),
+  };
+  const canonicalEpochMs = binding.canonicalEpochMs;
+  if (typeof canonicalEpochMs !== "number" || !Number.isSafeInteger(canonicalEpochMs) || canonicalEpochMs < 0) {
     throw new Error("standalone sidecar canonical epoch is invalid");
   }
-  return { input, package: binding.package, raster: binding.raster };
+  const validatedInput = {
+    sourceTree: input.sourceTree,
+    packageJsonSha256,
+    ...(packageLockSha256 === undefined ? {} : { packageLockSha256 }),
+    ...(typeof input.provenance === "string" ? { provenance: input.provenance } : {}),
+    ...(typeof input.composedTreeDigest === "string" ? { composedTreeDigest: input.composedTreeDigest } : {}),
+    ...(typeof input.publicMergeCommit === "string" ? { publicMergeCommit: input.publicMergeCommit } : {}),
+    ...(typeof input.compositionManifestSha256 === "string" ? { compositionManifestSha256: input.compositionManifestSha256 } : {}),
+    ...(isRecord(input.compositionTarball) && typeof input.compositionTarball.filename === "string" && typeof input.compositionTarball.sha256 === "string"
+      ? { compositionTarball: { filename: input.compositionTarball.filename, sha256: input.compositionTarball.sha256 } }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(input, "publicStagingCommit") ? { publicStagingCommit: input.publicStagingCommit } : {}),
+  };
+  return { input: validatedInput, package: packageBinding, raster: rasterBinding };
 }
 
+/** @param {StandaloneInputOptions} options @returns {Promise<StandaloneInputs>} */
 async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   const bindingPath = resolve(authInputs, "stellar-binding.json");
   await rejectSymlinkAncestors(bindingPath);
@@ -470,7 +568,7 @@ async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   } catch {
     throw new Error("standalone sidecar Stellar package inputs are not valid JSON");
   }
-  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0" && corePackage.version !== "0.6.1")
+  if (!isRecord(corePackage) || corePackage.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (corePackage.version !== "0.4.0" && corePackage.version !== "0.5.0" && corePackage.version !== "0.6.1" && corePackage.version !== "0.7.0")
       || !isRecord(corePackage.dependencies) || !isRecord(coreLock) || coreLock.name !== corePackage.name || coreLock.version !== corePackage.version) {
     throw new Error("standalone sidecar Stellar package identity is invalid");
   }
@@ -548,6 +646,7 @@ async function materializeStandaloneInputs({ authInputs, rootTarball }) {
   }
 }
 
+/** @param {string} path @param {"file" | "directory"} expected @returns {Promise<import("node:fs").Stats | null>} */
 async function optionalIdentity(path, expected) {
   try {
     const info = await lstat(path);
@@ -556,23 +655,27 @@ async function optionalIdentity(path, expected) {
     }
     return info;
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT") return null;
     throw error;
   }
 }
 
+/** @param {string} path @param {"file" | "directory"} expected @param {import("node:fs").Stats | null} identity @returns {Promise<void>} */
 async function requireIdentity(path, expected, identity) {
   if (!sameIdentity(await optionalIdentity(path, expected), identity)) {
     throw new Error("generated destination identity changed concurrently");
   }
 }
 
+/** @param {string} path @param {"file" | "directory"} expected @returns {Promise<void>} */
 async function requireAbsent(path, expected) {
   if (await optionalIdentity(path, expected) !== null) {
     throw new Error("concurrent generated destination appeared during pair publication");
   }
 }
 
+/** @param {ReplaceGeneratedPairOptions} options @returns {Promise<void>} */
 export async function replaceGeneratedPair({
   binarySource,
   payloadSource,
@@ -665,6 +768,7 @@ export async function replaceGeneratedPair({
   }
 }
 
+/** @template {object} T @param {T} value @param {readonly string[]} keys @param {string} label @returns {T} */
 function exactRecord(value, keys, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)
       || canonicalJson(Object.keys(value).sort()) !== canonicalJson([...keys].sort())) {
@@ -673,12 +777,15 @@ function exactRecord(value, keys, label) {
   return value;
 }
 
+/** @param {unknown} value @param {string} label @param {number} [length] @returns {string} */
 function exactDigest(value, label, length = 64) {
   if (typeof value !== "string" || !new RegExp(`^[0-9a-f]{${length}}$`).test(value)) throw new Error(`${label} is invalid`);
+  return value;
 }
 
+/** @param {unknown} value @param {number} maximum @param {string} label @returns {void} */
 function boundedInteger(value, maximum, label) {
-  if (!Number.isSafeInteger(value) || value < 0 || value > maximum) throw new Error(`${label} is invalid`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > maximum) throw new Error(`${label} is invalid`);
 }
 
 // Contexts cannot be manufactured from a caller-supplied digest or mode flag.
@@ -687,10 +794,59 @@ const nativeSourcePath = "native/directory-snapshot/src/directory_snapshot.c";
 const nativeToolPath = "tools/build-directory-snapshot-native.mjs";
 const nativeBackend = "native-addon-posix-openat-v1";
 
+/** @param {unknown} value @returns {ValidatedBuildAuthority} */
+function normalizeValidatedBuildAuthority(value) {
+  if (!isRecord(value) || !isRecord(value.inputs) || !isRecord(value.inputs.source)
+      || !isRecord(value.inputs.components) || !isRecord(value.inputs.components.burst)
+      || !isRecord(value.inputs.toolchains) || !isRecord(value.inputs.toolchains.compiler)
+      || !isRecord(value.roots) || !isRecord(value.tools)) {
+    throw new Error("Native source authority result is invalid");
+  }
+  /** @param {JsonRecord} record @param {string} key @param {string} label @returns {string} */
+  const stringField = (record, key, label) => {
+    const candidate = record[key];
+    if (typeof candidate !== "string" || !candidate) throw new Error(`Native source authority ${label} is invalid`);
+    return candidate;
+  };
+  const mode = value.inputs.mode;
+  if (mode !== "portable-source" && mode !== "nix-source") throw new Error("Native source authority mode is invalid");
+  const embeddedTool = value.tools.embeddedRuntime;
+  if (embeddedTool != null && typeof embeddedTool !== "string") {
+    throw new Error("Native source authority embedded runtime tool is invalid");
+  }
+  return {
+    inputs: {
+      mode,
+      source: { identity: stringField(value.inputs.source, "identity", "source identity") },
+      components: {
+        burst: {
+          sourceRoot: stringField(value.inputs.components.burst, "sourceRoot", "source root"),
+          source: stringField(value.inputs.components.burst, "source", "source inventory"),
+        },
+      },
+      toolchains: {
+        compiler: {
+          identity: stringField(value.inputs.toolchains.compiler, "identity", "compiler identity"),
+          path: stringField(value.inputs.toolchains.compiler, "path", "compiler path"),
+        },
+      },
+    },
+    roots: { burst: stringField(value.roots, "burst", "burst root") },
+    tools: {
+      compiler: stringField(value.tools, "compiler", "compiler tool"),
+      node: stringField(value.tools, "node", "Node tool"),
+      ...(typeof embeddedTool === "string" ? { embeddedRuntime: embeddedTool } : {}),
+    },
+    target: validateTarget(value.target),
+  };
+}
+
 // Maintained counterpart of the producer's headerIdentity. Never import or run
 // producer code from a component output. Parity is tested against buildNative.
+/** @param {string} root @returns {Promise<string>} */
 export async function nativeHeaderIdentity(root) {
   const hash = createHash("sha256");
+  /** @param {string} dir @returns {Promise<void>} */
   async function visit(dir) {
     for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, "en"))) {
       const path = join(dir, entry.name);
@@ -704,8 +860,9 @@ export async function nativeHeaderIdentity(root) {
   return hash.digest("hex");
 }
 
+/** @param {BuildInputs} buildInputs @returns {Promise<NativeAuthority>} */
 export async function validateSourceBuiltNative(buildInputs) {
-  const authority = await validateBuildInputs(buildInputs);
+  const authority = normalizeValidatedBuildAuthority(await validateBuildInputs(buildInputs));
   if (authority.inputs.mode !== "nix-source") throw new Error("Native source authority requires nix-source");
   const { target, roots, tools, inputs } = authority;
   const component = inputs.components.burst;
@@ -731,7 +888,12 @@ export async function validateSourceBuiltNative(buildInputs) {
   }
   boundedInteger(manifest.artifactBytes, MAX_FILE_BYTES, "native artifact bytes");
   if (!manifest.artifactBytes) throw new Error("Empty native artifact");
-  for (const [path, key] of [[nativeSourcePath, "nativeSourceSha256"], [nativeToolPath, "buildToolSha256"]]) {
+  /** @type {Array<{ path: string, key: "nativeSourceSha256" | "buildToolSha256" }>} */
+  const sourceChecks = [
+    { path: nativeSourcePath, key: "nativeSourceSha256" },
+    { path: nativeToolPath, key: "buildToolSha256" },
+  ];
+  for (const { path, key } of sourceChecks) {
     const source = await readRegular(join(sourceRoot, path));
     const output = await readRegular(join(roots.burst, path));
     if (sha256(source.bytes) !== manifest[key] || sha256(output.bytes) !== manifest[key]) throw new Error(`Native ${key} mismatch`);
@@ -768,13 +930,18 @@ export async function validateSourceBuiltNative(buildInputs) {
   return result;
 }
 
+/** @param {"portable-source" | "nix-source" | undefined} mode @param {BuildInputs | undefined} buildInputs @returns {Promise<NativeAuthority | null>} */
 async function sidecarAuthority(mode, buildInputs) {
   if (mode !== undefined && !["portable-source", "nix-source"].includes(mode)) throw new Error("Unsupported sidecar mode");
-  if (mode === "nix-source") return validateSourceBuiltNative(buildInputs);
+  if (mode === "nix-source") {
+    if (!buildInputs) throw new Error("Nix native authority requires explicit build inputs");
+    return validateSourceBuiltNative(buildInputs);
+  }
   if (buildInputs?.mode === "nix-source") throw new Error("Nix native authority requires explicit nix-source mode");
   return null;
 }
 
+/** @param {SidecarManifest} manifest @param {{ testOnlyAllowNonProductionIdentity?: boolean, nativeAuthority?: NativeAuthority | null }} [options] @returns {SidecarManifest} */
 export function validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity = false, nativeAuthority = null } = {}) {
   if (nativeAuthority && !nativeAuthorities.has(nativeAuthority)) throw new Error("Unauthenticated native authority");
   if (nativeAuthority && (manifest.target !== nativeAuthority.target || manifest.source?.model !== "source-candidate-v2"
@@ -819,7 +986,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
 
   exactRecord(manifest.runtime, ["mode", "sha256", "size", "target", "v8", "version"], "manifest runtime");
   exactRecord(manifest.protocol, ["1.0", "1.1", "1.2"], "manifest protocol");
-  for (const version of ["1.0", "1.1", "1.2"]) exactRecord(manifest.protocol[version], ["inventorySha256", "requestsSha256", "resultsSha256"], `manifest protocol ${version}`);
+  for (const version of PROTOCOL_VERSIONS) exactRecord(manifest.protocol[version], ["inventorySha256", "requestsSha256", "resultsSha256"], `manifest protocol ${version}`);
   exactRecord(manifest.native, ["abi", "backend", "sha256", "size", "target"], "manifest native");
   exactRecord(manifest.raster, ["name", "packageJsonSha256", "version"], "manifest raster");
   exactRecord(manifest.resvg, ["name", "version", "wasmSha256", "wasmSize"], "manifest resvg");
@@ -827,7 +994,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
 
   exactDigest(manifest.runtime.sha256, "manifest runtime digest");
   boundedInteger(manifest.runtime.size, MAX_FILE_BYTES, "manifest runtime size");
-  for (const version of ["1.0", "1.1", "1.2"]) {
+  for (const version of PROTOCOL_VERSIONS) {
     exactDigest(manifest.protocol[version].inventorySha256, `manifest protocol ${version} inventory digest`);
     exactDigest(manifest.protocol[version].requestsSha256, `manifest protocol ${version} requests digest`);
     exactDigest(manifest.protocol[version].resultsSha256, `manifest protocol ${version} results digest`);
@@ -866,7 +1033,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
   }
 
   if (!testOnlyAllowNonProductionIdentity) {
-    if (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0" && manifest.core.version !== "0.6.1")
+    if (manifest.core.name !== "@knowledge-forge-ai/theme-forge-stellar-burst" || (manifest.core.version !== "0.4.0" && manifest.core.version !== "0.5.0" && manifest.core.version !== "0.6.1" && manifest.core.version !== "0.7.0")
         || manifest.raster.name !== "@knowledge-forge-ai/tfsb-raster-resvg" || manifest.raster.version !== "0.0.0-tfsb47f"
         || manifest.raster.packageJsonSha256 !== "14b741e56d9823f82318e8a9d062a02884258eccfae6266138be2a6aaf9acd12"
         || manifest.resvg.name !== "@resvg/resvg-wasm" || manifest.resvg.version !== "2.6.2"
@@ -910,6 +1077,7 @@ export function validateManifestShape(manifest, { testOnlyAllowNonProductionIden
   return manifest;
 }
 
+/** @param {PrepareSidecarOptions} [options] @returns {Promise<{ manifestDigest: string, fileCount: number, bytes: number, target: string, sidecarBinary: string }>} */
 export async function prepareSidecar(options = {}) {
   const {
     studioRoot,
@@ -953,12 +1121,15 @@ export async function prepareSidecar(options = {}) {
     }
   }
 
-  const effectiveTarget = target ? resolveTarget(target) : TARGETS[0];
+  if (!nodePath) throw new Error("sidecar preparation requires explicit nodePath");
+  const effectiveNodePath = nodePath;
+  const effectiveTarget = resolveTarget(target);
   const nativeAuthority = await sidecarAuthority(options.mode, options.buildInputs);
-  if (nativeAuthority && (effectiveTarget.triple !== nativeAuthority.target || sourceIdentity !== nativeAuthority.source
+  if (!effectiveTarget) throw new Error("sidecar preparation target is unavailable");
+  if (nativeAuthority && (!componentRoots?.burst || effectiveTarget.triple !== nativeAuthority.target || sourceIdentity !== nativeAuthority.source
       || await realpath(componentRoots.burst) !== nativeAuthority.root)) throw new Error("Sidecar preparation authority mismatch");
   if (effectiveTarget.os === "darwin" && (options.mode === "portable-source" || (release && options.mode !== "nix-source"))) {
-    validateDarwinPortableNode(nodePath, { validateLinkage: true });
+    validateDarwinPortableNode(effectiveNodePath, { validateLinkage: true });
   }
   const effectiveStudioRoot = studioRoot
     ? resolve(studioRoot)
@@ -979,8 +1150,8 @@ export async function prepareSidecar(options = {}) {
 
   let standaloneInputs = null;
   try {
-    const nodeInfo = await requireRegular(nodePath);
-    const runtimeProbe = probeRuntime(nodePath, effectiveTarget);
+    const nodeInfo = await requireRegular(effectiveNodePath);
+    const runtimeProbe = probeRuntime(effectiveNodePath, effectiveTarget);
 
     let canonicalSourceIdentity = null;
     let baseCommit = null;
@@ -998,7 +1169,12 @@ export async function prepareSidecar(options = {}) {
     } else if (!release) {
       const authInputs = resolve(effectiveRepoRoot, "authenticated-inputs");
       const isAuthTree = existsSync(authInputs);
-      standaloneInputs = isAuthTree ? await materializeStandaloneInputs({ authInputs, rootTarball }) : null;
+      if (isAuthTree) {
+        if (!rootTarball) throw new Error("authenticated standalone inputs require an explicit rootTarball");
+        standaloneInputs = await materializeStandaloneInputs({ authInputs, rootTarball });
+      } else {
+        standaloneInputs = null;
+      }
       coreRoot = standaloneInputs?.corePackageRoot ?? effectiveRepoRoot;
       resolvedRasterRoot = standaloneInputs?.rasterPackageRoot ?? resolve(effectiveRepoRoot, "packages/tfsb-raster-resvg");
     } else {
@@ -1008,11 +1184,11 @@ export async function prepareSidecar(options = {}) {
     const rootPackage = await readPackage(resolve(coreRoot, "package.json"));
     const rasterPackage = await readPackage(resolve(resolvedRasterRoot, "package.json"));
     const resvgPackage = await readPackage(resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm/package.json"));
-    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0" && rootPackage.version !== "0.6.1") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
+    if ((rootPackage.version !== "0.4.0" && rootPackage.version !== "0.5.0" && rootPackage.version !== "0.6.1" && rootPackage.version !== "0.7.0") || rasterPackage.version !== "0.0.0-tfsb47f" || resvgPackage.version !== "2.6.2") {
       throw new Error("sidecar package identity does not match the closed release input");
     }
 
-    await copyRegular(nodePath, stageBinary, 0o755);
+    await copyRegular(effectiveNodePath, stageBinary, 0o755);
     await copyClosedTree(resolve(coreRoot, "dist"), resolve(stagePayload, "dist"), new Set());
     await copyRegular(resolve(coreRoot, "package.json"), resolve(stagePayload, "package.json"));
 
@@ -1063,6 +1239,7 @@ export async function prepareSidecar(options = {}) {
       : { files };
     const actualInputDigest = sha256(Buffer.from(canonicalJson(actualInputPayload)));
 
+    /** @type {ManifestSource} */
     let sourceRecord;
     let schemaVersion;
     if (canonicalSourceIdentity) {
@@ -1073,6 +1250,7 @@ export async function prepareSidecar(options = {}) {
       };
       schemaVersion = 2;
     } else {
+      if (!baseCommit) throw new Error("sidecar source identity is unavailable");
       sourceRecord = {
         actualInputDigest,
         baseCommit,
@@ -1085,12 +1263,17 @@ export async function prepareSidecar(options = {}) {
       ? { name: rootPackage.name, version: rootPackage.version, tarball: rootTarballIdentity }
       : { name: rootPackage.name, version: rootPackage.version };
 
-    const runtimeBytes = await readFile(nodePath);
+    const runtimeBytes = await readFile(effectiveNodePath);
     const wasmPath = resolve(resolvedRasterRoot, "node_modules/@resvg/resvg-wasm/index_bg.wasm");
     const wasmBytes = await readFile(wasmPath);
 
-    const protocol = {};
-    for (const version of ["1.0", "1.1", "1.2"]) {
+    /** @type {ProtocolMap} */
+    const protocol = {
+      "1.0": { inventorySha256: "", requestsSha256: "", resultsSha256: "" },
+      "1.1": { inventorySha256: "", requestsSha256: "", resultsSha256: "" },
+      "1.2": { inventorySha256: "", requestsSha256: "", resultsSha256: "" },
+    };
+    for (const version of PROTOCOL_VERSIONS) {
       const suffix = version === "1.0" ? "" : `-${version}`;
       protocol[version] = {
         inventorySha256: sha256(await readFile(resolve(coreRoot, `protocol/tfsb-studio-v1/inventory${suffix}.json`))),
@@ -1145,15 +1328,16 @@ export async function prepareSidecar(options = {}) {
     const manifestDigest = sha256(Buffer.from(canonicalJson(manifest)));
     const closedManifest = { ...manifest, manifestDigest };
     validateManifestShape(closedManifest, {
-      testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
+      ...(options.testOnlyAllowNonProductionIdentity === true ? { testOnlyAllowNonProductionIdentity: true } : {}),
       nativeAuthority,
     });
     await writeFile(resolve(stagePayload, "manifest.json"), `${canonicalJson(closedManifest)}\n`, { mode: 0o644 });
     await verifyDistribution({
       binaryPath: stageBinary,
       payloadRoot: stagePayload,
-      testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
-      mode: options.mode, buildInputs: options.buildInputs,
+      ...(options.testOnlyAllowNonProductionIdentity === undefined ? {} : { testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity }),
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      ...(options.buildInputs === undefined ? {} : { buildInputs: options.buildInputs }),
     });
 
     const binaryDestination = resolve(tauriRoot, "binaries", sidecarBinary);
@@ -1165,8 +1349,9 @@ export async function prepareSidecar(options = {}) {
       await verifyDistribution({
         binaryPath: binaryDestination,
         payloadRoot: payloadDestination,
-        testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity,
-        mode: options.mode, buildInputs: options.buildInputs,
+        ...(options.testOnlyAllowNonProductionIdentity === undefined ? {} : { testOnlyAllowNonProductionIdentity: options.testOnlyAllowNonProductionIdentity }),
+        ...(options.mode === undefined ? {} : { mode: options.mode }),
+        ...(options.buildInputs === undefined ? {} : { buildInputs: options.buildInputs }),
       });
     }
     await replaceGeneratedPair({
@@ -1196,6 +1381,7 @@ export async function prepareSidecar(options = {}) {
 
 export const replaceGeneratedPairForTest = replaceGeneratedPair;
 
+/** @param {VerifyDistributionOptions} options @returns {Promise<{ manifestDigest: string, fileCount: number, bytes: number }>} */
 export async function verifyDistribution({
   binaryPath,
   payloadRoot,
@@ -1209,8 +1395,7 @@ export async function verifyDistribution({
   const { bytes: binaryBytes, info: binaryInfo } = await readRegular(binaryPath);
   const { bytes: manifestBytes } = await readRegular(resolve(payloadRoot, "manifest.json"), MAX_MANIFEST_BYTES);
   const rawManifest = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
-  const manifest = JSON.parse(rawManifest);
-  validateManifestShape(manifest, { testOnlyAllowNonProductionIdentity, nativeAuthority });
+  const manifest = validateManifestShape(JSON.parse(rawManifest), { testOnlyAllowNonProductionIdentity, nativeAuthority });
   const { manifestDigest, ...unsigned } = manifest;
   if (canonicalJson(manifest) + "\n" !== rawManifest) throw new Error("manifest bytes are not canonical");
   if (manifestDigest !== sha256(Buffer.from(canonicalJson(unsigned)))) throw new Error("manifest self-digest is invalid");
@@ -1230,6 +1415,7 @@ export async function verifyDistribution({
   if (manifest.source.actualInputDigest !== sha256(Buffer.from(canonicalJson(expectedActualInput)))) throw new Error("sidecar actual input identity is invalid");
 
   const byPath = new Map(actualFiles.map((file) => [file.path, file]));
+  /** @param {string} path @returns {FileRecord} */
   const required = (path) => {
     const file = byPath.get(path);
     if (!file) throw new Error(`required sidecar payload file is unavailable: ${path}`);
@@ -1248,7 +1434,7 @@ export async function verifyDistribution({
   if (native.sha256 !== manifest.native.sha256 || native.size !== manifest.native.size
       || raster.sha256 !== manifest.raster.packageJsonSha256 || wasm.sha256 !== manifest.resvg.wasmSha256
       || wasm.size !== manifest.resvg.wasmSize) throw new Error("sidecar consequence identity is invalid");
-  for (const version of ["1.0", "1.1", "1.2"]) {
+  for (const version of PROTOCOL_VERSIONS) {
     const suffix = version === "1.0" ? "" : `-${version}`;
     if (required(`protocol/tfsb-studio-v1/inventory${suffix}.json`).sha256 !== manifest.protocol[version].inventorySha256
         || required(`protocol/tfsb-studio-v1/requests${suffix}.schema.json`).sha256 !== manifest.protocol[version].requestsSha256
@@ -1257,6 +1443,7 @@ export async function verifyDistribution({
   return { manifestDigest, fileCount: actualFiles.length, bytes: manifest.totals.bytes };
 }
 
+/** @param {string} repositoryRoot @returns {Promise<void>} */
 export async function cleanSidecar(repositoryRoot) {
   const studioRoot = existsSync(resolve(repositoryRoot, "apps/studio")) ? resolve(repositoryRoot, "apps/studio") : repositoryRoot;
   const tauriRoot = resolve(studioRoot, "src-tauri");
@@ -1264,6 +1451,7 @@ export async function cleanSidecar(repositoryRoot) {
   await rm(resolve(tauriRoot, "sidecar-payload"), { recursive: true, force: true });
 }
 
+/** @param {string[]} argv @param {string} repositoryRoot @returns {{ repositoryRoot: string, nodePath: string, rootTarball: string, target?: string }} */
 export function preparationOptions(argv, repositoryRoot) {
   const args = parseArgs(argv);
   const authTarballDir = resolve(repositoryRoot, "authenticated-inputs/core-tarball");
@@ -1271,9 +1459,11 @@ export function preparationOptions(argv, repositoryRoot) {
     ? readdirSync(authTarballDir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
     : [];
   if (authTarballs.length > 1) throw new Error("standalone sidecar core archive input is ambiguous");
-  const fallbackTarball = authTarballs.length === 1 ? resolve(authTarballDir, authTarballs[0].name) : undefined;
+  const onlyTarball = authTarballs.length === 1 ? authTarballs[0] : undefined;
+  const fallbackTarball = onlyTarball ? resolve(authTarballDir, onlyTarball.name) : undefined;
   const nodePath = args.get("node") ?? process.env.TFSB_STUDIO_NODE_BINARY;
   const rootTarball = args.get("root-tarball") ?? process.env.TFSB_STUDIO_ROOT_TARBALL ?? fallbackTarball;
   if (!nodePath || !rootTarball) throw new Error("set explicit --node and --root-tarball inputs (or the documented TFSB_STUDIO_* equivalents)");
-  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball), ...(args.has("target") ? { target: args.get("target") } : {}) };
+  const requestedTarget = args.get("target");
+  return { repositoryRoot, nodePath: resolve(nodePath), rootTarball: resolve(rootTarball), ...(requestedTarget === undefined ? {} : { target: requestedTarget }) };
 }

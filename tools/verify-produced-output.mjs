@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { candidateProvenance, inventoryTree, identity } from "./candidate-provenance.mjs";
+import { candidateProvenance, identity } from "./candidate-provenance.mjs";
+import { inventoryNativePayload } from "./native-runtime.mjs";
 import { targetForTriple } from "./platform-targets.mjs";
 
 // Integrity check inside the externally selected source derivation's output.
@@ -15,7 +16,7 @@ export async function verifyProducedOutput(root, system) {
   if (targetForTriple(receipt.target).system !== system || receipt.mode !== "nix-source") throw new Error("Produced target or mode mismatch");
   const expected = candidateProvenance(provenance.source, receipt);
   if (identity(expected) !== identity(provenance)) throw new Error("Produced provenance mismatch");
-  const actual = await inventoryTree(join(directory, "native"));
+  const actual = await inventoryNativePayload(join(directory, "native"), { expectedTarget: receipt.target });
   if (actual.identity !== receipt.nativePayload || identity(actual) !== identity(manifest)) throw new Error("Produced payload mismatch");
   return { sourceCandidate: provenance.source.identity, buildReceipt: receipt.identity, nativePayload: actual.identity };
 }

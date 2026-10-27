@@ -4,10 +4,10 @@
  * TFSB65 Release-Candidate (RC) Payload Generation and Maintained Binding Owner.
  *
  * Responsibilities:
- * 1. Consumes exact, authenticated Burst 0.6.1 and Loom 0.4.0 RC tarball artifacts.
+ * 1. Consumes exact, authenticated Burst 0.7.0 and Loom 0.5.0 RC tarball artifacts.
  * 2. Deterministically produces the closed Scene payload archive (bit-identical across runs).
- * 3. Maintains Scene Workbench v1 payload-binding.json (62 files, capability 0.5-development, metadataVersion 0.6.1).
- * 4. Maintains Theme Lab v2 payload-binding.json (335 files, exact Loom 0.4.0 archive digest and members).
+ * 3. Maintains Scene Workbench v1 payload-binding.json (62 files, capability 0.5-development, metadataVersion 0.7.0).
+ * 4. Maintains Theme Lab v2 payload-binding.json (335 files, exact Loom 0.5.0 archive digest and members).
  * 5. Updates gallery-contract.ts EXPECTED_ARCHIVE_SHA256 while strictly preserving the 37-field structural inventory.
  * 6. Emits heavy archives and execution receipt to designated output directory.
  */
@@ -38,14 +38,14 @@ const __dirname = dirname(__filename);
 const STUDIO_ROOT = resolve(__dirname, "..");
 
 export const EXPECTED_BURST_NAME = "@knowledge-forge-ai/theme-forge-stellar-burst";
-export const EXPECTED_BURST_VERSION = "0.6.1";
+export const EXPECTED_BURST_VERSION = "0.7.0";
 export const EXPECTED_BURST_SHA256 =
-  "53ef41a3de3335e042f2c4b1d299b1155b64bfc6556a84baf6a62cb28bcca209";
+  "d17f95cfb3d0661e069f099f196cd5adaa79637d96cfe2d62467324142cb1cbd";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.4.0";
+export const EXPECTED_LOOM_VERSION = "0.5.0";
 export const EXPECTED_LOOM_SHA256 =
-  "4550314d9a6eb9a016c8637eb2a0a98e9a410210ad6546642dfce31c7402c9ec";
+  "864f38c28cbe62d8c1bd99b4769bb74d2155b96e9de94fcab6552af807f89346";
 
 import {
   EXPECTED_NODE_VERSION,
@@ -255,12 +255,12 @@ export function locateDependencyDirectories(options = {}) {
       const xPkg = JSON.parse(readFileSync(join(xmldomDir, "package.json"), "utf8"));
       const tPkg = JSON.parse(readFileSync(join(tomlDir, "package.json"), "utf8"));
       if (xPkg.name === "@xmldom/xmldom" && xPkg.version === "0.9.12" &&
-          tPkg.name === "smol-toml" && tPkg.version === "1.8.0") {
+          tPkg.name === "smol-toml" && tPkg.version === "1.9.1") {
         return { xmldomDir, tomlDir };
       }
     }
   }
-  throw new Error("Could not locate required dependencies @xmldom/xmldom@0.9.12 and smol-toml@1.8.0");
+  throw new Error("Could not locate required dependencies @xmldom/xmldom@0.9.12 and smol-toml@1.9.1");
 }
 
 /**
@@ -360,7 +360,7 @@ export async function constructScenePayloadTree(scratchDir, burstPackageRoot, de
     throw new Error(`Expected exactly 39 executable files in scene payload, got ${executableFiles.length}`);
   }
 
-  // 6. Source tree digest of the Burst 0.6.1 package
+  // 6. Source tree digest of the Burst 0.7.0 package
   const sourceTreeDigest = await computeTreeDigest(burstPackageRoot);
 
   // 7. Write scene-input.json
@@ -511,7 +511,7 @@ export async function buildDeterministicSceneArchive(options) {
 }
 
 /**
- * Extracts and inspects Loom 0.4.0 RC artifact, verifying catalog evidence and 335 members.
+ * Extracts and inspects Loom 0.5.0 RC artifact, verifying catalog evidence and 335 members.
  */
 export async function inspectLoomRcArtifact(options) {
   const loomTarball = resolve(options.loomTarball);
@@ -558,7 +558,7 @@ export async function inspectLoomRcArtifact(options) {
     await walk(pkgRoot);
 
     if (files.length !== 335) {
-      throw new Error(`Expected exactly 335 files in Loom 0.4.0 payload binding inventory, got ${files.length}`);
+      throw new Error(`Expected exactly 335 files in Loom 0.5.0 payload binding inventory, got ${files.length}`);
     }
 
     const existingThemeLabBinding = JSON.parse(
@@ -678,8 +678,8 @@ export async function executeRcPayloadGeneration(options = {}) {
     }
   }
 
-  // 3. Inspect Loom 0.4.0 artifact
-  console.log("\nInspecting Loom 0.4.0 RC artifact...");
+  // 3. Inspect Loom 0.5.0 artifact
+  console.log("\nInspecting Loom 0.5.0 RC artifact...");
   const loomResult = await inspectLoomRcArtifact({
     loomTarball,
     loomSha256,

@@ -20,7 +20,7 @@
 import type {
   ThemeSpecificationV2,
   CodePresentationConfig,
-} from "./v2-model";
+} from "./v2-model.js";
 
 function isCodePresentationConfig(cp: unknown): cp is CodePresentationConfig {
   return typeof cp === "object" && cp !== null && (cp as Record<string, unknown>).mode === "expressive-code";
@@ -31,7 +31,7 @@ function isCodePresentationConfig(cp: unknown): cp is CodePresentationConfig {
 // ---------------------------------------------------------------------------
 
 export const EXPECTED_ARCHIVE_SHA256 =
-  "4550314d9a6eb9a016c8637eb2a0a98e9a410210ad6546642dfce31c7402c9ec" as const;
+  "864f38c28cbe62d8c1bd99b4769bb74d2155b96e9de94fcab6552af807f89346" as const;
 
 export const EXPECTED_CONSUMER_LOCK_DIGEST =
   "7c3c03ea0b02f2af883e411ba4500d7ef2951a7bd599e452d3bb91e23a8c9bbf" as const;

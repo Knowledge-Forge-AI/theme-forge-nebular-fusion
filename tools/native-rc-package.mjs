@@ -21,10 +21,13 @@ import { createGzip } from "node:zlib";
 import { once } from "node:events";
 import { CANDIDATE_VERSION, targetForTriple } from "./platform-targets.mjs";
 import { nativeLauncher } from "./native-launcher.mjs";
+import { computeMaterialDigest, selectPayloadNativeRuntime, validateRuntimeMaterial } from "./native-runtime.mjs";
 import { defaultSnapshotReader, readRegularSnapshot, sha256 } from "./fs-snapshot.mjs";
 
 export const FIXED_ARCHIVE_TIME = 1704067200; // 2024-01-01T00:00:00Z, as rc-payloads.mjs
 export const PACKAGE_MANIFEST_SCHEMA = "tfsb.nebular-package-manifest-v1";
+export const PACKAGE_MANIFEST_PROJECTION_SCHEMA = "tfsb.nebular-package-manifest-v2";
+const NATIVE_RUNTIME_ALIAS_PROJECTION_SCHEMA = "nebular-native-runtime-alias-projection-v1";
 
 export const PLATFORMS = Object.freeze(Object.fromEntries([
   ["darwin-arm64", "aarch64-apple-darwin", "macOS Apple Silicon"],
@@ -53,7 +56,7 @@ export function platformPackageJson(key, version = CANDIDATE_VERSION) {
     os: [platform.os],
     cpu: [platform.cpu],
     files: ["payload", "package-manifest.json", "README.md", "LICENSE", "NOTICE"],
-    license: "AGPL-3.0-or-later OR Commercial",
+    license: "AGPL-3.0-or-later",
     repository: { type: "git", url: "https://github.com/Knowledge-Forge-AI/theme-forge-nebular-fusion.git" },
   };
 }
@@ -174,6 +177,111 @@ export function payloadMembers(key, layout) {
   return tree.map((member) => ({ ...member, path: `payload/${member.path}` }));
 }
 
+function canonicalProjection(value) {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalProjection).join(",") + "]";
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return "{" + Object.keys(value).sort().map((key) => JSON.stringify(key) + ":" + canonicalProjection(value[key])).join(",") + "}";
+  }
+  throw new Error("Unsupported alias projection value");
+}
+
+function projectionFromMarker(markerBytes, expectedTarget = null) {
+  let material;
+  try { material = JSON.parse(markerBytes.toString("utf8")); } catch { throw new Error("native runtime marker is not valid JSON"); }
+  if (material?.schema !== "nebular-native-runtime-material-v1" || !/^[a-f0-9]{64}$/.test(material.materialDigest ?? "")
+      || !Array.isArray(material.regulars) || !Array.isArray(material.aliases)) {
+    throw new Error("native runtime marker cannot authenticate an npm alias projection");
+  }
+  validateRuntimeMaterial(material, expectedTarget ?? material.target);
+  if (material.materialDigest !== computeMaterialDigest(material)) {
+    throw new Error("native runtime marker material digest is not self-authenticating");
+  }
+  const regulars = new Map(material.regulars.map((entry) => [entry.path, entry]));
+  const aliases = material.aliases.map((alias) => {
+    const regular = regulars.get(alias.canonical);
+    if (!regular || !Number.isSafeInteger(regular.bytes) || ![0o644, 0o755].includes(regular.mode)
+        || !/^[a-f0-9]{64}$/.test(regular.sha256 ?? "")) {
+      throw new Error("runtime alias has no authenticated canonical regular: " + String(alias.path));
+    }
+    return { path: alias.path, target: alias.target, canonical: alias.canonical, bytes: regular.bytes, mode: regular.mode, sha256: regular.sha256 };
+  }).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const body = { schema: NATIVE_RUNTIME_ALIAS_PROJECTION_SCHEMA, materialDigest: material.materialDigest, aliases };
+  return { ...body, digest: sha256(Buffer.from(canonicalProjection(body))) };
+}
+
+function projectionFromPayloadMembers(members, expectedTarget = null) {
+  const marker = members.find((member) => member.path === "payload/native-runtime.json");
+  if (!marker) return null;
+  if (marker.type !== "file" || !marker.bytes) throw new Error("native runtime marker is not a regular payload member");
+  const projection = projectionFromMarker(marker.bytes, expectedTarget);
+  const aliases = new Map(projection.aliases.map((entry) => ["payload/" + entry.path, entry]));
+  const actualAliases = members.filter((member) => member.type === "symlink" && member.path.startsWith("payload/opt/nebular-private/"));
+  if (actualAliases.length !== aliases.size) throw new Error("npm alias projection does not cover every declared runtime alias");
+  for (const member of actualAliases) {
+    const expected = aliases.get(member.path);
+    if (!expected || member.target !== expected.target) throw new Error("runtime alias source mismatch at " + member.path);
+  }
+  return projection;
+}
+
+function projectPayloadMembers(members, projection) {
+  if (!projection) return members;
+  const aliases = new Map(projection.aliases.map((entry) => ["payload/" + entry.path, entry]));
+  const regulars = new Map(members.filter((member) => member.type === "file").map((member) => [member.path, member]));
+  let projected = 0;
+  const result = members.map((member) => {
+    if (member.type !== "symlink") return member;
+    const entry = aliases.get(member.path);
+    if (!entry) throw new Error("undeclared runtime alias in npm projection: " + member.path);
+    const canonicalMember = regulars.get("payload/" + entry.canonical);
+    if (!canonicalMember || canonicalMember.type !== "file" || canonicalMember.size !== entry.bytes
+        || canonicalMember.mode !== entry.mode || canonicalMember.sha256 !== entry.sha256) {
+      throw new Error("runtime alias canonical body mismatch at " + member.path);
+    }
+    projected += 1;
+    return { path: member.path, type: "file", mode: entry.mode, size: entry.bytes, sha256: entry.sha256, bytes: canonicalMember.bytes };
+  });
+  if (projected !== aliases.size) throw new Error("npm alias projection omitted a declared runtime alias");
+  return result;
+}
+
+function hasPrivateRuntimeProjection(manifest) {
+  const members = Array.isArray(manifest.members) ? manifest.members : [];
+  if (members.some((member) => typeof member?.path === "string"
+      && (member.path === "payload/native-runtime.json" || member.path === "payload/opt/nebular-private"
+        || member.path.startsWith("payload/opt/nebular-private/")))) return true;
+  return false;
+}
+
+function validateManifestProjection(manifest, root, platform) {
+  if (manifest.schema !== PACKAGE_MANIFEST_PROJECTION_SCHEMA) {
+    if (Object.hasOwn(manifest, "runtimeAliasProjection")) {
+      throw new Error("Legacy package manifest cannot carry a runtime alias projection");
+    }
+    if (hasPrivateRuntimeProjection(manifest)) {
+      throw new Error("Legacy package manifest requires v2 for private runtime members");
+    }
+    return null;
+  }
+  const projection = manifest.runtimeAliasProjection;
+  if (!projection || projection.schema !== NATIVE_RUNTIME_ALIAS_PROJECTION_SCHEMA || !/^[a-f0-9]{64}$/.test(projection.digest ?? "")
+      || !Array.isArray(projection.aliases)) throw new Error("Invalid npm runtime alias projection");
+  if (platform.os !== "linux") throw new Error("Runtime alias projection is Linux-only");
+  const marker = readRegularSnapshot(join(root, "payload/native-runtime.json"), { label: "native runtime marker", maxBytes: 16 * 1024 * 1024 });
+  const expected = projectionFromMarker(marker.bytes, platform.triple);
+  if (canonicalProjection(projection) !== canonicalProjection(expected)) throw new Error("npm runtime alias projection authentication failed");
+  const files = new Map(manifest.members.filter((member) => member.type === "file").map((member) => [member.path, member]));
+  for (const alias of expected.aliases) {
+    const member = files.get("payload/" + alias.path);
+    if (!member || member.size !== alias.bytes || member.mode !== alias.mode || member.sha256 !== alias.sha256) {
+      throw new Error("npm runtime alias copy is missing or mismatched: " + alias.path);
+    }
+  }
+  return expected;
+}
+
 /**
  * Assembles the npm platform package directory from the exact payload.
  * @returns {{ packageDir: string, manifest: object, manifestSha256: string }}
@@ -182,7 +290,9 @@ export function assemblePlatformPackage({ platform: key, payload, checkout, outp
   const platform = PLATFORMS[key];
   if (!platform) throw new Error(`Unsupported platform ${key}`);
   if (platform.os === "linux" && !/^\d+\.\d+$/.test(glibcMinimum ?? "")) throw new Error(`A qualified glibc minimum is required for ${key}`);
-  const members = payloadMembers(key, layoutRoot(key, payload));
+  const sourceMembers = payloadMembers(key, layoutRoot(key, payload));
+  const projection = platform.os === "linux" ? projectionFromPayloadMembers(sourceMembers, platform.triple) : null;
+  const members = projectPayloadMembers(sourceMembers, projection);
   const executable = members.find((member) => member.path === platform.executable);
   if (!executable || executable.type !== "file" || executable.mode !== 0o755) throw new Error("Native executable missing or not executable");
   verifyNativeExecutableHeader(executable.bytes, platform);
@@ -191,7 +301,7 @@ export function assemblePlatformPackage({ platform: key, payload, checkout, outp
   const inventory = [...(platform.os === "darwin" ? [{ path: platform.payloadRoot, type: "directory", mode: 0o755 }] : []), ...members.map(({ bytes, ...member }) => member)]
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const manifest = {
-    schema: PACKAGE_MANIFEST_SCHEMA,
+    schema: projection ? PACKAGE_MANIFEST_PROJECTION_SCHEMA : PACKAGE_MANIFEST_SCHEMA,
     package: platform.package,
     version,
     target: { os: platform.os, cpu: platform.cpu },
@@ -201,6 +311,7 @@ export function assemblePlatformPackage({ platform: key, payload, checkout, outp
     ...(platform.os === "linux" ? { glibcMinimum } : {}),
     payloadStatus: "complete",
     fileCount: inventory.length,
+    ...(projection ? { runtimeAliasProjection: projection } : {}),
     members: inventory,
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -229,11 +340,14 @@ export function verifyPlatformPackage(root, key, manifestSha256, version = CANDI
   const manifestFile = readRegularSnapshot(join(root, "package-manifest.json"), { label: "package-manifest.json", maxBytes: 4 * 1024 * 1024 });
   if (manifestFile.sha256 !== manifestSha256) throw new Error("Payload manifest authentication failed");
   const manifest = JSON.parse(manifestFile.bytes.toString("utf8"));
-  if (manifest.schema !== PACKAGE_MANIFEST_SCHEMA || manifest.package !== platform.package || manifest.version !== version
+  if (![PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_PROJECTION_SCHEMA].includes(manifest.schema)
+      || manifest.package !== platform.package || manifest.version !== version
+      || manifest.target?.os !== platform.os || manifest.target?.cpu !== platform.cpu
       || manifest.payloadRoot !== platform.payloadRoot || manifest.executable !== platform.executable || manifest.payloadStatus !== "complete"
       || manifest.fileCount !== manifest.members.length) {
     throw new Error("Invalid payload manifest identity or inventory");
   }
+  validateManifestProjection(manifest, root, platform);
   const expected = new Map(manifest.members.map((member) => [member.path, member]));
   const actual = new Map([...(platform.os === "darwin" ? [{ path: platform.payloadRoot, type: "directory", mode: 0o755 }] : []),
     ...payloadMembers(key, join(root, platform.payloadRoot))].map((member) => [member.path, member]));
@@ -249,7 +363,23 @@ export function verifyPlatformPackage(root, key, manifestSha256, version = CANDI
 }
 
 /** Packs the platform package with the lane's authenticated npm, isolated from any user npm state. */
-export function packPlatformPackage(packageDir, destination, { node = process.execPath, npmCli, scratch }) {
+export function packPlatformPackage(packageDir, destination, { node = process.execPath, npmCli, scratch, platform, manifestSha256 }) {
+  const hasPlatform = platform !== undefined && platform !== null;
+  const hasManifestSha256 = manifestSha256 !== undefined && manifestSha256 !== null;
+  if (hasPlatform !== hasManifestSha256) {
+    throw new Error("Complete authenticated platform and manifest SHA-256 context is required for npm pack verification");
+  }
+  if (hasPlatform) {
+    if (typeof platform !== "string" || !PLATFORMS[platform] || typeof manifestSha256 !== "string" || !/^[a-f0-9]{64}$/.test(manifestSha256)) {
+      throw new Error("Invalid authenticated platform and manifest SHA-256 context");
+    }
+    verifyPlatformPackage(packageDir, platform, manifestSha256);
+  } else {
+    const manifest = JSON.parse(readRegularSnapshot(join(packageDir, "package-manifest.json"), { label: "package-manifest.json", maxBytes: 4 * 1024 * 1024 }).bytes.toString("utf8"));
+    if (manifest.schema !== PACKAGE_MANIFEST_SCHEMA || Object.hasOwn(manifest, "runtimeAliasProjection")) {
+      throw new Error("Projected or unknown package manifest requires complete authenticated platform and manifest SHA-256 context");
+    }
+  }
   mkdirSync(destination, { recursive: true });
   const home = join(scratch, "npm-home");
   mkdirSync(home, { recursive: true });
@@ -261,6 +391,17 @@ export function packPlatformPackage(packageDir, destination, { node = process.ex
   const [packed] = JSON.parse(result.stdout);
   const file = join(destination, packed.filename);
   const snapshot = readRegularSnapshot(file, { label: "npm tarball", maxBytes: 1024 * 1024 * 1024 });
+  if (hasPlatform) {
+    const readback = join(scratch, "npm-pack-readback");
+    rmSync(readback, { recursive: true, force: true });
+    mkdirSync(readback, { recursive: false, mode: 0o700 });
+    try {
+      spawnSyncChecked("tar", ["-xzf", file, "-C", readback], { maxBuffer: 64 * 1024 * 1024 });
+      verifyPlatformPackage(join(readback, "package"), platform, manifestSha256);
+    } finally {
+      rmSync(readback, { recursive: true, force: true });
+    }
+  }
   const npmVersion = spawnSyncChecked(node, [npmCli, "--version"], { env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home } }).stdout.trim();
   return { file, filename: packed.filename, sha256: snapshot.sha256, size: snapshot.size, integrity: packed.integrity, npmVersion, entryCount: packed.entryCount };
 }
@@ -333,9 +474,11 @@ export async function writeDeterministicArchive(members, file) {
 /** Assembles the raw native archive from the exact payload. */
 export async function assembleRawArchive({ platform: key, payload, checkout, output, version = CANDIDATE_VERSION }) {
   const platform = PLATFORMS[key];
-  const tree = walkTree(layoutRoot(key, payload));
+  const root = layoutRoot(key, payload);
+  const runtimeSelection = await selectPayloadNativeRuntime(root, platform?.triple ?? null);
+  const tree = walkTree(root);
   const legal = captureLegal(checkout);
-  const launcher = Buffer.from(nativeLauncher(platform.target));
+  const launcher = Buffer.from(nativeLauncher(platform.target, { nativeRuntime: runtimeSelection.nativeRuntime }));
   let members;
   if (platform.os === "darwin") {
     // The finalized bundle already carries the launcher and legal notices; they must be exact.
@@ -388,22 +531,27 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     if (process.argv[2] === "verify") {
       verifyCommand(process.argv.slice(3));
-      process.exit(0);
+    } else {
+      const options = parseArgs(process.argv.slice(2));
+      const output = resolve(options.output);
+      const scratch = join(output, ".scratch");
+      const assembled = assemblePlatformPackage({ ...options, output: join(scratch, "package") });
+      const npm = packPlatformPackage(assembled.packageDir, join(output, "candidate"), {
+        npmCli: resolve(options.npmCli),
+        scratch,
+        platform: options.platform,
+        manifestSha256: assembled.manifestSha256,
+      });
+      const raw = await assembleRawArchive({ ...options, output: join(output, "candidate") });
+      const record = { schema: "nebular.native-rc-package-v1", platform: options.platform, version: assembled.manifest.version,
+        packageManifestSha256: assembled.manifestSha256, glibcMinimum: assembled.manifest.glibcMinimum ?? null,
+        npm: { filename: npm.filename, sha256: npm.sha256, size: npm.size, integrity: npm.integrity, npmVersion: npm.npmVersion, entryCount: npm.entryCount },
+        raw: { filename: raw.filename, sha256: raw.sha256, size: raw.size, members: raw.members, executableSha256: raw.executableSha256 } };
+      defaultSnapshotReader.writeRegular(join(output, "package-record.json"), Buffer.from(`${JSON.stringify(record, null, 2)}\n`), 0o644);
+      defaultSnapshotReader.writeRegular(join(output, "package-manifest.json"), readRegularSnapshot(join(assembled.packageDir, "package-manifest.json")).bytes, 0o644);
+      rmSync(scratch, { recursive: true, force: true });
+      process.stdout.write(`${JSON.stringify(record)}\n`);
     }
-    const options = parseArgs(process.argv.slice(2));
-    const output = resolve(options.output);
-    const scratch = join(output, ".scratch");
-    const assembled = assemblePlatformPackage({ ...options, output: join(scratch, "package") });
-    const npm = packPlatformPackage(assembled.packageDir, join(output, "candidate"), { npmCli: resolve(options.npmCli), scratch });
-    const raw = await assembleRawArchive({ ...options, output: join(output, "candidate") });
-    const record = { schema: "nebular.native-rc-package-v1", platform: options.platform, version: assembled.manifest.version,
-      packageManifestSha256: assembled.manifestSha256, glibcMinimum: assembled.manifest.glibcMinimum ?? null,
-      npm: { filename: npm.filename, sha256: npm.sha256, size: npm.size, integrity: npm.integrity, npmVersion: npm.npmVersion, entryCount: npm.entryCount },
-      raw: { filename: raw.filename, sha256: raw.sha256, size: raw.size, members: raw.members, executableSha256: raw.executableSha256 } };
-    defaultSnapshotReader.writeRegular(join(output, "package-record.json"), Buffer.from(`${JSON.stringify(record, null, 2)}\n`), 0o644);
-    defaultSnapshotReader.writeRegular(join(output, "package-manifest.json"), readRegularSnapshot(join(assembled.packageDir, "package-manifest.json")).bytes, 0o644);
-    rmSync(scratch, { recursive: true, force: true });
-    process.stdout.write(`${JSON.stringify(record)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
     process.exitCode = 1;

@@ -32,11 +32,34 @@ export const CARGO_METADATA_FORMAT = "1";
 const MAX_PATH_BYTES = 512;
 const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9._@+-]+$/;
 
+/** @typedef {{pkg: string, dep_kinds?: Array<{kind: string | null}>}} CargoDependency */
+/** @typedef {{id: string, deps: CargoDependency[]}} CargoResolveNode */
+/** @typedef {{id: string, name: string, version: string, license?: string | null, license_file?: string | null, manifest_path?: string | null, targets?: Array<{kind?: string[]}>}} CargoPackage */
+/** @typedef {{resolve: {root?: string, nodes: CargoResolveNode[]}, packages: CargoPackage[]}} CargoMetadata */
+/** @typedef {{id: string, name: string, version: string, license: string | null, license_file: string | null, manifest_path: string | null, isProcMacro: boolean, crateDir: string | null}} ResolvedCrate */
+/** @typedef {{licenseFiles: string[], hasLicenseText: boolean, isMissingRequiredMaterial: boolean, failureReason: string | null}} LicenseInventory */
+/** @typedef {{name: string, version: string, license: string | null, revision: string, files: Array<{path: string, size: number, sha256: string}>}} SupplementalPackage */
+/** @typedef {{schema?: string, packages: SupplementalPackage[]}} SupplementalManifest */
+/** @typedef {{fileName: string, sourcePath: string | null, relativePath: string}} NoticeFile */
+/** @typedef {{name: string, sourcePath: string, relativePath: string}} RootNotice */
+/** @typedef {{name: string, version: string, license: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} NpmNoticePackage */
+/** @typedef {{name: string, version: string, license: string | null, isProcMacro: boolean, checksum: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} CrateNoticePackage */
+/** @typedef {{name: string, version: string, license: string | null, failureReason: string | null}} MissingMaterial */
+/** @typedef {string | {relativePath: string}} ManifestFile */
+/** @typedef {{name: string, version: string, license?: string | null, files?: string[]}} MockNpmPackage */
+/** @typedef {{rootPackageId?: string, cargoMetadata?: CargoMetadata, cargoLockContent?: string, fileExistenceMap?: Record<string, boolean>, mockNpmPackages?: Record<string, MockNpmPackage>, mockCrateFiles?: Record<string, string[]>, supplementalLicenses?: Record<string, string[]>, repoRoot?: string, studioRoot?: string, outDir?: string, writeFiles?: boolean, failOnMissing?: boolean, allowExternalOutDir?: boolean}} NoticeOptions */
+/** @typedef {{name: string, version: string, license?: string | null, files?: ManifestFile[], hasLicenseText?: boolean}} ManifestNpmPackage */
+/** @typedef {{name: string, version: string, license?: string | null, checksum?: string | null, isProcMacro?: boolean, files?: ManifestFile[], hasLicenseText?: boolean}} ManifestCrate */
+/** @typedef {{name?: string, version?: string, license?: string, files?: ManifestFile[]}} ManifestRoot */
+/** @typedef {{status?: string, missingRequiredMaterial?: MissingMaterial[]}} ManifestValidation */
+/** @typedef {{root?: ManifestRoot, npm?: ManifestNpmPackage[], crates?: ManifestCrate[], validation?: ManifestValidation}} ManifestData */
+
 /**
  * Validates and normalizes a relative path string.
  * Strictly forbids path traversal ('..'), absolute paths, backslashes,
  * null bytes, or dangerous characters.
  */
+/** @param {unknown} pathStr */
 export function normalizeSafeRelativePath(pathStr) {
   if (typeof pathStr !== "string" || pathStr.length === 0) {
     throw new Error("Relative path must be a non-empty string");
@@ -73,6 +96,7 @@ export function normalizeSafeRelativePath(pathStr) {
  * Safely joins a base directory with a relative path, guaranteeing
  * the result remains strictly within baseDir.
  */
+/** @param {string} baseDir @param {unknown} relativePath */
 export function joinSafeRelative(baseDir, relativePath) {
   const safeRel = normalizeSafeRelativePath(relativePath);
   const resolvedBase = resolve(baseDir);
@@ -88,6 +112,7 @@ export function joinSafeRelative(baseDir, relativePath) {
 /**
  * Finds the repository root given studioRoot.
  */
+/** @param {string} [studioRoot] */
 export function findRepositoryRoot(studioRoot = STUDIO_ROOT) {
   const appRoot = resolve(studioRoot);
   if (existsSync(resolve(appRoot, "authenticated-inputs/stellar-binding.json"))) return appRoot;
@@ -97,6 +122,7 @@ export function findRepositoryRoot(studioRoot = STUDIO_ROOT) {
 /**
  * Computes sha256 hex digest of a Buffer or string.
  */
+/** @param {Buffer | string} data */
 export function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
 }
@@ -105,7 +131,9 @@ export function sha256(data) {
  * Parses Cargo.lock text to extract package checksums.
  * Returns a Map of `${name}@${version}` -> checksum.
  */
+/** @param {string | null | undefined} lockContent @returns {Map<string, string>} */
 export function parseCargoLockChecksums(lockContent) {
+  /** @type {Map<string, string>} */
   const checksumMap = new Map();
   if (!lockContent || typeof lockContent !== "string") return checksumMap;
 
@@ -116,8 +144,12 @@ export function parseCargoLockChecksums(lockContent) {
     const checksumMatch = block.match(/checksum\s*=\s*"([^"]+)"/);
 
     if (nameMatch && versionMatch && checksumMatch) {
-      const key = `${nameMatch[1]}@${versionMatch[1]}`;
-      checksumMap.set(key, checksumMatch[1]);
+      const name = nameMatch[1];
+      const version = versionMatch[1];
+      const checksum = checksumMatch[1];
+      if (name === undefined || version === undefined || checksum === undefined) continue;
+      const key = `${name}@${version}`;
+      checksumMap.set(key, checksum);
     }
   }
 
@@ -129,6 +161,7 @@ export function parseCargoLockChecksums(lockContent) {
  * collecting reachable normal and build dependencies (including proc macros),
  * strictly excluding development-only dependencies.
  */
+/** @param {CargoMetadata} metadata @param {{rootPackageId?: string}} [options] @returns {ResolvedCrate[]} */
 export function resolveReachableCrates(metadata, options = {}) {
   if (!metadata || !metadata.resolve || !Array.isArray(metadata.resolve.nodes)) {
     throw new Error("Invalid cargo metadata structure: resolve.nodes missing");
@@ -142,11 +175,13 @@ export function resolveReachableCrates(metadata, options = {}) {
     throw new Error("Cargo metadata resolve root package ID is unavailable");
   }
 
+  /** @type {Map<string, CargoPackage>} */
   const packageMap = new Map();
   for (const pkg of metadata.packages) {
     packageMap.set(pkg.id, pkg);
   }
 
+  /** @type {Map<string, CargoResolveNode>} */
   const nodeMap = new Map();
   for (const node of metadata.resolve.nodes) {
     nodeMap.set(node.id, node);
@@ -159,8 +194,10 @@ export function resolveReachableCrates(metadata, options = {}) {
 
   // Reachable dependency IDs
   const reachableIds = new Set();
+  /** @type {string[]} */
   const queue = [];
 
+  /** @param {CargoDependency} dep */
   function isNormalOrBuild(dep) {
     if (!dep.dep_kinds || dep.dep_kinds.length === 0) return true;
     return dep.dep_kinds.some((dk) => dk.kind === null || dk.kind === "build");
@@ -179,6 +216,7 @@ export function resolveReachableCrates(metadata, options = {}) {
   // BFS across dependency graph
   while (queue.length > 0) {
     const currentId = queue.shift();
+    if (currentId === undefined) continue;
     const currentNode = nodeMap.get(currentId);
     if (!currentNode || !Array.isArray(currentNode.deps)) continue;
 
@@ -192,6 +230,7 @@ export function resolveReachableCrates(metadata, options = {}) {
     }
   }
 
+  /** @type {ResolvedCrate[]} */
   const resolvedCrates = [];
   for (const pkgId of reachableIds) {
     // Exclude the root package itself
@@ -228,6 +267,7 @@ export function resolveReachableCrates(metadata, options = {}) {
 /**
  * Checks if a file name represents a legal notice or license file.
  */
+/** @param {unknown} fileName */
 export function isLicenseOrNoticeFileName(fileName) {
   if (typeof fileName !== "string") return false;
   const base = basename(fileName);
@@ -245,7 +285,9 @@ export function isLicenseOrNoticeFileName(fileName) {
  * Inventories license files for a crate package.
  * Strictly enforces that matching registry metadata is NOT sufficient if license text is absent.
  */
+/** @param {ResolvedCrate} pkg @param {string | null} crateDir @param {{fileList?: string[], supplementalFiles?: string[]}} [options] */
 export function inventoryPackageLicenses(pkg, crateDir, options = {}) {
+  /** @type {string[]} */
   let fileNames = [];
   if (options.fileList !== undefined) {
     fileNames = options.fileList;
@@ -300,8 +342,10 @@ export function inventoryPackageLicenses(pkg, crateDir, options = {}) {
 /**
  * Inventories root first-party and platform notices.
  */
+/** @param {string} [studioRoot] @param {NoticeOptions} [options] @returns {RootNotice[]} */
 export function collectRootNotices(studioRoot = STUDIO_ROOT, options = {}) {
   const repoRoot = options.repoRoot || findRepositoryRoot(studioRoot);
+  /** @type {RootNotice[]} */
   const rootNotices = [];
 
   const candidates = [
@@ -346,6 +390,7 @@ export function collectRootNotices(studioRoot = STUDIO_ROOT, options = {}) {
 /**
  * Normalizes npm package names for directory paths (e.g. '@tauri-apps/api' -> 'tauri-apps-api').
  */
+/** @param {string} pkgName @param {string} version */
 function sanitizeNpmPackageDirName(pkgName, version) {
   const cleanName = pkgName.replace(/^@/, "").replace("/", "-");
   return `${cleanName}-${version}`;
@@ -354,8 +399,10 @@ function sanitizeNpmPackageDirName(pkgName, version) {
 /**
  * Inventories shipped distributed npm frontend dependencies (react, react-dom, scheduler, @tauri-apps/api).
  */
+/** @param {string} [studioRoot] @param {NoticeOptions} [options] @returns {NpmNoticePackage[]} */
 export function collectNpmDistributedNotices(studioRoot = STUDIO_ROOT, options = {}) {
   const nodeModulesDir = resolve(studioRoot, "node_modules");
+  /** @type {NpmNoticePackage[]} */
   const npmPackages = [];
 
   // Frontend distributed dependencies
@@ -368,11 +415,13 @@ export function collectNpmDistributedNotices(studioRoot = STUDIO_ROOT, options =
 
   for (const target of targetPackages) {
     const pkgDir = resolve(nodeModulesDir, ...target.pathSegments);
+    /** @type {{name: string, version: string, license: string | null | undefined} | null} */
     let pkgJson = null;
+    /** @type {string[]} */
     let fileList = [];
 
-    if (options.mockNpmPackages && options.mockNpmPackages[target.name]) {
-      const mock = options.mockNpmPackages[target.name];
+    const mock = options.mockNpmPackages?.[target.name];
+    if (mock) {
       pkgJson = { name: target.name, version: mock.version, license: mock.license };
       fileList = mock.files || [];
     } else if (existsSync(pkgDir)) {
@@ -418,6 +467,7 @@ export function collectNpmDistributedNotices(studioRoot = STUDIO_ROOT, options =
  * Renders THIRD-PARTY-NOTICES.json deterministically.
  * Guarantees no timestamps, no private machine paths, deterministic key and entry ordering.
  */
+/** @param {ManifestData} manifestData */
 export function renderThirdPartyNoticesJson(manifestData) {
   const cleanManifest = {
     schemaVersion: "1.0.0",
@@ -472,6 +522,7 @@ export function renderThirdPartyNoticesJson(manifestData) {
  * Renders THIRD-PARTY-NOTICES.md deterministically.
  * Guarantees no timestamps, no private machine paths, deterministic formatting.
  */
+/** @param {ManifestData} manifestData */
 export function renderThirdPartyNoticesMarkdown(manifestData) {
   const lines = [
     "# Third-Party Legal Notices",
@@ -565,6 +616,7 @@ export function renderThirdPartyNoticesMarkdown(manifestData) {
 /**
  * Executes `cargo metadata` in src-tauri or parses injected metadata.
  */
+/** @param {string} [studioRoot] @param {NoticeOptions} [options] @returns {CargoMetadata} */
 export function loadCargoMetadata(studioRoot = STUDIO_ROOT, options = {}) {
   if (options.cargoMetadata) {
     return options.cargoMetadata;
@@ -595,6 +647,7 @@ export function loadCargoMetadata(studioRoot = STUDIO_ROOT, options = {}) {
 /**
  * Loads and parses Cargo.lock checksums.
  */
+/** @param {string} [studioRoot] @param {NoticeOptions} [options] @returns {Map<string, string>} */
 export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
   if (options.cargoLockContent !== undefined) {
     return parseCargoLockChecksums(options.cargoLockContent);
@@ -620,6 +673,7 @@ export function loadCargoLockChecksums(studioRoot = STUDIO_ROOT, options = {}) {
  * - THIRD-PARTY-NOTICES.json
  * - THIRD-PARTY-NOTICES.md
  */
+/** @param {NoticeOptions} [options] */
 export async function generateReleaseNotices(options = {}) {
   const studioRoot = resolve(options.studioRoot || STUDIO_ROOT);
   const candidateVersion = readCandidateVersion(studioRoot);
@@ -638,6 +692,7 @@ export async function generateReleaseNotices(options = {}) {
   const checksumMap = loadCargoLockChecksums(studioRoot, options);
   const supplementalRoot = resolve(studioRoot, "legal/supplemental");
   const supplementalManifest = join(supplementalRoot, "manifest.json");
+  /** @type {SupplementalManifest} */
   let supplements = { packages: [] };
   try {
     supplements = JSON.parse(readFileSync(supplementalManifest, "utf8"));
@@ -652,19 +707,25 @@ export async function generateReleaseNotices(options = {}) {
   const reachableCrates = resolveReachableCrates(metadata, options);
 
   // 3. Inventory crate notices & verify license text presence
+  /** @type {CrateNoticePackage[]} */
   const crateInventory = [];
+  /** @type {MissingMaterial[]} */
   const missingMaterials = [];
 
   for (const crate of reachableCrates) {
     const key = `${crate.name}@${crate.version}`;
     const checksum = checksumMap.get(key) || null;
 
-    const inventory = inventoryPackageLicenses(crate, crate.crateDir, {
-      fileList: options.mockCrateFiles ? options.mockCrateFiles[key] : undefined,
-      supplementalFiles: options.supplementalLicenses ? options.supplementalLicenses[key] : undefined,
-    });
+    /** @type {{fileList?: string[], supplementalFiles?: string[]}} */
+    const inventoryOptions = {};
+    const mockCrateFiles = options.mockCrateFiles?.[key];
+    const supplementalLicenses = options.supplementalLicenses?.[key];
+    if (mockCrateFiles !== undefined) inventoryOptions.fileList = mockCrateFiles;
+    if (supplementalLicenses !== undefined) inventoryOptions.supplementalFiles = supplementalLicenses;
+    const inventory = inventoryPackageLicenses(crate, crate.crateDir, inventoryOptions);
 
     const dirName = `${crate.name}-${crate.version}`;
+    /** @type {NoticeFile[]} */
     const files = inventory.licenseFiles.map((f) => ({
       fileName: f,
       sourcePath: crate.crateDir ? resolve(crate.crateDir, f) : null,
@@ -777,7 +838,8 @@ export async function generateReleaseNotices(options = {}) {
   const renderedMd = renderThirdPartyNoticesMarkdown(manifestData);
 
   // 7. Write files if requested
-  const writtenFiles = [];
+    /** @type {string[]} */
+    const writtenFiles = [];
   if (writeFiles) {
     // A repeated build may replace its declared generated members, but must
     // never silently retain or overwrite unrelated files in the output tree.
@@ -788,12 +850,14 @@ export async function generateReleaseNotices(options = {}) {
       "THIRD-PARTY-NOTICES.json", "THIRD-PARTY-NOTICES.md",
       ...(existsSync(supplementalManifest) ? ["supplemental-license-provenance.json"] : []),
     ]);
+    /** @param {string} directory @param {string} [prefix] */
     const inspectExisting = (directory, prefix = "") => {
       let dirHandle;
       try {
         dirHandle = opendirSync(directory);
       } catch (err) {
-        if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return;
+        const fsError = /** @type {NodeJS.ErrnoException} */ (err);
+        if (fsError.code === "ENOENT" || fsError.code === "ENOTDIR") return;
         throw err;
       }
       try {
@@ -875,14 +939,12 @@ export async function generateReleaseNotices(options = {}) {
   // 8. Handle strict missing material check
   if (failOnMissing && missingMaterials.length > 0) {
     const list = missingMaterials.map((m) => `  - ${m.name}@${m.version} (${m.license || "unspecified"}): ${m.failureReason}`).join("\n");
-    const err = new Error(
+    const err = Object.assign(new Error(
       `Absent required license material for ${missingMaterials.length} package(s).\n` +
       "Matching registry metadata is NOT sufficient when license text is absent:\n" +
       `${list}\n` +
       "Under project release policy, all distributed and build dependencies must have license text.",
-    );
-    err.missingMaterials = missingMaterials;
-    err.manifest = manifestData;
+    ), { missingMaterials, manifest: manifestData });
     throw err;
   }
 
@@ -907,9 +969,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--out-dir" || arg === "-o") {
-      outDir = resolve(args[++i]);
+      const value = args[++i];
+      if (value === undefined) throw new Error(`Missing value for ${arg}`);
+      outDir = resolve(value);
     } else if (arg === "--studio-root") {
-      studioRoot = resolve(args[++i]);
+      const value = args[++i];
+      if (value === undefined) throw new Error("Missing value for --studio-root");
+      studioRoot = resolve(value);
     } else if (arg === "--allow-missing" || arg === "--no-fail") {
       failOnMissing = false;
     } else if (arg === "--strict" || arg === "--fail-on-missing") {
@@ -939,7 +1005,8 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       console.warn(`[WARNING] ${result.missingMaterials.length} packages lack license text.`);
     }
   } catch (err) {
-    console.error(`[ERROR] Release notices generation failed: ${err.message}`);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[ERROR] Release notices generation failed: ${message}`);
     process.exit(1);
   }
 }

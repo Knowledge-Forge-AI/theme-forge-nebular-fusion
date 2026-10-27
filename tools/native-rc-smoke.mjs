@@ -22,10 +22,14 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readRegularSnapshot } from "./fs-snapshot.mjs";
+import { nativeLauncher } from "./native-launcher.mjs";
+import { verifyPlatformPackage } from "./native-rc-package.mjs";
+import { selectPayloadNativeRuntime } from "./native-runtime.mjs";
 
 export const APPLICATION_IDENTIFIER = "ai.knowledgeforge.themeforge.nebularfusion";
 export const RECEIPT_SCHEMA = "nebular.release-smoke-receipt-v1";
 export const RUN_SCHEMA = "nebular.native-rc-smoke-run-v1";
+export const FINALIZATION_SCHEMA = "nebular.native-rc-finalization-v1";
 export const SCENARIOS = Object.freeze({
   A: Object.freeze({ platforms: ["darwin-arm64"], steps: ["app-shell", "host-start", "host-status", "project-open", "brand-read", "theme-lab-compile", "app-theme-status", "app-theme-compile", "brand-system-view", "host-status-final"] }),
   B: Object.freeze({ platforms: ["linux-arm64"], caseSensitive: true, steps: ["app-shell", "app-theme-status", "app-theme-compile", "theme-lab-compile", "brand-system-view", "host-start", "host-status", "project-open-upper", "brand-read-upper", "project-open-lower", "brand-read-lower", "host-status-final"] }),
@@ -33,8 +37,120 @@ export const SCENARIOS = Object.freeze({
   "C-signal": Object.freeze({ platforms: ["linux-x64"], caseSensitive: true, signal: true, steps: ["app-shell", "host-start", "host-start-idempotent", "host-stop", "host-start-again", "host-status", "project-open-case", "derive-plan-cancel", "derive-plan-apply", "host-status-final"] }),
 });
 export const PLATFORM_SCENARIOS = Object.freeze({ "darwin-arm64": ["A"], "linux-arm64": ["B"], "linux-x64": ["C", "C-signal"] });
+const NPM_PLATFORM_KEYS = new Set(Object.keys(PLATFORM_SCENARIOS));
 const CORE_FIXTURE = "docs/examples/v0.4/brand-system/core-minimal";
 const DEFAULT_TIMEOUT_MS = 420_000;
+const CLEANUP_PROBLEM = "harness cleanup of the owned scratch directory failed";
+const FILESYSTEM_CODES = new Set([
+  "ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTDIR", "EISDIR", "ENOTEMPTY", "EBUSY", "ELOOP",
+  "EMLINK", "ENOSPC", "EROFS", "EIO", "EMFILE", "ENFILE", "EXDEV", "ENAMETOOLONG", "EBADF",
+]);
+const PROCESS_SYSCALLS = new Set(["kill", "spawn", "spawnSync", "waitpid"]);
+
+/** Authenticate the selected npm package manifest before using any projected runtime aliases. */
+export function authenticateNpmPackageContext(packageRoot, platform, packageManifestSha256) {
+  if (typeof packageRoot !== "string" || typeof platform !== "string" || !NPM_PLATFORM_KEYS.has(platform)
+      || typeof packageManifestSha256 !== "string" || !/^[a-f0-9]{64}$/.test(packageManifestSha256)) {
+    throw new Error("Complete authenticated npm package context is required");
+  }
+  return verifyPlatformPackage(packageRoot, platform, packageManifestSha256);
+}
+
+class HarnessStateError extends Error {}
+
+class SmokeReportWriteError extends Error {
+  constructor(finalization, reportWriteFamily) {
+    super("native RC smoke run report was not written");
+    this.name = "NativeRcReportWriteError";
+    this.finalization = finalization;
+    this.reportWriteFamily = reportWriteFamily;
+  }
+}
+
+function classifyException(error) {
+  try {
+    if (error instanceof HarnessStateError) return "state";
+    if (error instanceof SyntaxError) return "parse";
+    if (error === null || typeof error !== "object") return "unknown";
+    const code = typeof error.code === "string" ? error.code : null;
+    const syscall = typeof error.syscall === "string" ? error.syscall : null;
+    if (code === "ETIMEDOUT") return "timeout";
+    if ((syscall !== null && PROCESS_SYSCALLS.has(syscall)) || code === "ESRCH") return "process";
+    if (code !== null && FILESYSTEM_CODES.has(code)) return "filesystem";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function formatLegacyError(error) {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "unknown error";
+  }
+}
+
+function createFinalizationTracker() {
+  let phase = "pre-spawn";
+  let firstFailure = null;
+  let spawned = false;
+  let exitObserved = false;
+  let applicationReceiptObservation = "not-attempted";
+  let applicationReceiptCopy = "not-attempted";
+  return {
+    launched() {
+      spawned = true;
+      phase = "post-exit";
+    },
+    exited() {
+      exitObserved = true;
+      phase = "post-exit";
+    },
+    receipt(read, copy) {
+      phase = "receipt-copy";
+      let observed;
+      try {
+        observed = read();
+      } catch (error) {
+        applicationReceiptObservation = "read-failed";
+        throw error;
+      }
+      applicationReceiptObservation = observed ? "present-at-read" : "absent-at-read";
+      if (observed) {
+        try {
+          copy(observed);
+        } catch (error) {
+          applicationReceiptCopy = "copy-failed";
+          throw error;
+        }
+        applicationReceiptCopy = "written";
+      }
+      phase = "post-exit";
+      return observed;
+    },
+    enter(nextPhase) {
+      phase = nextPhase;
+    },
+    failed(error) {
+      if (!firstFailure) {
+        firstFailure = { phase, exceptionFamily: classifyException(error) };
+      }
+    },
+    record() {
+      return {
+        schema: FINALIZATION_SCHEMA,
+        status: firstFailure ? "failed" : "complete",
+        phase: firstFailure ? firstFailure.phase : "complete",
+        exceptionFamily: firstFailure ? firstFailure.exceptionFamily : null,
+        spawned: Boolean(spawned),
+        exitObserved: Boolean(exitObserved),
+        applicationReceiptObservation,
+        applicationReceiptCopy,
+      };
+    },
+  };
+}
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
@@ -42,6 +158,12 @@ export function executablePath(launchRoot, platform) {
   return platform.startsWith("darwin")
     ? join(launchRoot, "Theme Forge Nebular Fusion.app/Contents/MacOS/theme-forge-nebular-fusion")
     : join(launchRoot, "bin/theme-forge-nebular-fusion");
+}
+
+export function launcherPath(launchRoot, platform) {
+  return platform.startsWith("darwin")
+    ? executablePath(launchRoot, platform)
+    : join(launchRoot, "bin/tfnf");
 }
 
 function ownerOnlyDir(path) {
@@ -88,7 +210,7 @@ function copyProject(checkout, destination, name) {
   cpSync(join(checkout, CORE_FIXTURE), destination, { recursive: true, errorOnExist: true, force: false });
   const projectToml = join(destination, ".tfsb/project.toml");
   const original = readFileSync(projectToml, "utf8");
-  if (!original.includes('name = "core-fixture"')) throw new Error("maintained core fixture project name changed");
+  if (!original.includes('name = "core-fixture"')) throw new HarnessStateError("maintained core fixture project name changed");
   writeFileSync(projectToml, original.replace('name = "core-fixture"', `name = "${name}"`));
 }
 
@@ -107,7 +229,7 @@ export function prepareFixtures(scenario, checkout, smokeDir) {
   const fixtures = join(smokeDir, "fixtures");
   mkdirSync(fixtures, { mode: 0o700 });
   if (SCENARIOS[scenario].caseSensitive && !caseSensitive(fixtures)) {
-    throw new Error(`scenario ${scenario} requires a case-sensitive filesystem`);
+    throw new HarnessStateError(`scenario ${scenario} requires a case-sensitive filesystem`);
   }
   if (scenario === "A") {
     copyProject(checkout, join(fixtures, "core-minimal"), "core-fixture");
@@ -122,7 +244,7 @@ export function prepareFixtures(scenario, checkout, smokeDir) {
     // so each brand read proves which project the sidecar opened.
     const lowerBrand = join(parent, "project Ω", ".tfsb/brand.toml");
     const brand = readFileSync(lowerBrand, "utf8");
-    if (!brand.includes('name = "Core Fixture Brand"') || !brand.includes("package = true")) throw new Error("maintained core fixture brand changed");
+    if (!brand.includes('name = "Core Fixture Brand"') || !brand.includes("package = true")) throw new HarnessStateError("maintained core fixture brand changed");
     writeFileSync(lowerBrand, brand.replace('name = "Core Fixture Brand"', 'name = "Nebular Smoke Lower Brand"').replace("package = true", "package = false"));
     rmSync(join(parent, "project Ω", ".tfsb/brand-package.toml"), { force: true });
     return { observed: { upper: join(parent, "Project Ω"), lower: join(parent, "project Ω") } };
@@ -216,13 +338,49 @@ export function judgeReceipt(record, { scenario, platform, executableSha256, pid
 }
 
 /**
+ * Internal finalization seam shared by `runSmoke` and deterministic unit tests.
+ * @param {{ result: Record<string, any>, keep?: boolean, body: (run: { launched: () => void, exited: () => void, receipt: <T>(read: () => T, copy: (observed: NonNullable<T>) => void) => T }) => Promise<void> | void, cleanup: () => void, writeReport: (text: string) => void }} options
+ */
+export async function finalizeSmokeRun({ result, keep = false, body, cleanup, writeReport }) {
+  const run = createFinalizationTracker();
+  try {
+    await body(run);
+  } catch (error) {
+    run.failed(error);
+    result.problems.push(`harness error: ${formatLegacyError(error)}`);
+  }
+  if (!keep) {
+    run.enter("cleanup");
+    try {
+      cleanup();
+    } catch (error) {
+      run.failed(error);
+      result.problems.push(CLEANUP_PROBLEM);
+    }
+  }
+  result.status = result.problems.length === 0 ? "pass" : "fail";
+  run.enter("report-write");
+  result.finalization = run.record();
+  try {
+    writeReport(`${JSON.stringify(result, null, 2)}\n`);
+  } catch (error) {
+    run.failed(error);
+    throw new SmokeReportWriteError(run.record(), classifyException(error));
+  }
+  return result;
+}
+
+/**
  * Runs one scenario against one extracted candidate.
- * @param {{ platform: string, scenario: string, launchRoot: string, checkout: string, evidenceDir: string, source?: "raw-archive"|"npm-package", label?: string, timeoutMs?: number, keep?: boolean }} options
+ * @param {{ platform: string, scenario: string, launchRoot: string, checkout: string, evidenceDir: string, source?: "raw-archive"|"npm-package", packageManifestSha256?: string, label?: string, timeoutMs?: number, keep?: boolean }} options
  */
 export async function runSmoke(options) {
   const { platform, scenario } = options;
   if (!SCENARIOS[scenario] || !SCENARIOS[scenario].platforms.includes(platform)) throw new Error(`scenario ${scenario} is not defined for ${platform}`);
   const launchRoot = realpathSync(resolve(options.launchRoot));
+  const authenticatedPackage = options.source === "npm-package"
+    ? authenticateNpmPackageContext(dirname(launchRoot), platform, options.packageManifestSha256)
+    : null;
   const checkout = resolve(options.checkout);
   const evidenceDir = resolve(options.evidenceDir);
   mkdirSync(evidenceDir, { recursive: true });
@@ -230,6 +388,17 @@ export async function runSmoke(options) {
   const executable = executablePath(launchRoot, platform);
   const measured = readRegularSnapshot(executable, { label: "Candidate executable", maxBytes: 1024 * 1024 * 1024 });
   if (!measured.executable) throw new Error("candidate executable is not executable");
+  const launchTarget = launcherPath(launchRoot, platform);
+  if (!platform.startsWith("darwin")) {
+    const triple = { "linux-arm64": "aarch64-unknown-linux-gnu", "linux-x64": "x86_64-unknown-linux-gnu" }[platform] ?? null;
+    const packageAliasProjection = authenticatedPackage?.manifest?.runtimeAliasProjection ?? null;
+    const runtimeSelection = await selectPayloadNativeRuntime(launchRoot, triple, { aliasProjection: packageAliasProjection });
+    const measuredLauncher = readRegularSnapshot(launchTarget, { label: "Candidate launcher", maxBytes: 16 * 1024 * 1024 });
+    const expectedLauncher = Buffer.from(nativeLauncher({ os: "linux" }, { nativeRuntime: runtimeSelection.nativeRuntime }));
+    if (!measuredLauncher.executable || !measuredLauncher.bytes.equals(expectedLauncher)) {
+      throw new Error("candidate launcher is missing, not executable, or differs from the maintained launcher");
+    }
+  }
 
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "nebular-rc-smoke-")));
   const home = ownerOnlyDir(join(scratch, "home"));
@@ -238,98 +407,102 @@ export async function runSmoke(options) {
   const xdg = Object.fromEntries(["config", "cache", "data", "state", "runtime"].map((name) => [name, ownerOnlyDir(join(scratch, "xdg", name))]));
   const result = { schema: RUN_SCHEMA, label, platform, scenario, source: options.source ?? null, executable: { path: relative(launchRoot, executable), sha256: measured.sha256, size: measured.size }, checks: {}, problems: [] };
   const started = Date.now();
-  try {
-    const fixtures = prepareFixtures(scenario, checkout, smokeDir);
-    const fixturesBefore = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
-    const locations = persistentStateLocations(platform);
-    const persistentBefore = snapshotLocations(locations);
-    const preexisting = candidateProcesses(launchRoot);
-    if (preexisting.length) throw new Error(`candidate processes already running: ${JSON.stringify(preexisting)}`);
+  return finalizeSmokeRun({
+    result,
+    keep: Boolean(options.keep),
+    body: async (run) => {
+      const fixtures = prepareFixtures(scenario, checkout, smokeDir);
+      const fixturesBefore = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
+      const locations = persistentStateLocations(platform);
+      const persistentBefore = snapshotLocations(locations);
+      const preexisting = candidateProcesses(launchRoot);
+      if (preexisting.length) throw new HarnessStateError(`candidate processes already running: ${JSON.stringify(preexisting)}`);
 
-    const env = {
-      PATH: process.env.PATH ?? "/usr/bin:/bin",
-      HOME: home, TMPDIR: temp, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC",
-      XDG_CONFIG_HOME: xdg.config, XDG_CACHE_HOME: xdg.cache, XDG_DATA_HOME: xdg.data, XDG_STATE_HOME: xdg.state, XDG_RUNTIME_DIR: xdg.runtime,
-      TFNF_RELEASE_SMOKE_DIR: smokeDir,
-    };
-    for (const key of ["DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "XAUTHORITY", "WEBKIT_DISABLE_COMPOSITING_MODE", "WEBKIT_DISABLE_DMABUF_RENDERER", "LIBGL_ALWAYS_SOFTWARE", "GDK_BACKEND"]) {
-      if (process.env[key]) env[key] = process.env[key];
-    }
-    const log = { stdout: [], stderr: [] };
-    const child = spawn(executable, [`--nebular-release-smoke=${scenario}`], { cwd: home, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    child.stdout.on("data", (chunk) => log.stdout.push(chunk));
-    child.stderr.on("data", (chunk) => log.stderr.push(chunk));
-    const exited = new Promise((done) => child.on("exit", (code, signal) => done({ code, signal })));
-    let exit;
-    let signalSent = null;
-    const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (SCENARIOS[scenario].signal) {
-      const awaiting = await waitUntil(() => readReceipt(smokeDir)?.receipt?.awaitingSignal === true || child.exitCode !== null, timeout, 250);
-      const live = candidateProcesses(launchRoot);
-      result.checks.processesBeforeSignal = live.map((entry) => ({ pid: entry.pid, exe: entry.exe }));
-      result.checks.sidecarRunningBeforeSignal = live.some((entry) => entry.pid !== child.pid && entry.exe.includes("tfsb-studio-service"));
-      if (awaiting && child.exitCode === null) {
-        process.kill(child.pid, "SIGTERM"); // the application process only, never its group
-        signalSent = { signal: "SIGTERM", at: Date.now() - started };
+      const env = {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: home, TMPDIR: temp, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC",
+        XDG_CONFIG_HOME: xdg.config, XDG_CACHE_HOME: xdg.cache, XDG_DATA_HOME: xdg.data, XDG_STATE_HOME: xdg.state, XDG_RUNTIME_DIR: xdg.runtime,
+        TFNF_RELEASE_SMOKE_DIR: smokeDir,
+        GSETTINGS_BACKEND: "memory",
+      };
+      for (const key of ["DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "XAUTHORITY", "WEBKIT_DISABLE_COMPOSITING_MODE", "WEBKIT_DISABLE_DMABUF_RENDERER", "LIBGL_ALWAYS_SOFTWARE", "GDK_BACKEND"]) {
+        if (process.env[key]) env[key] = process.env[key];
       }
-      exit = await within(exited, 30_000);
-    } else {
-      exit = await within(exited, timeout);
-    }
-    if (!exit) {
-      try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
-      exit = await exited;
-      result.problems.push("the application did not exit within its bound and was killed");
-    }
-    result.exit = { ...exit, signalSent, durationMs: Date.now() - started };
-    writeFileSync(join(evidenceDir, `${label}.stdout.log`), Buffer.concat(log.stdout));
-    writeFileSync(join(evidenceDir, `${label}.stderr.log`), Buffer.concat(log.stderr));
+      const log = { stdout: [], stderr: [] };
+      const child = spawn(launchTarget, [`--nebular-release-smoke=${scenario}`], { cwd: home, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      if (typeof child.pid === "number") run.launched();
+      child.stdout.on("data", (chunk) => log.stdout.push(chunk));
+      child.stderr.on("data", (chunk) => log.stderr.push(chunk));
+      const exited = new Promise((done) => child.on("exit", (code, signal) => done({ code, signal })));
+      let exit;
+      let signalSent = null;
+      const timeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      if (SCENARIOS[scenario].signal) {
+        const awaiting = await waitUntil(() => readReceipt(smokeDir)?.receipt?.awaitingSignal === true || child.exitCode !== null, timeout, 250);
+        const live = candidateProcesses(launchRoot);
+        result.checks.processesBeforeSignal = live.map((entry) => ({ pid: entry.pid, exe: entry.exe }));
+        result.checks.sidecarRunningBeforeSignal = live.some((entry) => entry.pid !== child.pid && entry.exe.includes("tfsb-studio-service"));
+        if (awaiting && child.exitCode === null) {
+          process.kill(child.pid, "SIGTERM"); // the application process only, never its group
+          signalSent = { signal: "SIGTERM", at: Date.now() - started };
+        }
+        exit = await within(exited, 30_000);
+      } else {
+        exit = await within(exited, timeout);
+      }
+      if (!exit) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ }
+        exit = await exited;
+        result.problems.push("the application did not exit within its bound and was killed");
+      }
+      run.exited();
+      result.exit = { ...exit, signalSent, durationMs: Date.now() - started };
+      writeFileSync(join(evidenceDir, `${label}.stdout.log`), Buffer.concat(log.stdout));
+      writeFileSync(join(evidenceDir, `${label}.stderr.log`), Buffer.concat(log.stderr));
 
-    const orphans = await waitUntil(() => { const live = candidateProcesses(launchRoot); return live.length === 0 ? [] : null; }, 15_000, 250) ?? candidateProcesses(launchRoot);
-    result.checks.orphans = orphans.map((entry) => ({ pid: entry.pid, exe: entry.exe }));
-    if (orphans.length) {
-      result.problems.push(`orphan candidate processes remained: ${orphans.map((entry) => entry.pid).join(", ")}`);
-      for (const entry of orphans) { try { process.kill(entry.pid, "SIGKILL"); } catch { /* gone */ } }
-    }
-    if (SCENARIOS[scenario].signal) {
-      if (!signalSent) result.problems.push("the signal scenario never reached its signal point");
-      if (!result.checks.sidecarRunningBeforeSignal) result.problems.push("no sidecar was running when the application was terminated");
-      if (exit.signal !== "SIGTERM") result.problems.push(`application ended by ${exit.signal ?? `exit ${exit.code}`} instead of SIGTERM`);
-    } else if (exit.code !== 0) {
-      result.problems.push(`application exit code ${exit.code} signal ${exit.signal}`);
-    }
+      const orphans = await waitUntil(() => { const live = candidateProcesses(launchRoot); return live.length === 0 ? [] : null; }, 15_000, 250) ?? candidateProcesses(launchRoot);
+      result.checks.orphans = orphans.map((entry) => ({ pid: entry.pid, exe: entry.exe }));
+      if (orphans.length) {
+        result.problems.push(`orphan candidate processes remained: ${orphans.map((entry) => entry.pid).join(", ")}`);
+        for (const entry of orphans) { try { process.kill(entry.pid, "SIGKILL"); } catch { /* gone */ } }
+      }
+      if (SCENARIOS[scenario].signal) {
+        if (!signalSent) result.problems.push("the signal scenario never reached its signal point");
+        if (!result.checks.sidecarRunningBeforeSignal) result.problems.push("no sidecar was running when the application was terminated");
+        if (exit.signal !== "SIGTERM") result.problems.push(`application ended by ${exit.signal ?? `exit ${exit.code}`} instead of SIGTERM`);
+      } else if (exit.code !== 0) {
+        result.problems.push(`application exit code ${exit.code} signal ${exit.signal}`);
+      }
 
-    const record = readReceipt(smokeDir);
-    if (record) writeFileSync(join(evidenceDir, `${label}.receipt.json`), `${JSON.stringify(record.receipt, null, 2)}\n`);
-    result.receipt = record ? { sha256: record.sha256, status: record.receipt.status, steps: (record.receipt.driver?.steps ?? []).map((step) => ({ id: step.id, ok: step.ok, via: step.via, ms: step.ms })) } : null;
-    result.problems.push(...judgeReceipt(record, { scenario, platform, executableSha256: measured.sha256, pid: child.pid }));
+      const record = run.receipt(
+        () => readReceipt(smokeDir),
+        (observed) => writeFileSync(join(evidenceDir, `${label}.receipt.json`), `${JSON.stringify(observed.receipt, null, 2)}\n`),
+      );
+      result.receipt = record ? { sha256: record.sha256, status: record.receipt.status, steps: (record.receipt.driver?.steps ?? []).map((step) => ({ id: step.id, ok: step.ok, via: step.via, ms: step.ms })) } : null;
+      result.problems.push(...judgeReceipt(record, { scenario, platform, executableSha256: measured.sha256, pid: child.pid }));
 
-    const fixturesAfter = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
-    result.checks.fixtureEffects = Object.fromEntries(Object.keys(fixturesBefore).map((name) => [name, diffInventories(fixturesBefore[name], fixturesAfter[name])]));
-    if (scenario.startsWith("C")) {
-      const upper = result.checks.fixtureEffects.upper;
-      if (upper.unchanged || !upper.added.some((path) => path.includes("fixture-mark-derived-dark"))) result.problems.push("the derived asset was not written to the case-exact project");
-      if (!result.checks.fixtureEffects.lower.unchanged) result.problems.push("the case-distinct sibling project was modified");
-    } else {
-      for (const [name, effect] of Object.entries(result.checks.fixtureEffects)) if (!effect.unchanged) result.problems.push(`read-only fixture ${name} was modified`);
-    }
+      const fixturesAfter = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
+      result.checks.fixtureEffects = Object.fromEntries(Object.keys(fixturesBefore).map((name) => [name, diffInventories(fixturesBefore[name], fixturesAfter[name])]));
+      if (scenario.startsWith("C")) {
+        const upper = result.checks.fixtureEffects.upper;
+        if (upper.unchanged || !upper.added.some((path) => path.includes("fixture-mark-derived-dark"))) result.problems.push("the derived asset was not written to the case-exact project");
+        if (!result.checks.fixtureEffects.lower.unchanged) result.problems.push("the case-distinct sibling project was modified");
+      } else {
+        for (const [name, effect] of Object.entries(result.checks.fixtureEffects)) if (!effect.unchanged) result.problems.push(`read-only fixture ${name} was modified`);
+      }
 
-    const persistentAfter = snapshotLocations(locations);
-    const persistentChanges = locations.filter((path) => JSON.stringify(persistentBefore[path]) !== JSON.stringify(persistentAfter[path]));
-    result.checks.persistentUserState = { locations: locations.length, changed: persistentChanges };
-    if (persistentChanges.length) result.problems.push(`persistent user state changed: ${persistentChanges.join(", ")}`);
-    result.checks.scratchHomeWrites = Object.keys(inventory(home)).length;
+      const persistentAfter = snapshotLocations(locations);
+      const persistentChanges = locations.filter((path) => JSON.stringify(persistentBefore[path]) !== JSON.stringify(persistentAfter[path]));
+      result.checks.persistentUserState = { locations: locations.length, changed: persistentChanges };
+      if (persistentChanges.length) result.problems.push(`persistent user state changed: ${persistentChanges.join(", ")}`);
+      result.checks.scratchHomeWrites = Object.keys(inventory(home)).length;
 
-    const after = readRegularSnapshot(executable, { label: "Candidate executable", maxBytes: 1024 * 1024 * 1024 });
-    if (after.sha256 !== measured.sha256) result.problems.push("the candidate executable changed during the smoke run");
-  } catch (error) {
-    result.problems.push(`harness error: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    if (!options.keep) rmSync(scratch, { recursive: true, force: true });
-  }
-  result.status = result.problems.length === 0 ? "pass" : "fail";
-  writeFileSync(join(evidenceDir, `${label}.run.json`), `${JSON.stringify(result, null, 2)}\n`);
-  return result;
+      const after = readRegularSnapshot(executable, { label: "Candidate executable", maxBytes: 1024 * 1024 * 1024 });
+      if (after.sha256 !== measured.sha256) result.problems.push("the candidate executable changed during the smoke run");
+    },
+    cleanup: () => rmSync(scratch, { recursive: true, force: true }),
+    writeReport: (text) => writeFileSync(join(evidenceDir, `${label}.run.json`), text),
+  });
 }
 
 function parseArgs(argv) {
@@ -338,8 +511,8 @@ function parseArgs(argv) {
     const flag = argv[index];
     const value = argv[index + 1];
     if (flag === "--keep") { options.keep = true; continue; }
-    const key = { "--platform": "platform", "--scenario": "scenario", "--launch-root": "launchRoot", "--checkout": "checkout", "--evidence": "evidenceDir", "--label": "label", "--timeout-ms": "timeoutMs", "--source": "source" }[flag];
-    if (!key || value === undefined) throw new Error(`Usage: native-rc-smoke.mjs --platform <p> --scenario <s> --launch-root <dir> --checkout <dir> --evidence <dir> [--label l] [--timeout-ms n] [--keep]`);
+    const key = { "--platform": "platform", "--scenario": "scenario", "--launch-root": "launchRoot", "--checkout": "checkout", "--evidence": "evidenceDir", "--label": "label", "--timeout-ms": "timeoutMs", "--source": "source", "--package-manifest-sha256": "packageManifestSha256" }[flag];
+    if (!key || value === undefined) throw new Error(`Usage: native-rc-smoke.mjs --platform <p> --scenario <s> --launch-root <dir> --checkout <dir> --evidence <dir> [--label l] [--timeout-ms n] [--source raw-archive|npm-package] [--package-manifest-sha256 sha256] [--keep]`);
     options[key] = key === "timeoutMs" ? Number(value) : value;
     index += 1;
   }
@@ -352,7 +525,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.stdout.write(`${JSON.stringify({ label: result.label, status: result.status, problems: result.problems })}\n`);
     if (result.status !== "pass") process.exitCode = 1;
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    if (error instanceof SmokeReportWriteError) {
+      process.stderr.write(`${JSON.stringify({ finalization: error.finalization, reportWriteFamily: error.reportWriteFamily })}\n`);
+    } else {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    }
     process.exitCode = 1;
   }
 }

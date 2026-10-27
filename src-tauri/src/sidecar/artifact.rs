@@ -604,23 +604,68 @@ struct CompiledPins {
     source_candidate: String,
     target: String,
     sidecar_manifest: Manifest,
-    scene: PinnedEngineBinding,
-    loom: PinnedEngineBinding,
+    scene: PinnedSceneBinding,
+    loom: PinnedLoomBinding,
 }
 
 #[cfg(nebular_source_build)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[allow(dead_code)]
-struct PinnedEngineBinding {
-    node: PinnedRuntimeIdentity,
-    files: serde::de::IgnoredAny,
+struct PinnedSceneBinding {
+    schema: String,
+    engine_schema: String,
+    capability: String,
+    compatibility: u64,
+    compiler_level: u64,
+    metadata_version: String,
+    sha256: String,
+    bytes: u64,
+    source_tree_digest: String,
+    source_identity: String,
+    runtime: PinnedSceneRuntimeIdentity,
+    node: PinnedSceneRuntimeIdentity,
+    adapter_sha256: String,
+    files: Vec<PinnedFileRecord>,
+    inventory: Vec<PinnedFileRecord>,
+    file_count: u64,
 }
 
 #[cfg(nebular_source_build)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct PinnedLoomBinding {
+    node: PinnedRuntimeIdentity,
+    files: Vec<PinnedFileRecord>,
+}
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct PinnedSceneRuntimeIdentity {
+    version: String,
+    target: String,
+    sha256: String,
+    bytes: u64,
+}
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
 struct PinnedRuntimeIdentity {
+    sha256: String,
+    bytes: u64,
+}
+
+#[cfg(nebular_source_build)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct PinnedFileRecord {
+    path: String,
     sha256: String,
     bytes: u64,
 }
@@ -638,7 +683,9 @@ fn verify_manifest(
         || manifest.entrypoint != ENTRYPOINT
         || manifest.runtime_kind != "node-runtime-payload-v1"
         || manifest.core.name != "@knowledge-forge-ai/theme-forge-stellar-burst"
-        || (manifest.core.version != "0.5.0" && manifest.core.version != "0.6.1")
+        || (manifest.core.version != "0.5.0"
+            && manifest.core.version != "0.6.1"
+            && manifest.core.version != "0.7.0")
         || !valid_hex(&manifest.source.actual_input_digest, 64)
     {
         return Err(io::Error::other("manifest identity"));
@@ -655,7 +702,7 @@ fn verify_manifest(
             || manifest.native.backend != "native-addon-posix-openat-v1"
             || manifest.native.abi != 1
             || manifest.runtime.mode != 0o755
-            || manifest.core.version != "0.6.1"
+            || (manifest.core.version != "0.6.1" && manifest.core.version != "0.7.0")
         {
             return Err(io::Error::other("manifest identity"));
         }
@@ -1334,6 +1381,74 @@ mod tests {
         if actual_input != r#"{"files":[]}"# {
             return Err(io::Error::other("actual input mismatch"));
         }
+        Ok(())
+    }
+
+    #[cfg(nebular_source_build)]
+    #[test]
+    fn source_build_scene_and_loom_pins_use_closed_typed_bindings() -> io::Result<()> {
+        let scene = serde_json::json!({
+            "schema": "tfsb.nebular-scene-binding-v1",
+            "engineSchema": "tfsb.vector-scene-v1",
+            "capability": "0.5-development",
+            "compatibility": 1,
+            "compilerLevel": 1,
+            "metadataVersion": "0.7.0",
+            "sha256": "a".repeat(64),
+            "bytes": 954002,
+            "sourceTreeDigest": "b".repeat(64),
+            "sourceIdentity": "b".repeat(64),
+            "runtime": {
+                "version": "22.23.3",
+                "target": "aarch64-apple-darwin",
+                "sha256": "c".repeat(64),
+                "bytes": 112925600,
+            },
+            "node": {
+                "version": "22.23.3",
+                "target": "aarch64-apple-darwin",
+                "sha256": "c".repeat(64),
+                "bytes": 112925600,
+            },
+            "adapterSha256": "d".repeat(64),
+            "files": [{"path": "bin/scene-batch.js", "sha256": "e".repeat(64), "bytes": 1}],
+            "inventory": [{"path": "bin/scene-batch.js", "sha256": "e".repeat(64), "bytes": 1}],
+            "fileCount": 1,
+        });
+        let parsed: super::PinnedSceneBinding =
+            serde_json::from_value(scene.clone()).map_err(io::Error::other)?;
+        assert_eq!(parsed.file_count, 1);
+        assert_eq!(parsed.files.len(), 1);
+        assert_eq!(parsed.inventory.len(), 1);
+
+        let mut unknown = scene.clone();
+        unknown
+            .as_object_mut()
+            .expect("scene object")
+            .insert("unexpected".to_owned(), serde_json::json!(true));
+        assert!(serde_json::from_value::<super::PinnedSceneBinding>(unknown).is_err());
+
+        let mut wrong_type = scene.clone();
+        wrong_type["node"]["bytes"] = serde_json::json!("112925600");
+        assert!(serde_json::from_value::<super::PinnedSceneBinding>(wrong_type).is_err());
+
+        let mut missing_required = scene;
+        missing_required
+            .as_object_mut()
+            .expect("scene object")
+            .remove("adapterSha256");
+        assert!(serde_json::from_value::<super::PinnedSceneBinding>(missing_required).is_err());
+
+        let loom = serde_json::json!({
+            "node": {"sha256": "c".repeat(64), "bytes": 112925600},
+            "files": [{"path": "dist/server.js", "sha256": "f".repeat(64), "bytes": 1}],
+        });
+        let parsed_loom: super::PinnedLoomBinding =
+            serde_json::from_value(loom.clone()).map_err(io::Error::other)?;
+        assert_eq!(parsed_loom.files.len(), 1);
+        let mut loom_extra = loom;
+        loom_extra["node"]["version"] = serde_json::json!("22.23.3");
+        assert!(serde_json::from_value::<super::PinnedLoomBinding>(loom_extra).is_err());
         Ok(())
     }
 

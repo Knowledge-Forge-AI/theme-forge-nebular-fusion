@@ -22,7 +22,7 @@ Direct build and test dependencies:
 
 - Tauri CLI 2.11.4 — Apache-2.0 OR MIT.
 - Tauri build crate 2.6.3 — Apache-2.0 OR MIT.
-- Vite 8.2.2, Vitest 4.1.11, React Testing Library 16.3.3,
+- Vite 8.2.4, Vitest 4.1.12, React Testing Library 16.3.3,
   user-event 14.6.6, jsdom 30.0.1, and React type declarations — MIT.
 - TypeScript 7.0.2 — Apache-2.0.
 

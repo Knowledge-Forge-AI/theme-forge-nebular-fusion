@@ -3,18 +3,34 @@
 // the evidence seal and the release-candidate catalog.
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { LANES, RETENTION, artifactName, planLanes, workflowOutputs } from "../tools/native-rc-plan.mjs";
-import { FIXED_ARCHIVE_TIME, PLATFORMS, assembleRawArchive, platformPackageJson, platformReadme, tarRecords, verifyPlatformPackage, walkTree, writeDeterministicArchive } from "../tools/native-rc-package.mjs";
-import { PLATFORM_SCENARIOS, SCENARIOS, judgeReceipt, persistentStateLocations, prepareFixtures, caseSensitive } from "../tools/native-rc-smoke.mjs";
-import { compareVersions, glibcFloor } from "../tools/native-rc-qualify.mjs";
-import { seal } from "../tools/native-rc-evidence.mjs";
+import { CANDIDATE_VERSION } from "../tools/platform-targets.mjs";
+import { FIXED_ARCHIVE_TIME, PACKAGE_MANIFEST_PROJECTION_SCHEMA, PLATFORMS, assemblePlatformPackage, assembleRawArchive, packPlatformPackage, platformPackageJson, platformReadme, tarRecords, verifyPlatformPackage, walkTree, writeDeterministicArchive } from "../tools/native-rc-package.mjs";
+import { FINALIZATION_SCHEMA, PLATFORM_SCENARIOS, SCENARIOS, authenticateNpmPackageContext, executablePath, finalizeSmokeRun, judgeReceipt, launcherPath, persistentStateLocations, prepareFixtures, caseSensitive } from "../tools/native-rc-smoke.mjs";
+import { compareVersions, glibcFloor, invokeBounded, qualifyPayload, run, selectPayloadInventoryForQualification } from "../tools/native-rc-qualify.mjs";
+import { buildReceipt, seal } from "../tools/native-rc-evidence.mjs";
+import { identity } from "../tools/candidate-provenance.mjs";
 import { buildIndex } from "../tools/native-rc-index.mjs";
 import { nativeLauncher } from "../tools/native-launcher.mjs";
 import { NODE_RELEASE_IDENTITY } from "../tools/node-runtime-authority.mjs";
+import { TARGETS as NPM_TARGETS, verifyPayload } from "../../../packages/nebular-fusion-npm/bin/payload.mjs";
+import {
+  PRIVATE_RUNTIME_PREFIX,
+  PRIVATE_RUNTIME_MARKER,
+  REQUIRED_RUNTIME_DIRECTORIES,
+  REQUIRED_EXECUTABLE_RUNTIME_ROLES,
+  REQUIRED_RUNTIME_ROLES,
+  createNativeRuntimeAliasProjection,
+  externalFloorForTarget,
+  computeMaterialDigest,
+  inventoryNativePayload,
+  selectPayloadNativeRuntime,
+} from "../tools/native-runtime.mjs";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const SHA = "93c8da8d8cfd4923869ec8d11c51d1e7349802cc";
@@ -92,7 +108,7 @@ describe("deterministic packaging", () => {
     const first = await assembleRawArchive({ platform: "linux-x64", payload: linuxPayload(scratch("payload-a")), checkout, output: scratch("out-a") });
     const second = await assembleRawArchive({ platform: "linux-x64", payload: linuxPayload(scratch("payload-b")), checkout, output: scratch("out-b") });
     expect(first.sha256).toBe(second.sha256);
-    expect(first.filename).toBe("theme-forge-nebular-fusion-v0.6.1-x86_64-unknown-linux-gnu.tar.gz");
+    expect(first.filename).toBe(`theme-forge-nebular-fusion-v${CANDIDATE_VERSION}-x86_64-unknown-linux-gnu.tar.gz`);
     const bytes = readFileSync(first.file);
     expect(bytes[9]).toBe(255);
     expect(bytes.readUInt32LE(4)).toBe(0);
@@ -146,6 +162,82 @@ describe("machine qualification helpers", () => {
   });
 });
 
+describe("bounded private probe lifecycle", () => {
+  const probeEnv = { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C", LC_ALL: "C" };
+  const deadline = () => Date.now() + 10_000;
+
+  it("awaits asynchronous command-runner results instead of treating promises as records", async () => {
+    const calls = [];
+    const result = await invokeBounded(async (command, args, env, options) => {
+      calls.push({ command, args, env, hasSignal: Boolean(options?.signal) });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return {
+        status: 0,
+        stdout: "codesign-ok",
+        stderr: "",
+        error: undefined,
+        bounded: true,
+        timedOut: false,
+        outputLimitExceeded: false,
+        cleanupKnown: true,
+        outputComplete: true,
+        forcedCleanup: false,
+      };
+    }, "codesign", ["--verify"], probeEnv, deadline());
+    expect(result.stdout).toBe("codesign-ok");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].hasSignal).toBe(true);
+  });
+
+  it("retains normal and nonzero process outcomes with complete stream cleanup", async () => {
+    const success = await run("/bin/sh", ["-c", "printf probe-ok"], probeEnv, { deadline: deadline() });
+    expect(success).toMatchObject({ status: 0, stdout: "probe-ok", timedOut: false, outputLimitExceeded: false, cleanupKnown: true, outputComplete: true, forcedCleanup: false, bounded: true });
+
+    const failure = await run("/bin/sh", ["-c", "printf probe-error >&2; exit 7"], probeEnv, { deadline: deadline() });
+    expect(failure).toMatchObject({ status: 7, stderr: "probe-error", timedOut: false, outputLimitExceeded: false, cleanupKnown: true, outputComplete: true, forcedCleanup: false, bounded: true });
+  });
+
+  it("terminates inherited descendants on timeout and normal leader exit", async () => {
+    const timeout = await run("/bin/sh", ["-c", "sleep 10"], probeEnv, { deadline: Date.now() + 100 });
+    expect(timeout).toMatchObject({ timedOut: true, cleanupKnown: true, outputComplete: true, forcedCleanup: true, bounded: true });
+
+    const descendant = await run("/bin/sh", ["-c", "sleep 10 & exit 0"], probeEnv, { deadline: deadline() });
+    expect(descendant).toMatchObject({ status: 0, cleanupKnown: true, outputComplete: true, forcedCleanup: true, bounded: true });
+
+    const termResistant = await run("/bin/sh", ["-c", "trap '' TERM; sleep 10 & exit 0"], probeEnv, { deadline: deadline() });
+    expect(termResistant).toMatchObject({ status: 0, cleanupKnown: true, outputComplete: true, forcedCleanup: true, bounded: true });
+    await expect(invokeBounded(run, "/bin/sh", ["-c", "sleep 10 & exit 0"], probeEnv, deadline())).rejects.toThrow(/did not complete safely/);
+  });
+
+  it("bounds an escaped descendant that keeps the leader's stdio open", async () => {
+    const childScript = [
+      "const { spawn } = require('node:child_process');",
+      "const escaped = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });",
+      "escaped.unref();",
+      "process.stdout.write(String(escaped.pid) + '\\n');",
+      "process.exit(0);",
+    ].join(" ");
+    const result = await run(process.execPath, ["-e", childScript], probeEnv, { deadline: deadline() });
+    const escapedPid = Number.parseInt(result.stdout.trim(), 10);
+    try {
+      expect(result.status).toBe(0);
+      expect(result.cleanupKnown).toBe(true);
+      expect(result.outputComplete).toBe(false);
+      expect(result.error).toMatch(/streams did not close after leader exit/);
+    } finally {
+      if (Number.isInteger(escapedPid) && escapedPid > 0) {
+        try { process.kill(-escapedPid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") throw error; }
+      }
+    }
+  });
+
+  it("enforces the combined stdout and stderr cap", async () => {
+    const script = "head -c 34000000 /dev/zero; head -c 34000000 /dev/zero >&2";
+    const capped = await run("/bin/sh", ["-c", script], probeEnv, { deadline: Date.now() + 10_000 });
+    expect(capped).toMatchObject({ outputLimitExceeded: true, cleanupKnown: true, outputComplete: false, forcedCleanup: true, bounded: true });
+  });
+});
+
 describe("smoke scenarios and receipts", () => {
   const receipt = (scenario, overrides = {}) => ({
     mode: 0o600,
@@ -175,8 +267,23 @@ describe("smoke scenarios and receipts", () => {
     expect(judgeReceipt(receipt("C", { awaitingSignal: true }), options).join()).toMatch(/signal expectation/);
   });
 
+  // The maintained core fixture sits under the public Studio package root (one level above this test) or,
+  // in the monorepo (`<root>/apps/studio/test/`), under the repository root three levels above it; no other root is accepted.
+  const MAINTAINED_CORE_FIXTURE = "docs/examples/v0.4/brand-system/core-minimal";
+  const maintainedFixtureCheckout = () => {
+    const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+    const monorepoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+    const candidates =
+      fileURLToPath(new URL("../../../apps/studio/", import.meta.url)) === packageRoot
+        ? [packageRoot, monorepoRoot]
+        : [packageRoot];
+    const checkout = candidates.find((root) => existsSync(join(root, MAINTAINED_CORE_FIXTURE, ".tfsb/project.toml")));
+    if (!checkout) throw new Error(`maintained core fixture ${MAINTAINED_CORE_FIXTURE} is absent beneath ${candidates.join(" and ")}`);
+    return checkout;
+  };
+
   it("prepares scenario fixtures from the maintained public fixture", () => {
-    const checkout = new URL("..", import.meta.url).pathname;
+    const checkout = maintainedFixtureCheckout();
     const smoke = scratch("fixtures");
     const prepared = prepareFixtures("A", checkout, smoke);
     expect(readFileSync(join(prepared.observed["core-minimal"], ".tfsb/project.toml"), "utf8")).toContain('name = "core-fixture"');
@@ -209,21 +316,610 @@ describe("smoke scenarios and receipts", () => {
   });
 });
 
+describe("smoke run finalization", () => {
+  const FINALIZATION_KEYS = [
+    "schema",
+    "status",
+    "phase",
+    "exceptionFamily",
+    "spawned",
+    "exitObserved",
+    "applicationReceiptObservation",
+    "applicationReceiptCopy",
+  ];
+  const EXECUTABLE_SHA = "e".repeat(64);
+  const RECEIPT_SHA = "r".repeat(64);
+  const baseResult = (overrides = {}) => ({
+    schema: "nebular.native-rc-smoke-run-v1",
+    label: "linux-x64-C",
+    platform: "linux-x64",
+    scenario: "C",
+    source: "raw-archive",
+    executable: { path: "bin/theme-forge-nebular-fusion", sha256: EXECUTABLE_SHA, size: 64 },
+    checks: {},
+    problems: [],
+    ...overrides,
+  });
+  const validReceiptRecord = () => ({
+    mode: 0o600,
+    sha256: RECEIPT_SHA,
+    receipt: {
+      schema: "nebular.release-smoke-receipt-v1",
+      scenario: "C",
+      status: "pass",
+      pid: 42,
+      target: "x86_64-unknown-linux-gnu",
+      awaitingSignal: false,
+      executable: { sha256: EXECUTABLE_SHA },
+      driver: { steps: SCENARIOS.C.steps.map((id) => ({ id, ok: true, via: "dom", ms: 1, detail: "" })) },
+    },
+  });
+  const typedError = (props) => Object.assign(new Error("SENTINEL /private/secret-path pid=9999"), props);
+  const expectFinalization = (actual, expected) => {
+    expect(Object.keys(actual)).toEqual(FINALIZATION_KEYS);
+    expect(actual).toEqual(expected);
+    expect(JSON.stringify(actual)).not.toMatch(/SENTINEL|\/private|9999/);
+  };
+
+  it("records a complete finalization record on a normal passing smoke run", async () => {
+    const events = [];
+    const reports = [];
+    const copied = [];
+    const result = baseResult();
+    const returned = await finalizeSmokeRun({
+      result,
+      keep: false,
+      body: async (run) => {
+        events.push("body");
+        run.launched();
+        run.exited();
+        result.exit = { code: 0, signal: null, signalSent: null, durationMs: 12 };
+        const record = run.receipt(
+          () => {
+            events.push("receipt-read");
+            return validReceiptRecord();
+          },
+          (observed) => {
+            events.push("receipt-copy");
+            copied.push(observed.sha256);
+          },
+        );
+        result.receipt = { sha256: record.sha256, status: record.receipt.status, steps: [] };
+        result.problems.push(...judgeReceipt(record, { scenario: "C", platform: "linux-x64", executableSha256: EXECUTABLE_SHA, pid: 42 }));
+      },
+      cleanup: () => events.push("cleanup"),
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(returned).toBe(result);
+    expect(events).toEqual(["body", "receipt-read", "receipt-copy", "cleanup", "report"]);
+    expect(copied).toEqual([RECEIPT_SHA]);
+    expect(result.status).toBe("pass");
+    expect(result.problems).toEqual([]);
+    expect(result.exit).toEqual({ code: 0, signal: null, signalSent: null, durationMs: 12 });
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "complete",
+      phase: "complete",
+      exceptionFamily: null,
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "present-at-read",
+      applicationReceiptCopy: "written",
+    });
+    expect(JSON.parse(reports[0])).toEqual(result);
+  });
+
+  it("keeps finalization complete when an application gate fails and the receipt is absent", async () => {
+    const events = [];
+    const reports = [];
+    const result = baseResult();
+    await finalizeSmokeRun({
+      result,
+      keep: false,
+      body: async (run) => {
+        events.push("body");
+        run.launched();
+        run.exited();
+        result.exit = { code: 1, signal: null, signalSent: null, durationMs: 9 };
+        result.problems.push("application exit code 1 signal null");
+        const record = run.receipt(
+          () => {
+            events.push("receipt-read");
+            return null;
+          },
+          () => events.push("receipt-copy"),
+        );
+        result.receipt = null;
+        result.problems.push(...judgeReceipt(record, { scenario: "C", platform: "linux-x64", executableSha256: EXECUTABLE_SHA, pid: 42 }));
+      },
+      cleanup: () => events.push("cleanup"),
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(events).toEqual(["body", "receipt-read", "cleanup", "report"]);
+    expect(result.status).toBe("fail");
+    expect(result.exit.code).toBe(1);
+    expect(result.problems).toEqual(["application exit code 1 signal null", "no receipt was written"]);
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "complete",
+      phase: "complete",
+      exceptionFamily: null,
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "absent-at-read",
+      applicationReceiptCopy: "not-attempted",
+    });
+    expect(JSON.parse(reports[0])).toEqual(result);
+  });
+
+  it("records pre-spawn state and unknown families without inventing an exit or receipt claim", async () => {
+    const fakeCheckout = scratch("fake-checkout");
+    write(join(fakeCheckout, "docs/examples/v0.4/brand-system/core-minimal/.tfsb/project.toml"), 'name = "tampered-fixture"\n');
+    const smokeDir = scratch("smoke-pre-spawn");
+    const events = [];
+    const reports = [];
+    const result = baseResult({ label: "darwin-arm64-A", platform: "darwin-arm64", scenario: "A" });
+    await finalizeSmokeRun({
+      result,
+      keep: false,
+      body: () => {
+        events.push("body");
+        prepareFixtures("A", fakeCheckout, smokeDir);
+      },
+      cleanup: () => events.push("cleanup"),
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(events).toEqual(["body", "cleanup", "report"]);
+    expect(result.status).toBe("fail");
+    expect(result.exit).toBeUndefined();
+    expect(result.receipt).toBeUndefined();
+    expect(result.problems).toEqual(["harness error: maintained core fixture project name changed"]);
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "pre-spawn",
+      exceptionFamily: "state",
+      spawned: false,
+      exitObserved: false,
+      applicationReceiptObservation: "not-attempted",
+      applicationReceiptCopy: "not-attempted",
+    });
+    expect(JSON.parse(reports[0]).finalization).toEqual(result.finalization);
+
+    for (const thrown of [undefined, null, "SENTINEL-primitive", { get code() { throw new Error("getter failed"); } }]) {
+      const nonObjectEvents = [];
+      const nonObjectResult = baseResult();
+      await finalizeSmokeRun({
+        result: nonObjectResult,
+        keep: false,
+        body: () => {
+          nonObjectEvents.push("body");
+          throw thrown;
+        },
+        cleanup: () => nonObjectEvents.push("cleanup"),
+        writeReport: () => nonObjectEvents.push("report"),
+      });
+      expect(nonObjectEvents).toEqual(["body", "cleanup", "report"]);
+      expect(nonObjectResult.status).toBe("fail");
+      expectFinalization(nonObjectResult.finalization, {
+        schema: FINALIZATION_SCHEMA,
+        status: "failed",
+        phase: "pre-spawn",
+        exceptionFamily: "unknown",
+        spawned: false,
+        exitObserved: false,
+        applicationReceiptObservation: "not-attempted",
+        applicationReceiptCopy: "not-attempted",
+      });
+    }
+  });
+
+  it("preserves the exact captured exit on post-exit failures and distinguishes pre-exit process failures", async () => {
+    const events = [];
+    const reports = [];
+    const result = baseResult();
+    const capturedExit = { code: 0, signal: null, signalSent: null, durationMs: 25 };
+    await finalizeSmokeRun({
+      result,
+      keep: false,
+      body: (run) => {
+        events.push("body");
+        run.launched();
+        run.exited();
+        result.exit = { ...capturedExit };
+        throw typedError({ code: "EACCES", syscall: "open" });
+      },
+      cleanup: () => events.push("cleanup"),
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(events).toEqual(["body", "cleanup", "report"]);
+    expect(result.status).toBe("fail");
+    expect(result.exit).toEqual(capturedExit);
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toMatch(/^harness error:/);
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "post-exit",
+      exceptionFamily: "filesystem",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "not-attempted",
+      applicationReceiptCopy: "not-attempted",
+    });
+    expect(JSON.parse(reports[0]).exit).toEqual(capturedExit);
+
+    const processResult = baseResult();
+    await finalizeSmokeRun({
+      result: processResult,
+      keep: false,
+      body: (run) => {
+        run.launched();
+        throw typedError({ code: "ESRCH", syscall: "kill" });
+      },
+      cleanup: () => {},
+      writeReport: () => {},
+    });
+    expect(processResult.status).toBe("fail");
+    expectFinalization(processResult.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "post-exit",
+      exceptionFamily: "process",
+      spawned: true,
+      exitObserved: false,
+      applicationReceiptObservation: "not-attempted",
+      applicationReceiptCopy: "not-attempted",
+    });
+  });
+
+  it("distinguishes receipt read-failed, absent-at-read and copy-failed without claiming no receipt was written", async () => {
+    let copyCalled = false;
+    const readFailResult = baseResult();
+    await finalizeSmokeRun({
+      result: readFailResult,
+      keep: false,
+      body: (run) => {
+        run.launched();
+        run.exited();
+        readFailResult.exit = { code: 0, signal: null, signalSent: null, durationMs: 15 };
+        const record = run.receipt(
+          () => {
+            throw new SyntaxError("SENTINEL unexpected token in receipt");
+          },
+          () => {
+            copyCalled = true;
+          },
+        );
+        readFailResult.problems.push(...judgeReceipt(record, { scenario: "C", platform: "linux-x64", executableSha256: EXECUTABLE_SHA, pid: 42 }));
+      },
+      cleanup: () => {},
+      writeReport: () => {},
+    });
+    expect(copyCalled).toBe(false);
+    expect(readFailResult.status).toBe("fail");
+    expect(readFailResult.problems).not.toContain("no receipt was written");
+    expectFinalization(readFailResult.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "receipt-copy",
+      exceptionFamily: "parse",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "read-failed",
+      applicationReceiptCopy: "not-attempted",
+    });
+
+    const copyFailResult = baseResult();
+    await finalizeSmokeRun({
+      result: copyFailResult,
+      keep: false,
+      body: (run) => {
+        run.launched();
+        run.exited();
+        copyFailResult.exit = { code: 0, signal: null, signalSent: null, durationMs: 15 };
+        const record = run.receipt(
+          () => validReceiptRecord(),
+          () => {
+            throw typedError({ code: "ENOSPC", syscall: "write" });
+          },
+        );
+        copyFailResult.problems.push(...judgeReceipt(record, { scenario: "C", platform: "linux-x64", executableSha256: EXECUTABLE_SHA, pid: 42 }));
+      },
+      cleanup: () => {},
+      writeReport: () => {},
+    });
+    expect(copyFailResult.status).toBe("fail");
+    expect(copyFailResult.problems).not.toContain("no receipt was written");
+    expectFinalization(copyFailResult.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "receipt-copy",
+      exceptionFamily: "filesystem",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "present-at-read",
+      applicationReceiptCopy: "copy-failed",
+    });
+  });
+
+  it("catches owned scratch cleanup failures into a failed run while still writing the outer report and preserving earlier failures", async () => {
+    const events = [];
+    const reports = [];
+    const result = baseResult();
+    await finalizeSmokeRun({
+      result,
+      keep: false,
+      body: (run) => {
+        events.push("body");
+        run.launched();
+        run.exited();
+        result.exit = { code: 0, signal: null, signalSent: null, durationMs: 10 };
+        const record = run.receipt(
+          () => validReceiptRecord(),
+          () => {},
+        );
+        result.receipt = { sha256: record.sha256, status: record.receipt.status, steps: [] };
+        result.problems.push(...judgeReceipt(record, { scenario: "C", platform: "linux-x64", executableSha256: EXECUTABLE_SHA, pid: 42 }));
+        result.checks.fixtureEffects = { upper: { unchanged: false } };
+      },
+      cleanup: () => {
+        events.push("cleanup");
+        throw typedError({ code: "EBUSY", syscall: "rmdir" });
+      },
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(events).toEqual(["body", "cleanup", "report"]);
+    expect(reports).toHaveLength(1);
+    expect(result.status).toBe("fail");
+    expect(result.exit).toEqual({ code: 0, signal: null, signalSent: null, durationMs: 10 });
+    expect(result.receipt.status).toBe("pass");
+    expect(result.checks.fixtureEffects).toEqual({ upper: { unchanged: false } });
+    expect(result.problems).toEqual(["harness cleanup of the owned scratch directory failed"]);
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "cleanup",
+      exceptionFamily: "filesystem",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "present-at-read",
+      applicationReceiptCopy: "written",
+    });
+    expect(JSON.parse(reports[0])).toEqual(result);
+
+    const firstFailureResult = baseResult();
+    await finalizeSmokeRun({
+      result: firstFailureResult,
+      keep: false,
+      body: (run) => {
+        run.launched();
+        run.exited();
+        throw new SyntaxError("SENTINEL body parse failure");
+      },
+      cleanup: () => {
+        throw typedError({ code: "EPERM", syscall: "unlink" });
+      },
+      writeReport: () => {},
+    });
+    expect(firstFailureResult.status).toBe("fail");
+    expect(firstFailureResult.problems).toContain("harness cleanup of the owned scratch directory failed");
+    expectFinalization(firstFailureResult.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "post-exit",
+      exceptionFamily: "parse",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "not-attempted",
+      applicationReceiptCopy: "not-attempted",
+    });
+  });
+
+  it("surfaces a sanitized NativeRcReportWriteError when the final report write fails and never fabricates a report", async () => {
+    const events = [];
+    const reports = [];
+    const result = baseResult();
+    let caught;
+    try {
+      await finalizeSmokeRun({
+        result,
+        keep: false,
+        body: (run) => {
+          events.push("body");
+          run.launched();
+          run.exited();
+          result.exit = { code: 0, signal: null, signalSent: null, durationMs: 11 };
+          run.receipt(
+            () => validReceiptRecord(),
+            () => {},
+          );
+        },
+        cleanup: () => events.push("cleanup"),
+        writeReport: () => {
+          events.push("report");
+          throw typedError({ code: "EROFS", syscall: "open" });
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(events).toEqual(["body", "cleanup", "report"]);
+    expect(reports).toEqual([]);
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught.name).toBe("NativeRcReportWriteError");
+    expect(caught.message).toBe("native RC smoke run report was not written");
+    expect(caught.cause).toBeUndefined();
+    expect(Object.keys(caught).sort()).toEqual(["finalization", "name", "reportWriteFamily"]);
+    expect(caught.reportWriteFamily).toBe("filesystem");
+    expect(caught.message).not.toMatch(/SENTINEL|\/private|9999/);
+    expect(String(caught.stack ?? "")).not.toMatch(/SENTINEL|\/private|9999/);
+    expectFinalization(caught.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "report-write",
+      exceptionFamily: "filesystem",
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "present-at-read",
+      applicationReceiptCopy: "written",
+    });
+
+    const fakeCheckout = scratch("fake-checkout-report");
+    write(join(fakeCheckout, "docs/examples/v0.4/brand-system/core-minimal/.tfsb/project.toml"), 'name = "tampered"\n');
+    const smokeDir = scratch("smoke-report-fail");
+    let preservedCaught;
+    try {
+      await finalizeSmokeRun({
+        result: baseResult({ label: "darwin-arm64-A", platform: "darwin-arm64", scenario: "A" }),
+        keep: false,
+        body: () => {
+          prepareFixtures("A", fakeCheckout, smokeDir);
+        },
+        cleanup: () => {},
+        writeReport: () => {
+          throw typedError({ code: "ENOSPC", syscall: "write" });
+        },
+      });
+    } catch (error) {
+      preservedCaught = error;
+    }
+    expect(preservedCaught).toBeInstanceOf(Error);
+    expect(preservedCaught.name).toBe("NativeRcReportWriteError");
+    expect(preservedCaught.reportWriteFamily).toBe("filesystem");
+    expectFinalization(preservedCaught.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "failed",
+      phase: "pre-spawn",
+      exceptionFamily: "state",
+      spawned: false,
+      exitObserved: false,
+      applicationReceiptObservation: "not-attempted",
+      applicationReceiptCopy: "not-attempted",
+    });
+  });
+
+  it("skips scratch cleanup when keep is enabled and completes normally", async () => {
+    const events = [];
+    const reports = [];
+    const result = baseResult();
+    await finalizeSmokeRun({
+      result,
+      keep: true,
+      body: (run) => {
+        events.push("body");
+        run.launched();
+        run.exited();
+        result.exit = { code: 0, signal: null, signalSent: null, durationMs: 7 };
+        run.receipt(
+          () => {
+            events.push("receipt-read");
+            return validReceiptRecord();
+          },
+          () => events.push("receipt-copy"),
+        );
+      },
+      cleanup: () => events.push("cleanup"),
+      writeReport: (text) => {
+        events.push("report");
+        reports.push(text);
+      },
+    });
+    expect(events).toEqual(["body", "receipt-read", "receipt-copy", "report"]);
+    expect(result.status).toBe("pass");
+    expectFinalization(result.finalization, {
+      schema: FINALIZATION_SCHEMA,
+      status: "complete",
+      phase: "complete",
+      exceptionFamily: null,
+      spawned: true,
+      exitObserved: true,
+      applicationReceiptObservation: "present-at-read",
+      applicationReceiptCopy: "written",
+    });
+    expect(JSON.parse(reports[0])).toEqual(result);
+  });
+
+  it("classifies timeout and unmapped error shapes through the closed exception-family table", async () => {
+    const cases = [
+      [typedError({ code: "ETIMEDOUT" }), "timeout"],
+      [new Error("SENTINEL message-only error"), "unknown"],
+      [typedError({ code: "EWHATEVER" }), "unknown"],
+    ];
+    for (const [error, expectedFamily] of cases) {
+      const result = baseResult();
+      await finalizeSmokeRun({
+        result,
+        keep: false,
+        body: () => {
+          throw error;
+        },
+        cleanup: () => {},
+        writeReport: () => {},
+      });
+      expectFinalization(result.finalization, {
+        schema: FINALIZATION_SCHEMA,
+        status: "failed",
+        phase: "pre-spawn",
+        exceptionFamily: expectedFamily,
+        spawned: false,
+        exitObserved: false,
+        applicationReceiptObservation: "not-attempted",
+        applicationReceiptCopy: "not-attempted",
+      });
+    }
+  });
+});
+
 // A complete lane as it would stand after smoke, used by the seal and the catalog.
 function laneFixture(overrides = {}) {
   const root = scratch("lane");
   const planRecord = plan("workflow_dispatch", { linux_x64: true, release_candidate: true });
   const executableSha256 = "e".repeat(64);
+  const librarySha256 = "a".repeat(64);
+  const materialDigest = overrides.materialDigest ?? null;
   const npm = Buffer.from("npm candidate"), raw = Buffer.from("raw candidate");
   write(join(root, "candidate/pkg.tgz"), npm);
   write(join(root, "candidate/raw.tar.gz"), raw);
-  const manifest = { members: [{ path: PLATFORMS["linux-x64"].executable, type: "file", sha256: executableSha256 }] };
+  const manifest = { members: [
+    { path: PLATFORMS["linux-x64"].executable, type: "file", mode: 0o755, size: 1, sha256: executableSha256 },
+    { path: "payload/lib/libprivate.so", type: "file", mode: 0o644, size: 2, sha256: librarySha256 },
+  ] };
+  const payloadFiles = [
+    { path: "bin/theme-forge-nebular-fusion", bytes: 1, mode: 0o755, sha256: executableSha256 },
+    { path: "lib/libprivate.so", bytes: 2, mode: 0o644, sha256: librarySha256 },
+  ];
+  const nativePayload = {
+    identity: identity(materialDigest === null ? payloadFiles : {
+      schema: "nebular-native-payload-inventory-v1",
+      materialDigest,
+      files: payloadFiles,
+      aliases: [],
+      directories: [],
+    }),
+    files: payloadFiles.length,
+  };
   write(join(root, "evidence/package-manifest.json"), JSON.stringify(manifest));
   const record = { platform: "linux-x64", version: "0.6.1", packageManifestSha256: sha256(Buffer.from(JSON.stringify(manifest))), glibcMinimum: "2.34",
     npm: { filename: "pkg.tgz", sha256: sha256(npm) }, raw: { filename: "raw.tar.gz", sha256: sha256(raw), executableSha256 } };
   write(join(root, "evidence/package-record.json"), JSON.stringify(record));
-  write(join(root, "evidence/qualification.json"), JSON.stringify({ platform: "linux-x64", status: "pass", executableSha256, checks: [{ id: "x", ok: true }] }));
-  write(join(root, "evidence/build-receipt.json"), JSON.stringify({ platform: "linux-x64", source: { commit: SHA, tree: "t" } }));
+  write(join(root, "evidence/qualification.json"), JSON.stringify({ platform: "linux-x64", status: "pass", executableSha256, nativePayload, materialDigest, checks: [{ id: "x", ok: true }] }));
+  write(join(root, "evidence/build-receipt.json"), JSON.stringify({ platform: "linux-x64", source: { commit: SHA, tree: "t" }, nativePayload }));
   write(join(root, "evidence/plan.json"), JSON.stringify(planRecord));
   for (const [scenario, source] of [["C", "raw-archive"], ["C-signal", "npm-package"]]) {
     write(join(root, `evidence/smoke/${scenario}-${source}.run.json`), JSON.stringify({ label: `${scenario}-${source}`, scenario, source, status: "pass", executable: { sha256: executableSha256 }, receipt: { sha256: "r".repeat(64), steps: [] } }));
@@ -250,8 +946,46 @@ describe("evidence seal", () => {
     expect(seal(laneFixture({ mutate: (root) => write(join(root, "evidence/smoke/C-raw-archive.run.json"), JSON.stringify({ label: "x", scenario: "C", source: "raw-archive", status: "pass", executable: { sha256: "f".repeat(64) } })) }).options)
       .problems.join()).toMatch(/did not execute the candidate executable/);
     expect(seal(laneFixture({ mutate: (root) => rmSync(join(root, "evidence/smoke/C-signal-npm-package.run.json")) }).options).problems.join()).toMatch(/C-signal did not run|both the raw archive and the npm package/);
+    expect(seal(laneFixture({ mutate: (root) => {
+      const path = join(root, "evidence/build-receipt.json");
+      const build = JSON.parse(readFileSync(path, "utf8"));
+      build.nativePayload.identity = "f".repeat(64);
+      write(path, JSON.stringify(build));
+    } }).options).problems.join()).toMatch(/build and qualification native payload identities differ/);
+    expect(seal(laneFixture({ mutate: (root) => {
+      const manifestPath = join(root, "evidence/package-manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.members.find((member) => member.path === "payload/lib/libprivate.so").sha256 = "b".repeat(64);
+      write(manifestPath, JSON.stringify(manifest));
+      const recordPath = join(root, "evidence/package-record.json");
+      const record = JSON.parse(readFileSync(recordPath, "utf8"));
+      record.packageManifestSha256 = sha256(Buffer.from(JSON.stringify(manifest)));
+      write(recordPath, JSON.stringify(record));
+    } }).options).problems.join()).toMatch(/package and qualification native payload identities differ/);
     const { options } = laneFixture();
     expect(() => seal({ ...options, lane: "linux-arm64" })).toThrow(/not selected/);
+  });
+
+  it("seals a private material digest and rejects a same-GUI private-payload mismatch", () => {
+    const materialDigest = "c".repeat(64);
+    const accepted = seal(laneFixture({ materialDigest }).options);
+    expect(accepted.problems).toEqual([]);
+    expect(accepted.status).toBe("pass");
+
+    const mismatched = seal(laneFixture({
+      materialDigest,
+      mutate: (root) => {
+        const manifestPath = join(root, "evidence/package-manifest.json");
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        manifest.members.find((member) => member.path === "payload/lib/libprivate.so").sha256 = "b".repeat(64);
+        write(manifestPath, JSON.stringify(manifest));
+        const recordPath = join(root, "evidence/package-record.json");
+        const record = JSON.parse(readFileSync(recordPath, "utf8"));
+        record.packageManifestSha256 = sha256(Buffer.from(JSON.stringify(manifest)));
+        write(recordPath, JSON.stringify(record));
+      },
+    }).options);
+    expect(mismatched.problems.join()).toMatch(/package and qualification native payload identities differ/);
   });
 });
 
@@ -314,5 +1048,457 @@ describe("closed-input native pins", () => {
         expect(bytes.length).toBe(pin.nativeSize);
       }
     }
+  });
+});
+
+describe("linux private-runtime RC integration", () => {
+  function populatePrivateLinuxPayload(root, { ordinaryLauncher = false } = {}) {
+    const platform = PLATFORMS["linux-x64"];
+    const target = platform.target;
+    const elf = Buffer.alloc(64);
+    Buffer.from([0x7f, 69, 76, 70, 2, 1, 1]).copy(elf);
+    elf.writeUInt16LE(3, 16);
+    elf.writeUInt16LE(62, 18);
+    write(join(root, "bin/theme-forge-nebular-fusion"), elf, 0o755);
+    write(join(root, "bin/tfsb-studio-service"), elf, 0o755);
+    write(join(root, "bin/tfnf"), nativeLauncher(target, { nativeRuntime: !ordinaryLauncher }), 0o755);
+    for (const resource of [
+      "loom-payload/index.json",
+      "loom-preview-source/package.json",
+      "public/preview/index.html",
+      "resources/theme-pack.json",
+      "solar-payload/index.json",
+      "sidecar-payload/manifest.json",
+      "THIRD_PARTY_NOTICES/index.txt",
+    ]) {
+      write(join(root, "lib/theme-forge-nebular-fusion", resource), "{}", 0o644);
+    }
+    mkdirSync(join(root, "opt"), { recursive: true, mode: 0o755 });
+    chmodSync(join(root, "opt"), 0o755);
+    const directories = [];
+    for (const dir of REQUIRED_RUNTIME_DIRECTORIES) {
+      const absDir = join(root, dir);
+      mkdirSync(absDir, { recursive: true, mode: 0o755 });
+      chmodSync(absDir, 0o755);
+      directories.push({ path: dir, mode: 0o755 });
+    }
+    const regulars = [];
+    for (const role of REQUIRED_RUNTIME_ROLES) {
+      const executable = REQUIRED_EXECUTABLE_RUNTIME_ROLES.includes(role);
+      const mode = executable ? 0o755 : 0o644;
+      const content = Buffer.from(elf);
+      write(join(root, role), content, mode);
+      chmodSync(join(root, role), mode);
+      regulars.push({
+        path: role,
+        bytes: content.length,
+        sha256: sha256(content),
+        mode,
+        role: executable ? "helper-executable" : "shared-object",
+      });
+    }
+    regulars.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+
+    const aliases = [
+      {
+        path: "opt/nebular-private/lib/libjavascriptcoregtk-4.1.so.0",
+        target: "libjavascriptcoregtk-4.1.so.0.9.11",
+        canonical: "opt/nebular-private/lib/libjavascriptcoregtk-4.1.so.0.9.11",
+      },
+      {
+        path: "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0",
+        target: "libwebkit2gtk-4.1.so.0.19.9",
+        canonical: "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0.19.9",
+      },
+    ];
+    for (const alias of aliases) {
+      symlinkSync(alias.target, join(root, alias.path));
+    }
+
+    const externalFloor = externalFloorForTarget(platform.triple).map((soname) => ({
+      soname,
+      basis: `debian-bookworm:${soname}`,
+      sha256: sha256(Buffer.from(`floor:${soname}`)),
+      bytes: 4096,
+      ...(soname === "libc.so.6" ? { versions: ["GLIBC_2.34", "GLIBC_2.36"] } : {}),
+    }));
+
+    const unsignedMaterial = {
+      schema: "nebular-native-runtime-material-v1",
+      target: platform.triple,
+      prefix: PRIVATE_RUNTIME_PREFIX,
+      directories,
+      regulars,
+      aliases,
+      requiredRoles: [...REQUIRED_RUNTIME_ROLES],
+      externalFloor,
+    };
+    const material = {
+      ...unsignedMaterial,
+      materialDigest: computeMaterialDigest(unsignedMaterial),
+    };
+    write(
+      join(root, PRIVATE_RUNTIME_MARKER),
+      JSON.stringify(material, null, 2) + "\n",
+      0o644
+    );
+    return { root, material };
+  }
+
+  it("packages private-runtime Linux payloads, preserves SONAME aliases, and refuses ordinary launchers, malformed markers, or missing roles", async () => {
+    const checkout = scratch("checkout-private");
+    write(join(checkout, "LICENSE"), "license\n");
+    write(join(checkout, "NOTICE"), "notice\n");
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-private"));
+    const outDir = scratch("out-private");
+    const archived = await assembleRawArchive({ platform: "linux-x64", payload, checkout, output: outDir });
+    const extract = scratch("extract-private");
+    expect(spawnSync("tar", ["-xzf", archived.file, "-C", extract]).status).toBe(0);
+    const extractedRoot = join(extract, "theme-forge-nebular-fusion");
+    expect(readFileSync(join(extractedRoot, "bin/tfnf"), "utf8")).toBe(nativeLauncher(PLATFORMS["linux-x64"].target, { nativeRuntime: true }));
+    const aliasPath = join(extractedRoot, "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0");
+    expect(lstatSync(aliasPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(aliasPath)).toBe("libwebkit2gtk-4.1.so.0.19.9");
+
+    // Ordinary launcher in a private-runtime payload is refused
+    const { root: badLauncherPayload } = populatePrivateLinuxPayload(scratch("payload-ordinary-launcher"), { ordinaryLauncher: true });
+    await expect(assembleRawArchive({ platform: "linux-x64", payload: badLauncherPayload, checkout, output: scratch("out-bad-launcher") }))
+      .rejects.toThrow(/launcher/);
+
+    // Missing required runtime role is refused
+    const { root: missingRolePayload } = populatePrivateLinuxPayload(scratch("payload-missing-role"));
+    rmSync(join(missingRolePayload, "opt/nebular-private/libexec/webkit2gtk-4.1/WebKitWebProcess"));
+    await expect(assembleRawArchive({ platform: "linux-x64", payload: missingRolePayload, checkout, output: scratch("out-missing-role") }))
+      .rejects.toThrow(/regular count .* does not match|missing declared regular/i);
+
+    // Malformed native-runtime.json is refused
+    const { root: badMarkerPayload } = populatePrivateLinuxPayload(scratch("payload-bad-marker"));
+    write(join(badMarkerPayload, PRIVATE_RUNTIME_MARKER), "not-json\n", 0o644);
+    await expect(assembleRawArchive({ platform: "linux-x64", payload: badMarkerPayload, checkout, output: scratch("out-bad-marker") }))
+      .rejects.toThrow(/Malformed native-runtime\.json/);
+  });
+
+  it("uses a complete authenticated regular-copy projection for every npm alias while raw output stays symlinked", () => {
+    const checkout = scratch("checkout-projection");
+    write(join(checkout, "LICENSE"), "license\n");
+    write(join(checkout, "NOTICE"), "notice\n");
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-projection"));
+    const assembled = assemblePlatformPackage({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      output: scratch("package-projection"),
+      glibcMinimum: "2.34",
+    });
+    expect(assembled.manifest.schema).toBe(PACKAGE_MANIFEST_PROJECTION_SCHEMA);
+    expect(assembled.manifest.runtimeAliasProjection.aliases).toHaveLength(2);
+    for (const alias of assembled.manifest.runtimeAliasProjection.aliases) {
+      const copied = join(assembled.packageDir, "payload", alias.path);
+      expect(lstatSync(copied).isSymbolicLink()).toBe(false);
+      expect(readFileSync(copied)).toEqual(readFileSync(join(payload, alias.canonical)));
+    }
+    expect(() => verifyPlatformPackage(assembled.packageDir, "linux-x64", assembled.manifestSha256)).not.toThrow();
+    expect(() => authenticateNpmPackageContext(assembled.packageDir, "linux-x64", assembled.manifestSha256)).not.toThrow();
+    expect(() => authenticateNpmPackageContext(assembled.packageDir, "linux-x64", "0".repeat(64))).toThrow(/Payload manifest authentication/);
+    expect(() => authenticateNpmPackageContext(assembled.packageDir, "linux-arm64", assembled.manifestSha256)).toThrow(/identity|target|projection/i);
+    expect(() => packPlatformPackage(assembled.packageDir, join(scratch("pack-v2-missing-context"), "candidate"), {
+      node: process.execPath,
+      npmCli: "unused",
+      scratch: scratch("pack-v2-missing-context-scratch"),
+    })).toThrow(/Projected or unknown package manifest requires complete authenticated platform/);
+    expect(() => packPlatformPackage(assembled.packageDir, join(scratch("pack-v2-missing-platform"), "candidate"), {
+      node: process.execPath,
+      npmCli: "unused",
+      scratch: scratch("pack-missing-platform-scratch"),
+      manifestSha256: assembled.manifestSha256,
+    })).toThrow(/Complete authenticated platform/);
+    expect(() => packPlatformPackage(assembled.packageDir, join(scratch("pack-v2-missing-manifest"), "candidate"), {
+      node: process.execPath,
+      npmCli: "unused",
+      scratch: scratch("pack-missing-manifest-scratch"),
+      platform: "linux-x64",
+    })).toThrow(/Complete authenticated platform/);
+
+    const firstAlias = assembled.manifest.runtimeAliasProjection.aliases[0];
+    writeFileSync(join(assembled.packageDir, "payload", firstAlias.path), Buffer.from("tampered"));
+    expect(() => verifyPlatformPackage(assembled.packageDir, "linux-x64", assembled.manifestSha256)).toThrow(/Payload member mismatch/);
+
+    const legacyManifest = JSON.parse(readFileSync(join(assembled.packageDir, "package-manifest.json"), "utf8"));
+    legacyManifest.schema = "tfsb.nebular-package-manifest-v1";
+    writeFileSync(join(assembled.packageDir, "package-manifest.json"), `${JSON.stringify(legacyManifest)}\n`);
+    const legacyManifestSha256 = sha256(readFileSync(join(assembled.packageDir, "package-manifest.json")));
+    expect(() => authenticateNpmPackageContext(assembled.packageDir, "linux-x64", legacyManifestSha256)).toThrow(/Legacy package manifest/);
+    expect(() => packPlatformPackage(assembled.packageDir, join(scratch("pack-v1-smuggled-projection"), "candidate"), {
+      node: process.execPath,
+      npmCli: "unused",
+      scratch: scratch("pack-v1-smuggled-projection-scratch"),
+    })).toThrow(/Projected or unknown package manifest requires complete authenticated platform/);
+  });
+
+  it("requires v2 for a stripped private-runtime projection while accepting a genuine legacy payload", () => {
+    const checkout = scratch("checkout-legacy-downgrade");
+    write(join(checkout, "LICENSE"), "license\n");
+    write(join(checkout, "NOTICE"), "notice\n");
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-legacy-downgrade"));
+    const assembled = assemblePlatformPackage({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      output: scratch("package-legacy-downgrade"),
+      glibcMinimum: "2.34",
+    });
+
+    const strippedManifestPath = join(assembled.packageDir, "package-manifest.json");
+    const strippedManifest = JSON.parse(readFileSync(strippedManifestPath, "utf8"));
+    strippedManifest.schema = "tfsb.nebular-package-manifest-v1";
+    delete strippedManifest.runtimeAliasProjection;
+    const strippedManifestBytes = Buffer.from(`${JSON.stringify(strippedManifest)}\n`);
+    writeFileSync(strippedManifestPath, strippedManifestBytes);
+    const strippedManifestSha256 = sha256(strippedManifestBytes);
+    expect(() => verifyPlatformPackage(assembled.packageDir, "linux-x64", strippedManifestSha256))
+      .toThrow(/requires v2 for private runtime members/);
+    expect(() => verifyPayload(assembled.packageDir, NPM_TARGETS["linux-x64"], strippedManifestSha256))
+      .toThrow(/requires v2 for private runtime members/);
+
+    const { root: legacyPayload } = populatePrivateLinuxPayload(scratch("payload-ordinary-legacy"), { ordinaryLauncher: true });
+    const legacy = assemblePlatformPackage({
+      platform: "linux-x64",
+      payload: legacyPayload,
+      checkout,
+      output: scratch("package-ordinary-legacy"),
+      glibcMinimum: "2.34",
+    });
+    rmSync(join(legacy.packageDir, "payload/opt/nebular-private"), { recursive: true, force: true });
+    rmSync(join(legacy.packageDir, "payload/native-runtime.json"), { force: true });
+    const legacyPath = join(legacy.packageDir, "package-manifest.json");
+    const legacyManifest = JSON.parse(readFileSync(legacyPath, "utf8"));
+    legacyManifest.schema = "tfsb.nebular-package-manifest-v1";
+    delete legacyManifest.runtimeAliasProjection;
+    legacyManifest.members = legacyManifest.members.filter((member) => member.path !== "payload/opt/nebular-private"
+      && member.path !== "payload/native-runtime.json" && !member.path.startsWith("payload/opt/nebular-private/"));
+    legacyManifest.fileCount = legacyManifest.members.length;
+    const legacyBytes = Buffer.from(`${JSON.stringify(legacyManifest)}\n`);
+    writeFileSync(legacyPath, legacyBytes);
+    const legacyManifestSha256 = sha256(legacyBytes);
+    expect(() => verifyPlatformPackage(legacy.packageDir, "linux-x64", legacyManifestSha256)).not.toThrow();
+    expect(() => verifyPayload(legacy.packageDir, NPM_TARGETS["linux-x64"], legacyManifestSha256)).not.toThrow();
+  });
+
+  it("authenticates the physical regular-copy projection after npm pack extraction", async () => {
+    const checkout = scratch("checkout-pack-projection");
+    write(join(checkout, "LICENSE"), "license\n");
+    write(join(checkout, "NOTICE"), "notice\n");
+    const payload = populatePrivateLinuxPayload(scratch("payload-pack-projection")).root;
+    const output = scratch("pack-projection");
+    const assembled = assemblePlatformPackage({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      output: join(output, "package"),
+      glibcMinimum: "2.34",
+    });
+    const node = process.execPath;
+    const npmCli = join(dirname(dirname(node)), "lib/node_modules/npm/bin/npm-cli.js");
+    expect(existsSync(npmCli)).toBe(true);
+    const packed = packPlatformPackage(assembled.packageDir, join(output, "candidate"), {
+      node,
+      npmCli,
+      scratch: output,
+      platform: "linux-x64",
+      manifestSha256: assembled.manifestSha256,
+    });
+    expect(packed.size).toBeGreaterThan(0);
+    expect(packed.sha256).toMatch(/^[a-f0-9]{64}$/);
+    const extracted = scratch("pack-projection-extracted");
+    expect(spawnSync("tar", ["-xzf", packed.file, "-C", extracted]).status).toBe(0);
+    const projected = await inventoryNativePayload(join(extracted, "package", "payload"), {
+      expectedTarget: "x86_64-unknown-linux-gnu",
+      aliasProjection: assembled.manifest.runtimeAliasProjection,
+    });
+    expect(projected.identity).toBe(await inventoryNativePayload(payload, { expectedTarget: "x86_64-unknown-linux-gnu" }).then((value) => value.identity));
+    const selected = await selectPayloadNativeRuntime(join(extracted, "package", "payload"), "x86_64-unknown-linux-gnu", {
+      aliasProjection: assembled.manifest.runtimeAliasProjection,
+    });
+    expect(selected.nativeRuntime).toBe(true);
+  });
+
+  it("inventories private-runtime payloads via inventoryNativePayload and smoke launcherPath selects bin/tfnf on Linux", async () => {
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-evidence"));
+    const inv = await inventoryNativePayload(payload);
+    expect(inv.schema).toBe("nebular-native-payload-inventory-v1");
+    expect(inv.aliases.length).toBe(2);
+    const projection = createNativeRuntimeAliasProjection(JSON.parse(readFileSync(join(payload, PRIVATE_RUNTIME_MARKER), "utf8")));
+    const projected = await inventoryNativePayload(payload, { expectedTarget: "x86_64-unknown-linux-gnu", aliasProjection: projection });
+    expect(projected.identity).toBe(inv.identity);
+    await expect(inventoryNativePayload(payload, { expectedTarget: "x86_64-unknown-linux-gnu", aliasProjection: { ...projection, aliases: projection.aliases.slice(1) } })).rejects.toThrow(/projection/);
+
+    // launcherPath selects bin/tfnf on Linux and GUI binary on Darwin while executablePath remains GUI binary
+    expect(launcherPath("/opt/app", "linux-x64")).toBe("/opt/app/bin/tfnf");
+    expect(executablePath("/opt/app", "linux-x64")).toBe("/opt/app/bin/theme-forge-nebular-fusion");
+    expect(launcherPath("/opt/app", "darwin-arm64")).toBe(executablePath("/opt/app", "darwin-arm64"));
+  });
+
+  it("qualifyPayload enforces paired local nativeRuntime vs consumer expectedNativePayloadSha256 and validates private closure", async () => {
+    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-qualify"));
+    const payloadInv = await inventoryNativePayload(payload);
+    const studio = new URL("..", import.meta.url).pathname;
+    const checkout = scratch("checkout-qualify");
+    write(join(checkout, "src-tauri/tauri.conf.json"), readFileSync(join(studio, "src-tauri/tauri.conf.json")));
+    for (const resource of [
+      "loom-payload/index.json",
+      "loom-preview-source/package.json",
+      "public/preview/index.html",
+      "resources/theme-pack.json",
+      "solar-payload/index.json",
+      "sidecar-payload/manifest.json",
+      "THIRD_PARTY_NOTICES/index.txt",
+    ]) {
+      write(join(checkout, "src-tauri", resource), "{}", 0o644);
+    }
+
+    // Missing both local runtime authority and expectedNativePayloadSha256 is refused
+    await expect(qualifyPayload({ platform: "linux-x64", payload, checkout }))
+      .rejects.toThrow(/requires either paired \(--native-runtime, --native-runtime-sha256\) or --expected-native-payload-sha256/);
+
+    // Providing both local runtime authority and expectedNativePayloadSha256 is refused
+    await expect(qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      nativeRuntime: "/tmp/rt.json",
+      nativeRuntimeSha256: "a".repeat(64),
+      expectedNativePayloadSha256: payloadInv.identity,
+    })).rejects.toThrow(/not both/);
+
+    // Consumer-mode qualification with expectedNativePayloadSha256 succeeds on private-runtime-closure without local source paths
+    const runtimeLib = join(payload, "opt/nebular-private/lib");
+    const hostFixtureRoot = dirname(payload);
+    const hostLibc = join(hostFixtureRoot, "host-libc.so.6");
+    const hostLoader = join(hostFixtureRoot, "ld-linux-x86-64.so.2");
+    write(hostLibc, Buffer.alloc(64), 0o755);
+    write(hostLoader, Buffer.alloc(64), 0o755);
+    const boundedResult = result => ({ ...result, error: result.error ?? null, bounded: true, timedOut: false, outputLimitExceeded: false, cleanupKnown: true, outputComplete: true, forcedCleanup: false });
+    const mockRunner = (program, args) => {
+      if (program === "readelf") {
+        const subject = args.at(-1);
+        const stdout = subject === hostLibc
+          ? [
+              "ELF Header:",
+              "  Class:                             ELF64",
+              "  Machine:                           Advanced Micro Devices X86-64",
+              "  Type:                              DYN (Shared object file)",
+              "Version definition section '.gnu.version_d' contains 1 entry:",
+              "  0x001c: Rev: 1  Flags: none  Index: 2  Cnt: 1  Name: GLIBC_2.34",
+            ].join("\n")
+          : subject === join(runtimeLib, "libwebkit2gtk-4.1.so.0.19.9")
+            ? [
+                "ELF Header:",
+                "  Class:                             ELF64",
+                "  Machine:                           Advanced Micro Devices X86-64",
+                "  Type:                              DYN (Shared object file)",
+                "Version definition section '.gnu.version_d' contains 1 entry:",
+                "  0x001c: Rev: 1  Flags: none  Index: 2  Cnt: 1  Name: WEBKIT_4.1",
+              ].join("\n")
+            : [
+                "ELF Header:",
+                "  Class:                             ELF64",
+                "  Machine:                           Advanced Micro Devices X86-64",
+                "  Type:                              DYN (Position-Independent Executable file)",
+                "Program Headers:",
+                "      [Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]",
+                "Dynamic section at offset 0x100 contains 2 entries:",
+                " 0x0000000000000001 (NEEDED)             Shared library: [libwebkit2gtk-4.1.so.0]",
+                " 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]",
+                "Version needs section '.gnu.version_r' contains 1 entry:",
+                "  0x0020: Version: 1  File: libc.so.6  Cnt: 1",
+                "  0x0030:   Name: GLIBC_2.34  Flags: none  Version: 2",
+              ].join("\n");
+        return boundedResult({ status: 0, stdout, stderr: "" });
+      }
+      if (program === "ldd") {
+        return boundedResult({
+          status: 0,
+          stdout: [
+            `\tlibwebkit2gtk-4.1.so.0 => ${join(runtimeLib, "libwebkit2gtk-4.1.so.0.19.9")} (0x00007f0000010000)`,
+            `\tlibc.so.6 => ${hostLibc} (0x00007f0000020000)`,
+            `\t${hostLoader} (0x00007f0000030000)`,
+          ].join("\n"),
+          stderr: "",
+        });
+      }
+      return boundedResult({ status: 0, stdout: "", stderr: "" });
+    };
+    const qualified = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: mockRunner,
+    });
+    expect(qualified.checks.find(c => c.id === "launcher")?.ok).toBe(true);
+    expect(qualified.checks.find(c => c.id === "glibc-floor")?.ok).toBe(true);
+    expect(qualified.checks.find(c => c.id === "linkage")?.ok).toBe(true);
+    expect(qualified.checks.find(c => c.id === "private-runtime-closure")?.ok).toBe(true);
+
+    // Parseable provider output with a nonzero readelf status is never accepted as floor evidence.
+    const providerReadelfFailure = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: (program, args) => {
+        if (program === "readelf" && args.includes("-V")) {
+          return boundedResult({ status: 1, stdout: "ELF Header:\n  Class: ELF64\n", stderr: "provider readelf failed" });
+        }
+        return mockRunner(program, args);
+      },
+    });
+    expect(providerReadelfFailure.status).toBe("fail");
+    expect(providerReadelfFailure.checks.find(c => c.id === "private-runtime-closure")?.detail).toMatch(/did not complete safely/);
+
+    // A runner that omits the bounded lifecycle contract cannot become a qualification pass.
+    const unbounded = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: (program) => ({ status: 0, stdout: "", stderr: "", bounded: false, cleanupKnown: true }),
+    });
+    expect(unbounded.status).toBe("fail");
+    expect(unbounded.checks.find(c => c.id === "glibc:gui")?.detail).toMatch(/bounded execution/);
+
+    const incompleteLifecycle = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: payloadInv.identity,
+      commandRunner: (program) => ({ status: 0, stdout: "", stderr: "", bounded: true, cleanupKnown: true }),
+    });
+    expect(incompleteLifecycle.status).toBe("fail");
+    expect(incompleteLifecycle.checks.find(c => c.id === "glibc:gui")?.detail).toMatch(/omitted explicit timedOut/);
+  });
+
+  it("checks expected payload identity for ordinary Darwin payloads", async () => {
+    const payload = scratch("payload-darwin-expected");
+    write(join(payload, "probe.txt"), "darwin probe\n", 0o644);
+    const observed = await inventoryNativePayload(payload);
+    expect(observed.identity).not.toBe("f".repeat(64));
+    await expect(qualifyPayload({
+      platform: "darwin-arm64",
+      payload,
+      checkout: scratch("checkout-darwin-expected"),
+      expectedNativePayloadSha256: "f".repeat(64),
+    })).rejects.toThrow(/Payload native inventory identity .* does not match expected/);
+  });
+
+  it("authenticates a matching Darwin expected identity without emitting Linux payload inventory fields", async () => {
+    const payload = scratch("payload-darwin-matching");
+    write(join(payload, "probe.txt"), "darwin probe\n", 0o644);
+    const observed = await inventoryNativePayload(payload);
+    expect(selectPayloadInventoryForQualification(PLATFORMS["darwin-arm64"], {
+      hasExpectedPayload: true,
+      ordinaryInventory: observed,
+      expectedNativePayloadSha256: observed.identity,
+    })).toBeNull();
   });
 });

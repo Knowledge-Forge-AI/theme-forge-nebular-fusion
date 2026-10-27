@@ -1,13 +1,13 @@
 {
-  "sha256": "a0cda8aee54a4d90688e512a79256d67f3089365901388ccfbe31d45ff7f7c37",
-  "bytes": 211246,
-  "sourceTreeDigest": "d371f3612b7f755600ed222ccd8b3a00e80070f1b357900867ffcc67d2ba7a6c",
+  "sha256": "8b60ebd2f60e653315cb137d87988d99dc9c234416a1c193a420a8032867b11e",
+  "bytes": 211241,
+  "sourceTreeDigest": "21f4f3f86e27c4fee37ee3d70fcdeebd1905d665ce72dec4cc6ad9458838b36d",
   "executableFiles": 39,
   "schema": "tfsb.nebular-scene-binding-v1",
   "engineSchema": "tfsb.vector-scene-v1",
   "compatibility": 1,
   "compilerLevel": 1,
-  "metadataVersion": "0.6.1",
+  "metadataVersion": "0.7.0",
   "capability": "0.5-development",
   "node": {
     "version": "22.23.3",
@@ -24,8 +24,8 @@
     },
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/COMMERCIAL-LICENSE.md",
-      "bytes": 932,
-      "sha256": "a81bcda7ec57a5c09f1cc6d05de420db7a0053b9496f1762065e083a60e5ede2"
+      "bytes": 942,
+      "sha256": "63ddf934056e5e21f70b5fca6824679bff8c759e14c59b9b1704412d5ccc1747"
     },
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/LICENSE",
@@ -34,8 +34,8 @@
     },
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/NOTICE",
-      "bytes": 601,
-      "sha256": "d31e49346c1d4b9ea98ed49b817d48e68c4b9000e1763522da5ffe7f791e3657"
+      "bytes": 611,
+      "sha256": "4a65d0820387e60ff6cd04282d335104a3deb2f32f7c56f3e34fc6576a3089ba"
     },
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/diagnostics.js",
@@ -145,7 +145,7 @@
     {
       "path": "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/package.json",
       "bytes": 170,
-      "sha256": "a5c891be94777f4bdf1a546453fc2d0631deb99fb1715486fbb9d4d213c6da81"
+      "sha256": "11dbb11a32f1df4b1ac677ed4bdea3a6484bd118d1d6036b6c5777566fbf765c"
     },
     {
       "path": "node_modules/@xmldom/xmldom/CHANGELOG.md",
@@ -325,7 +325,7 @@
     {
       "path": "scene-input.json",
       "bytes": 8363,
-      "sha256": "eb57d2dfa1d36d769cee296e37db16d9db8b0e783f15db665841128e46254490"
+      "sha256": "f1917eecc93bdd5c9e31ee9d916bf0ecc6593efe4079675db7c4459e5f37a0d3"
     }
   ]
 }

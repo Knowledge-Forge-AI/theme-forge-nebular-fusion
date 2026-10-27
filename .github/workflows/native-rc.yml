@@ -204,7 +204,7 @@ jobs:
           RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw"
           NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
           run_smoke() {
-            node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+            node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3" --package-manifest-sha256 "$MANIFEST"
           }
           run_smoke A "$RAW_ROOT" raw-archive
           run_smoke A "$NPM_ROOT" npm-package
@@ -398,7 +398,7 @@ jobs:
           RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw/theme-forge-nebular-fusion"
           NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
           run_smoke() {
-            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3" --package-manifest-sha256 "$MANIFEST"
           }
           run_smoke B "$RAW_ROOT" raw-archive
           run_smoke B "$NPM_ROOT" npm-package
@@ -592,7 +592,7 @@ jobs:
           RAW_ROOT="$RUNNER_TEMP/rc/smoke/raw/theme-forge-nebular-fusion"
           NPM_ROOT="$RUNNER_TEMP/rc/smoke/npm/package/payload"
           run_smoke() {
-            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3"
+            xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- node tools/native-rc-smoke.mjs --platform "$NEBULAR_RC_PLATFORM" --scenario "$1" --launch-root "$2" --checkout . --evidence "$RUNNER_TEMP/rc/upload/evidence/smoke" --source "$3" --label "$NEBULAR_RC_PLATFORM-$1-$3" --package-manifest-sha256 "$MANIFEST"
           }
           run_smoke C "$RAW_ROOT" raw-archive
           run_smoke C-signal "$NPM_ROOT" npm-package

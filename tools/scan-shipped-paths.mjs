@@ -5,6 +5,7 @@ import { join, relative, resolve, sep } from "node:path";
 // Literal known-prefix policy, including binary and generated resources. This
 // detects retained build paths, not every byte sequence resembling a pathname.
 // Store/system references remain valid. No generic file-type exclusions apply.
+/** @param {string} root @param {string[]} prefixes @param {{preserveSpellings?: boolean}} [options] @returns {Promise<{policy: string, files: number}>} */
 export async function scanShippedPaths(root, prefixes, { preserveSpellings = false } = {}) {
   const base = await realpath(root);
   // Source authorities bind original locator bytes as well as resolved roots.
@@ -14,6 +15,7 @@ export async function scanShippedPaths(root, prefixes, { preserveSpellings = fal
   if (!needles.length || needles.some(bytes => bytes.length < 2)) throw new Error("Explicit build-path prefixes required");
   const overlap = Math.max(...needles.map(bytes => bytes.length)) - 1;
   let files = 0;
+  /** @param {string} path */
   async function visit(path) {
     const info = await lstat(path);
     if (info.isSymbolicLink()) {

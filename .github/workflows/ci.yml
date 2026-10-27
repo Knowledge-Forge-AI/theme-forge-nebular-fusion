@@ -288,6 +288,7 @@ jobs:
       TFSB_LANGUAGE: ${{ matrix.language }}
       TFSB_MATRIX_JSON: '{"language":"${{ matrix.language }}"}'
       TFSB_CODEQL_REPORT_DIR: .test-reports/codeql-${{ matrix.language }}
+      TFSB_CODEQL_RECEIPT_PATH: .test-reports/codeql-receipt-${{ matrix.language }}.json
     permissions:
       contents: read
       security-events: write # Required by CodeQL analysis upload.
@@ -315,8 +316,8 @@ jobs:
           cache: npm
       - name: Record exact-head receipt
         run: |
-          mkdir -p "$TFSB_CODEQL_REPORT_DIR"
-          node tools/ci/exact-head.mjs --output "$TFSB_CODEQL_REPORT_DIR/receipt.json" --expected-branch staging --expected-base main --checkout-role merge-candidate
+          mkdir -p "$TFSB_CODEQL_REPORT_DIR" "$(dirname "$TFSB_CODEQL_RECEIPT_PATH")"
+          node tools/ci/exact-head.mjs --output "$TFSB_CODEQL_RECEIPT_PATH" --expected-branch staging --expected-base main --checkout-role merge-candidate
       - name: Initialize CodeQL Action
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
@@ -342,7 +343,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           TFSB_REPORT_CATEGORY: ${{ matrix.language }}
-        run: node tools/ci/security-report.mjs "$TFSB_CODEQL_REPORT_DIR" .test-reports/security-normalized/codeql.json nebular-fusion codeql "$TFSB_REPORT_CATEGORY"
+        run: node tools/ci/security-report.mjs "$TFSB_CODEQL_REPORT_DIR" .test-reports/security-normalized/codeql.json nebular-fusion codeql "$TFSB_REPORT_CATEGORY" "$TFSB_CODEQL_RECEIPT_PATH"
       - name: Retain normalized codeql findings independently
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
@@ -456,7 +457,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           TFSB_REPORT_CATEGORY: supply-chain
-        run: node tools/ci/security-report.mjs .test-reports/supply-chain/nebular-fusion.grype.sarif .test-reports/security-normalized/grype.json nebular-fusion grype "$TFSB_REPORT_CATEGORY"
+        run: node tools/ci/security-report.mjs .test-reports/supply-chain/nebular-fusion.grype.sarif .test-reports/security-normalized/grype.json nebular-fusion grype "$TFSB_REPORT_CATEGORY" .test-reports/supply-chain/receipt.json
       - name: Retain normalized grype findings independently
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
