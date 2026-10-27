@@ -39,10 +39,16 @@ fn build_synthetic_verifier_control(root: &Path) -> (PathBuf, SolarSailBuildPinD
         ("dist/assets/tokens.json", "{\"schema\":\"tokens\"}\n"),
         ("dist/cli.d.ts", "export declare const cli: string;\n"),
         ("dist/cli.js", "export const cli = 'cli';\n"),
-        ("dist/compiler.d.ts", "export declare const compile: string;\n"),
+        (
+            "dist/compiler.d.ts",
+            "export declare const compile: string;\n",
+        ),
         ("dist/compiler.js", "export const compile = 'compile';\n"),
         ("dist/index.d.ts", "export declare const index: string;\n"),
-        ("dist/index.d.ts.map", "{\"version\":3,\"file\":\"index.d.ts\"}\n"),
+        (
+            "dist/index.d.ts.map",
+            "{\"version\":3,\"file\":\"index.d.ts\"}\n",
+        ),
         (
             "dist/index.js",
             "import './input.js';\nimport './compiler.js';\nimport './paired-v2/bound.js';\nexport const ok = true;\n",
@@ -90,8 +96,7 @@ fn seal_synthetic_payload(payload_dir: &Path, target: &str) -> SolarSailBuildPin
     });
     let mut binding_bytes = serde_json::to_vec_pretty(&binding_val).expect("serialize binding");
     binding_bytes.push(b'\n');
-    fs::write(payload_dir.join("solar-sail-binding.json"), &binding_bytes)
-        .expect("write binding");
+    fs::write(payload_dir.join("solar-sail-binding.json"), &binding_bytes).expect("write binding");
 
     SolarSailBuildPinDto {
         schema: SOLAR_SAIL_BUILD_PIN_SCHEMA.to_owned(),
@@ -136,7 +141,10 @@ fn n1_to_n5_tamper_transitive_legacy_declarations_and_assets_rejected() {
         tampered[0] ^= 0x01;
         fs::write(&full, &tampered).expect("write tampered");
         let err = verify_payload_with_expectation(&payload_dir, &pin).unwrap_err();
-        assert_eq!(err.reason_code(), StudioReasonCode::SidecarArtifactUnavailable);
+        assert_eq!(
+            err.reason_code(),
+            StudioReasonCode::SidecarArtifactUnavailable
+        );
         fs::write(&full, &orig).expect("restore orig");
         assert!(verify_payload_with_expectation(&payload_dir, &pin).is_ok());
     }
@@ -153,7 +161,10 @@ fn n6_consistent_payload_and_binding_rewrite_fails_against_compiled_pin() {
     .expect("rewrite bound.js");
     let _rewritten_pin = seal_synthetic_payload(&payload_dir, "aarch64-apple-darwin");
     let err = verify_payload_with_expectation(&payload_dir, &compiled_pin).unwrap_err();
-    assert_eq!(err.reason_code(), StudioReasonCode::SidecarArtifactUnavailable);
+    assert_eq!(
+        err.reason_code(),
+        StudioReasonCode::SidecarArtifactUnavailable
+    );
 }
 
 #[test]
@@ -274,7 +285,10 @@ fn n13_to_n22_binding_path_order_collision_count_size_package_and_overflow_negat
         "dist//empty.js",
         "src/index.js",
     ] {
-        assert!(!is_valid_dist_member_path(bad_path), "must reject {bad_path}");
+        assert!(
+            !is_valid_dist_member_path(bad_path),
+            "must reject {bad_path}"
+        );
     }
 
     let binding_path = payload_dir.join("solar-sail-binding.json");
@@ -299,7 +313,10 @@ fn n13_to_n22_binding_path_order_collision_count_size_package_and_overflow_negat
     // N14: duplicate member path
     let mut dup = orig_val.clone();
     let first_member = dup["members"][0].clone();
-    dup["members"].as_array_mut().unwrap().insert(0, first_member);
+    dup["members"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, first_member);
     dup["runtimeMemberCount"] = serde_json::json!(dup["members"].as_array().unwrap().len());
     assert!(re_pin_and_verify(&dup).is_err());
 
@@ -312,7 +329,10 @@ fn n13_to_n22_binding_path_order_collision_count_size_package_and_overflow_negat
     let mut case_coll = orig_val.clone();
     let mut colliding = case_coll["members"][0].clone();
     colliding["path"] = serde_json::json!("dist/ASSETS/tokens.json");
-    case_coll["members"].as_array_mut().unwrap().insert(0, colliding);
+    case_coll["members"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, colliding);
     case_coll["runtimeMemberCount"] =
         serde_json::json!(case_coll["members"].as_array().unwrap().len());
     assert!(re_pin_and_verify(&case_coll).is_err());
@@ -329,7 +349,11 @@ fn n13_to_n22_binding_path_order_collision_count_size_package_and_overflow_negat
     fs::write(&binding_path, &orig_binding_bytes).expect("restore binding");
     let pkg_path = payload_dir.join("package.json");
     let orig_pkg = fs::read(&pkg_path).expect("read pkg");
-    fs::write(&pkg_path, br#"{"name":"@knowledge-forge-ai/theme-forge-solar-sail","version":"0.2.0"}"#).expect("tamper pkg");
+    fs::write(
+        &pkg_path,
+        br#"{"name":"@knowledge-forge-ai/theme-forge-solar-sail","version":"0.2.0"}"#,
+    )
+    .expect("tamper pkg");
     assert!(verify_payload_with_expectation(&payload_dir, &base_pin).is_err());
     fs::write(&pkg_path, &orig_pkg).expect("restore pkg");
 
@@ -351,27 +375,83 @@ fn n23_n24_build_pin_grammar_and_provenance_negatives() {
         "binding": { "size": 512, "sha256": "b".repeat(64), "inventoryDigest": "c".repeat(64), "memberCount": 10 },
         "provenance": { "publishedArchive": { "name": EXPECTED_SOLAR_SAIL_NAME, "version": ADMITTED_SOLAR_SAIL_ARCHIVE_VERSION, "size": ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE, "sha256": ADMITTED_SOLAR_SAIL_ARCHIVE_SHA256 } }
     });
-    assert!(parse_build_pin_expectation(&valid_pub.to_string(), "published-archive", "aarch64-apple-darwin", None).is_ok());
-    assert!(parse_build_pin_expectation(&valid_pub.to_string(), "structured-source", "aarch64-apple-darwin", Some(&"d".repeat(64))).is_err());
-    assert!(parse_build_pin_expectation(&valid_pub.to_string(), "published-archive", "x86_64-unknown-linux-gnu", None).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &valid_pub.to_string(),
+            "published-archive",
+            "aarch64-apple-darwin",
+            None
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_build_pin_expectation(
+            &valid_pub.to_string(),
+            "structured-source",
+            "aarch64-apple-darwin",
+            Some(&"d".repeat(64))
+        )
+        .is_err()
+    );
+    assert!(
+        parse_build_pin_expectation(
+            &valid_pub.to_string(),
+            "published-archive",
+            "x86_64-unknown-linux-gnu",
+            None
+        )
+        .is_err()
+    );
 
     let mut both = valid_pub.clone();
     both["provenance"]["structuredSource"] = serde_json::json!({
         "sourceCandidate": "d".repeat(64), "componentSource": "e".repeat(64), "output": "f".repeat(64), "producer": "1".repeat(64), "version": "0.2.1",
     });
-    assert!(parse_build_pin_expectation(&both.to_string(), "published-archive", "aarch64-apple-darwin", None).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &both.to_string(),
+            "published-archive",
+            "aarch64-apple-darwin",
+            None
+        )
+        .is_err()
+    );
 
     let mut neither = valid_pub.clone();
     neither["provenance"] = serde_json::json!({});
-    assert!(parse_build_pin_expectation(&neither.to_string(), "published-archive", "aarch64-apple-darwin", None).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &neither.to_string(),
+            "published-archive",
+            "aarch64-apple-darwin",
+            None
+        )
+        .is_err()
+    );
 
     let mut unknown_key = valid_pub.clone();
     unknown_key["extra"] = serde_json::json!(true);
-    assert!(parse_build_pin_expectation(&unknown_key.to_string(), "published-archive", "aarch64-apple-darwin", None).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &unknown_key.to_string(),
+            "published-archive",
+            "aarch64-apple-darwin",
+            None
+        )
+        .is_err()
+    );
 
     let mut wrong_schema = valid_pub.clone();
     wrong_schema["schema"] = serde_json::json!("nebular-solar-sail-build-pin-v0");
-    assert!(parse_build_pin_expectation(&wrong_schema.to_string(), "published-archive", "aarch64-apple-darwin", None).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &wrong_schema.to_string(),
+            "published-archive",
+            "aarch64-apple-darwin",
+            None
+        )
+        .is_err()
+    );
 
     for (field, bad_val) in [
         ("version", serde_json::json!("0.2.0")),
@@ -380,7 +460,15 @@ fn n23_n24_build_pin_grammar_and_provenance_negatives() {
     ] {
         let mut bad = valid_pub.clone();
         bad["provenance"]["publishedArchive"][field] = bad_val;
-        assert!(parse_build_pin_expectation(&bad.to_string(), "published-archive", "aarch64-apple-darwin", None).is_err());
+        assert!(
+            parse_build_pin_expectation(
+                &bad.to_string(),
+                "published-archive",
+                "aarch64-apple-darwin",
+                None
+            )
+            .is_err()
+        );
     }
 
     let valid_src = serde_json::json!({
@@ -390,8 +478,24 @@ fn n23_n24_build_pin_grammar_and_provenance_negatives() {
         "binding": { "size": 512, "sha256": "b".repeat(64), "inventoryDigest": "c".repeat(64), "memberCount": 16 },
         "provenance": { "structuredSource": { "sourceCandidate": "d".repeat(64), "componentSource": "e".repeat(64), "output": "f".repeat(64), "producer": "1".repeat(64), "version": "0.2.1" } }
     });
-    assert!(parse_build_pin_expectation(&valid_src.to_string(), "structured-source", "aarch64-apple-darwin", Some(&"d".repeat(64))).is_ok());
-    assert!(parse_build_pin_expectation(&valid_src.to_string(), "structured-source", "aarch64-apple-darwin", Some(&"9".repeat(64))).is_err());
+    assert!(
+        parse_build_pin_expectation(
+            &valid_src.to_string(),
+            "structured-source",
+            "aarch64-apple-darwin",
+            Some(&"d".repeat(64))
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_build_pin_expectation(
+            &valid_src.to_string(),
+            "structured-source",
+            "aarch64-apple-darwin",
+            Some(&"9".repeat(64))
+        )
+        .is_err()
+    );
     for (field, bad_val) in [
         ("componentSource", serde_json::json!("bad")),
         ("output", serde_json::json!("bad")),
@@ -400,7 +504,15 @@ fn n23_n24_build_pin_grammar_and_provenance_negatives() {
     ] {
         let mut bad_src = valid_src.clone();
         bad_src["provenance"]["structuredSource"][field] = bad_val;
-        assert!(parse_build_pin_expectation(&bad_src.to_string(), "structured-source", "aarch64-apple-darwin", Some(&"d".repeat(64))).is_err());
+        assert!(
+            parse_build_pin_expectation(
+                &bad_src.to_string(),
+                "structured-source",
+                "aarch64-apple-darwin",
+                Some(&"d".repeat(64))
+            )
+            .is_err()
+        );
     }
     #[cfg(not(nebular_solar_sail_pin))]
     assert!(compiled_expectation().is_err());

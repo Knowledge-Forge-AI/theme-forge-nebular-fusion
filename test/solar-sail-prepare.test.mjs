@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile, readFile, cp } from "node:fs/promises";
+import { chmod, cp, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -138,7 +138,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     expect(binding1.inventoryDigest).not.toBe(binding2.inventoryDigest);
   });
 
-  const EXPECTED_SOLAR_SAIL_TARBALL_SHA256 = "5d1c30f55e52b7fbbf5313e70971961bfbe2e2bf8ffec6a706e748058ea3873f";
+  const EXPECTED_SOLAR_SAIL_TARBALL_SHA256 = "65070c3478a1d55476c1b09fbe1dcadfdf7c3d3aa54a154bc9ac9e299411f415";
 
   function findCandidateTarball() {
     const currentStudioRoot = resolve(__dirname, "..");
@@ -233,10 +233,52 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     );
   });
 
-  it("fails closed when extracting a non-tarball or missing archive", () => {
+  it("fails closed when extracting a non-tarball or missing archive", async () => {
     const bogus = join(tempDir, "bogus.tgz");
-    expect(() => extractTarballSafely(bogus, join(tempDir, "dest"))).toThrow(
+    await expect(extractTarballSafely(bogus, join(tempDir, "dest"))).rejects.toThrow(
       /\[SOLAR_SAIL_PREPARE_FAIL\]/
+    );
+  });
+
+  it("refuses symlink, hardlink, privilege-bit, and oversized archive descriptors before tar", async () => {
+    const regular = join(tempDir, "regular.tgz");
+    await writeFile(regular, Buffer.from("not a tarball\n"));
+
+    const linked = join(tempDir, "linked.tgz");
+    await link(regular, linked);
+    await expect(extractTarballSafely(linked, join(tempDir, "linked-dest"))).rejects.toThrow(
+      /Hardlinked regular file refused/
+    );
+
+    const symlinked = join(tempDir, "symlinked.tgz");
+    await symlink(regular, symlinked);
+    await expect(extractTarballSafely(symlinked, join(tempDir, "symlinked-dest"))).rejects.toThrow(
+      /regular non-symlink|O_NOFOLLOW/
+    );
+
+    const privileged = join(tempDir, "privileged.tgz");
+    await writeFile(privileged, Buffer.from("not a tarball\n"));
+    await chmod(privileged, 0o1600);
+    await expect(extractTarballSafely(privileged, join(tempDir, "privileged-dest"))).rejects.toThrow(
+      /Unexpected privilege bits/
+    );
+
+    const oversized = join(tempDir, "oversized.tgz");
+    await writeFile(oversized, Buffer.alloc(ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE + 1, 0x61));
+    await expect(extractTarballSafely(oversized, join(tempDir, "oversized-dest"))).rejects.toThrow(
+      /exceeds byte limit/
+    );
+  });
+
+  it("refuses a directory or empty regular descriptor after opening it", async () => {
+    await expect(extractTarballSafely(tempDir, join(tempDir, "directory-dest"))).rejects.toThrow(
+      /regular non-symlink/
+    );
+
+    const empty = join(tempDir, "empty.tgz");
+    await writeFile(empty, Buffer.alloc(0));
+    await expect(extractTarballSafely(empty, join(tempDir, "empty-dest"))).rejects.toThrow(
+      /Empty regular file/
     );
   });
 
@@ -244,7 +286,7 @@ describe("solar-sail-prepare candidate authentication and cryptographic binding"
     const targetTarball = findCandidateTarball();
     const scratch = join(tempDir, "candidate-unpack");
     await mkdir(scratch, { recursive: true });
-    const pkgRoot = extractTarballSafely(targetTarball, scratch);
+    const pkgRoot = await extractTarballSafely(targetTarball, scratch);
     expect(existsSync(join(pkgRoot, "package.json"))).toBe(true);
 
     const binding = await authenticateSolarSailCandidate(pkgRoot, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);

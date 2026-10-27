@@ -13,7 +13,7 @@ pub(crate) const SOLAR_SAIL_BUILD_PIN_SCHEMA: &str = "nebular-solar-sail-build-p
 pub(crate) const ADMITTED_SOLAR_SAIL_ARCHIVE_VERSION: &str = "0.3.0";
 pub(crate) const ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE: u64 = 110_836;
 pub(crate) const ADMITTED_SOLAR_SAIL_ARCHIVE_SHA256: &str =
-    "5d1c30f55e52b7fbbf5313e70971961bfbe2e2bf8ffec6a706e748058ea3873f";
+    "65070c3478a1d55476c1b09fbe1dcadfdf7c3d3aa54a154bc9ac9e299411f415";
 
 pub(crate) const SOLAR_SAIL_METADATA_LEAVES: [&str; 6] = [
     "COMMERCIAL-LICENSE.md",
@@ -298,10 +298,7 @@ fn is_valid_dist_member_path(path: &str) -> bool {
         return false;
     }
     segments.iter().all(|seg| {
-        !seg.is_empty()
-            && *seg != "."
-            && *seg != ".."
-            && seg.bytes().all(is_valid_segment_char)
+        !seg.is_empty() && *seg != "." && *seg != ".." && seg.bytes().all(is_valid_segment_char)
     })
 }
 
@@ -313,7 +310,10 @@ fn verify_top_level_layout(payload_dir: &Path) -> StudioResult<()> {
     let mut names = Vec::new();
     for entry_res in fs::read_dir(payload_dir).map_err(|_| sidecar_unavail())? {
         let entry = entry_res.map_err(|_| sidecar_unavail())?;
-        let name = entry.file_name().into_string().map_err(|_| sidecar_unavail())?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| sidecar_unavail())?;
         let meta = fs::symlink_metadata(entry.path()).map_err(|_| sidecar_unavail())?;
         if meta.file_type().is_symlink() {
             return Err(sidecar_unavail());
@@ -323,11 +323,8 @@ fn verify_top_level_layout(payload_dir: &Path) -> StudioResult<()> {
                 return Err(sidecar_unavail());
             }
         } else {
-            let _ = read_regular_no_follow_under(
-                payload_dir,
-                &entry.path(),
-                MAX_METADATA_FILE_BYTES,
-            )?;
+            let _ =
+                read_regular_no_follow_under(payload_dir, &entry.path(), MAX_METADATA_FILE_BYTES)?;
         }
         names.push(name);
     }
@@ -361,7 +358,10 @@ fn collect_physical_dist_files(
     let mut lower_names = BTreeSet::new();
     for entry_res in fs::read_dir(dir).map_err(|_| sidecar_unavail())? {
         let entry = entry_res.map_err(|_| sidecar_unavail())?;
-        let name = entry.file_name().into_string().map_err(|_| sidecar_unavail())?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| sidecar_unavail())?;
         if name.is_empty()
             || name == "."
             || name == ".."

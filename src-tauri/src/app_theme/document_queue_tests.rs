@@ -70,9 +70,7 @@ fn find_node() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Err("node runtime executable not found".into())
 }
 
-fn write_mock_adapter(
-    dir: &Path,
-) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
+fn write_mock_adapter(dir: &Path) -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
     let adapter_path = dir.join("mock-adapter.mjs");
     let marker_path = dir.join("spawn-marker.txt");
     let marker_lit = serde_json::to_string(&marker_path.to_string_lossy().into_owned())?;
@@ -165,9 +163,7 @@ fn q1_cancel_documents_during_registration_gap_prevents_child_spawn()
     release_tx.send(())?;
 
     for handle in [handle_t0, handle_t1] {
-        let res = handle
-            .join()
-            .map_err(|_| "bind_document thread panicked")?;
+        let res = handle.join().map_err(|_| "bind_document thread panicked")?;
         match res {
             Err(err) => assert_eq!(err.reason_code(), StudioReasonCode::Cancelled),
             Ok(_) => return Err("expected Cancelled error during registration gap".into()),
@@ -226,7 +222,10 @@ fn q2_save_profile_path_cancelled_during_registration_gap_performs_no_filesystem
     release_tx.send(())?;
     let shutdown_res = h_shutdown.join().map_err(|_| "shutdown save panicked")??;
     assert!(shutdown_res.cancelled && !shutdown_res.saved && shutdown_res.document.is_none());
-    assert!(!marker.exists(), "shutdown during registration gap must prevent child spawn");
+    assert!(
+        !marker.exists(),
+        "shutdown during registration gap must prevent child spawn"
+    );
     assert_eq!(std::fs::read(&existing_dest)?, b"sentinel-original-bytes");
 
     // Reset during registration gap with absent destination file.
@@ -249,7 +248,10 @@ fn q2_save_profile_path_cancelled_during_registration_gap_performs_no_filesystem
     release_tx2.send(())?;
     let reset_res = h_reset.join().map_err(|_| "reset save panicked")??;
     assert!(reset_res.cancelled && !reset_res.saved && reset_res.document.is_none());
-    assert!(!marker.exists(), "reset during registration gap must prevent child spawn");
+    assert!(
+        !marker.exists(),
+        "reset during registration gap must prevent child spawn"
+    );
     assert!(!absent_dest.exists());
     Ok(())
 }
@@ -296,7 +298,10 @@ fn q3_stale_completion_does_not_clear_newer_active_cancel_token()
             .map_err(|_| "lock poisoned")?;
         assert!(st.is_active);
         assert_eq!(st.serving_ticket, 1);
-        let token1 = st.active_cancel.as_ref().ok_or("expected Ticket 1 active_cancel")?;
+        let token1 = st
+            .active_cancel
+            .as_ref()
+            .ok_or("expected Ticket 1 active_cancel")?;
         assert!(!token1.load(Ordering::SeqCst));
     }
     release_tx1.send(())?;
@@ -307,7 +312,8 @@ fn q3_stale_completion_does_not_clear_newer_active_cancel_token()
     // Part 2: Direct Arc::ptr_eq guard check when active_cancel is replaced before cleanup.
     let (entered_rx, release_tx) = runner.install_document_registration_gate();
     let runner_clone = runner.clone();
-    let handle = thread::spawn(move || runner_clone.bind_document(SAMPLE_V1_PROFILE_JSON, Some(12)));
+    let handle =
+        thread::spawn(move || runner_clone.bind_document(SAMPLE_V1_PROFILE_JSON, Some(12)));
 
     entered_rx.recv_timeout(Duration::from_secs(3))?;
     let newer_token = Arc::new(AtomicBool::new(false));
@@ -333,7 +339,10 @@ fn q3_stale_completion_does_not_clear_newer_active_cancel_token()
             .execution_state
             .lock()
             .map_err(|_| "lock poisoned")?;
-        let current = st.active_cancel.as_ref().ok_or("expected newer_token to remain installed")?;
+        let current = st
+            .active_cancel
+            .as_ref()
+            .ok_or("expected newer_token to remain installed")?;
         assert!(Arc::ptr_eq(current, &newer_token));
         assert!(!newer_token.load(Ordering::SeqCst));
     }
@@ -394,8 +403,7 @@ fn q5_preview_compile_and_document_cancellation_are_independent()
     // 1. Preview cancel_active() must not cancel an in-flight document request.
     let (entered_rx, release_tx) = runner.install_document_registration_gate();
     let r_doc = runner.clone();
-    let doc_handle =
-        thread::spawn(move || r_doc.bind_document(SAMPLE_V1_PROFILE_JSON, Some(7)));
+    let doc_handle = thread::spawn(move || r_doc.bind_document(SAMPLE_V1_PROFILE_JSON, Some(7)));
     entered_rx.recv_timeout(Duration::from_secs(3))?;
     runner.cancel_active();
     release_tx.send(())?;

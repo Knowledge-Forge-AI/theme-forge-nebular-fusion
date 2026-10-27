@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+const MAX_CARGO_CONFIG_BYTES = 1024 * 1024;
+const CARGO_CONFIG_READ_FLAGS = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
 
 function fail(message) {
   throw new Error(`native cargo home contract: ${message}`);
@@ -18,6 +21,85 @@ function overlaps(first, second) {
 
 function ownerUid() {
   return typeof process.getuid === "function" ? process.getuid() : null;
+}
+
+/** @param {import("node:fs").BigIntStats} stat @returns {(string|number)[]} */
+function descriptorFrame(stat) {
+  return [
+    String(stat.dev),
+    String(stat.ino),
+    Number(stat.size),
+    Number(stat.mode),
+    String(stat.mtimeNs),
+    String(stat.ctimeNs),
+    Number(stat.uid),
+    Number(stat.gid),
+    Number(stat.nlink),
+  ];
+}
+
+/** @param {(string|number)[]} left @param {(string|number)[]} right */
+function sameDescriptor(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * Reads one existing regular file through the opened descriptor.  The leaf
+ * path is checked only as a named-path identity bookend; cache members remain
+ * opaque and are never enumerated or opened by this contract.
+ * @param {string} bindPath
+ * @param {number} maxBytes
+ * @returns {Promise<{ buffer: Buffer, bytes: number, mode: number, full9: (string|number)[] }>}
+ */
+async function readRegularSnapshot(bindPath, maxBytes) {
+  let fh;
+  /** @type {(string|number)[] | null} */
+  let openedFrame = null;
+  try {
+    fh = await open(bindPath, CARGO_CONFIG_READ_FLAGS);
+  } catch (error) {
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "ELOOP" || fsError.code === "EMLINK") fail("config.toml must be a regular file, not a symbolic link");
+    throw error;
+  }
+  try {
+    const opened = await fh.stat({ bigint: true });
+    if (!opened.isFile()) fail("config.toml must be a regular file");
+    if (Number(opened.nlink) !== 1) fail("config.toml hardlinks are not accepted");
+    if ((Number(opened.mode) & 0o7000) !== 0) fail("config.toml has unexpected privilege bits");
+    const size = Number(opened.size);
+    if (size < 0 || size > maxBytes) fail(`config.toml exceeds byte limit (${size} > ${maxBytes})`);
+    const beforeFrame = descriptorFrame(opened);
+    openedFrame = beforeFrame;
+    const namedBefore = await lstat(bindPath, { bigint: true });
+    if (namedBefore.isSymbolicLink() || !namedBefore.isFile() || !sameDescriptor(descriptorFrame(namedBefore), beforeFrame)) {
+      fail("config.toml named path changed during open");
+    }
+
+    const buffer = Buffer.allocUnsafe(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await fh.read(buffer, offset, size - offset, offset);
+      if (bytesRead === 0) fail("config.toml was truncated during read");
+      offset += bytesRead;
+    }
+    const extra = Buffer.allocUnsafe(1);
+    const { bytesRead: extraRead } = await fh.read(extra, 0, 1, offset);
+    if (extraRead > 0) fail("config.toml grew during read");
+    const ended = await fh.stat({ bigint: true });
+    if (!sameDescriptor(descriptorFrame(ended), beforeFrame)) fail("config.toml descriptor changed during read");
+    const namedAfterRead = await lstat(bindPath, { bigint: true });
+    if (namedAfterRead.isSymbolicLink() || !namedAfterRead.isFile() || !sameDescriptor(descriptorFrame(namedAfterRead), beforeFrame)) {
+      fail("config.toml named path changed during read");
+    }
+    return { buffer, bytes: size, mode: Number(opened.mode) & 0o777, full9: beforeFrame };
+  } finally {
+    await fh.close();
+    const afterNamed = await lstat(bindPath, { bigint: true });
+    if (openedFrame && (afterNamed.isSymbolicLink() || !afterNamed.isFile() || !sameDescriptor(descriptorFrame(afterNamed), openedFrame))) {
+      fail("config.toml named path changed after close");
+    }
+  }
 }
 
 /**
@@ -100,9 +182,8 @@ export async function chooseNativeCargoHome({
   }
 
   const configPath = join(home, "config.toml");
-  const configInfo = await lstat(configPath).catch(() => null);
-  if (!configInfo || configInfo.isSymbolicLink() || !configInfo.isFile()) fail("workingCargoHome/config.toml must be a regular file");
-  const config = await readFile(configPath, "utf8");
+  const configSnapshot = await readRegularSnapshot(configPath, MAX_CARGO_CONFIG_BYTES);
+  const config = configSnapshot.buffer.toString("utf8");
   if (config !== expectedCargoConfig) fail("workingCargoHome config does not match the authenticated build settings");
 
   return {

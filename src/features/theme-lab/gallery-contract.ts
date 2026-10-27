@@ -31,7 +31,7 @@ function isCodePresentationConfig(cp: unknown): cp is CodePresentationConfig {
 // ---------------------------------------------------------------------------
 
 export const EXPECTED_ARCHIVE_SHA256 =
-  "864f38c28cbe62d8c1bd99b4769bb74d2155b96e9de94fcab6552af807f89346" as const;
+  "4e7a7d436c09ba111f5dca8101876c6e085ad15859d96bab8f728c5669880b5f" as const;
 
 export const EXPECTED_CONSUMER_LOCK_DIGEST =
   "7c3c03ea0b02f2af883e411ba4500d7ef2951a7bd599e452d3bb91e23a8c9bbf" as const;

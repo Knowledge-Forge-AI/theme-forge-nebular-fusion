@@ -1,7 +1,7 @@
 // Product targets, deliberately narrower than Burst's historical target set.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL as NodeURL } from "node:url";
 
 /** @typedef {{ system: "aarch64-darwin" | "aarch64-linux" | "x86_64-linux", triple: "aarch64-apple-darwin" | "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu", os: "darwin" | "linux", cpu: "arm64" | "x64", addon: "darwin-arm64" | "linux-arm64-gnu" | "linux-x64-gnu", format: "app.tar.gz" | "tar.gz" }} PlatformTarget */
 /** @typedef {{ bundle?: { resources?: unknown, externalBin?: string[] } }} TauriConfig */
@@ -17,7 +17,7 @@ export function requireCandidateVersion(version) {
 }
 
 /** @param {string} [studioRoot] @returns {string} */
-export function readCandidateVersion(studioRoot = fileURLToPath(new URL("../", import.meta.url))) {
+export function readCandidateVersion(studioRoot = fileURLToPath(new NodeURL("../", import.meta.url))) {
   return requireCandidateVersion(JSON.parse(readFileSync(join(studioRoot, "package.json"), "utf8")).version);
 }
 

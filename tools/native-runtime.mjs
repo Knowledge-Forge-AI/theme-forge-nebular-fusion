@@ -30,6 +30,12 @@ export const MAX_RUNTIME_PATH_DEPTH = 16;
 export const MAX_RUNTIME_ALIAS_DEPTH = 8;
 export const MAX_RUNTIME_INPUT_BYTES = 16 * 1024 * 1024;
 
+// Runtime descriptor reads must acquire a non-following, non-blocking read
+// handle before inspecting any leaf-path metadata.  The runtime payload is
+// Linux-only; O_NONBLOCK keeps a non-regular replacement (for example, a FIFO)
+// from turning a bounded admission read into an unbounded wait.
+const REGULAR_READ_FLAGS = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+
 export const REQUIRED_RUNTIME_DIRECTORIES = Object.freeze([
   "opt/nebular-private",
   "opt/nebular-private/lib",
@@ -758,6 +764,8 @@ async function hashRegularNoFollow(absPath, stableStat, { label, maxBytes }) {
     throw new Error(`${label} exceeds byte limit (${size} > ${maxBytes}): ${absPath}`);
   }
   const fh = await open(absPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  /** @type {unknown} */
+  let primaryError = null;
   try {
     const opened = await fh.stat({ bigint: true });
     if (!full9Equal(statFull9(opened), beforeFrame)) {
@@ -780,11 +788,16 @@ async function hashRegularNoFollow(absPath, stableStat, { label, maxBytes }) {
       throw new Error(`Descriptor drift after read for ${label}: ${absPath}`);
     }
     return createHash("sha256").update(buf).digest("hex");
+  } catch (err) {
+    primaryError = err;
+    throw err;
   } finally {
     await fh.close();
-    const afterNamed = await lstat(absPath, { bigint: true });
-    if (!full9Equal(statFull9(afterNamed), beforeFrame)) {
-      throw new Error(`Named file drift after close for ${label}: ${absPath}`);
+    if (!primaryError) {
+      const afterNamed = await lstat(absPath, { bigint: true });
+      if (!full9Equal(statFull9(afterNamed), beforeFrame)) {
+        throw new Error(`Named file drift after close for ${label}: ${absPath}`);
+      }
     }
   }
 }
@@ -1013,26 +1026,40 @@ async function writeExclusiveFile(destPath, content, mode) {
  * @param {number} maxBytes
  */
 async function readRegularDescriptorChecked(filePath, maxBytes) {
-  const before = await lstat(filePath, { bigint: true });
-  if (before.isSymbolicLink() || !before.isFile()) {
-    throw new Error(`Expected regular file (not symlink): ${filePath}`);
+  let fh;
+  /** @type {(string|number)[] | null} */
+  let openedFrame = null;
+  /** @type {unknown} */
+  let primaryError = null;
+  try {
+    fh = await open(filePath, REGULAR_READ_FLAGS);
+  } catch (error) {
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "ELOOP" || fsError.code === "EMLINK") {
+      throw new Error(`Expected regular file (not symlink): ${filePath}`);
+    }
+    throw error;
   }
-  if (Number(before.nlink) !== 1) {
-    throw new Error(`Hardlinked regular file refused (nlink=${String(before.nlink)}): ${filePath}`);
-  }
-  if ((Number(before.mode) & 0o7000) !== 0) {
-    throw new Error(`Unexpected privilege bits on regular file: ${filePath}`);
-  }
-  const size = Number(before.size);
-  if (size < 0 || size > maxBytes) {
-    throw new Error(`Regular file exceeds byte limit (${size} > ${maxBytes}): ${filePath}`);
-  }
-  const beforeFrame = statFull9(before);
-  const fh = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   try {
     const opened = await fh.stat({ bigint: true });
-    if (!full9Equal(statFull9(opened), beforeFrame)) {
-      throw new Error(`Descriptor drift on open: ${filePath}`);
+    if (!opened.isFile()) {
+      throw new Error(`Expected regular file (not symlink): ${filePath}`);
+    }
+    if (Number(opened.nlink) !== 1) {
+      throw new Error(`Hardlinked regular file refused (nlink=${String(opened.nlink)}): ${filePath}`);
+    }
+    if ((Number(opened.mode) & 0o7000) !== 0) {
+      throw new Error(`Unexpected privilege bits on regular file: ${filePath}`);
+    }
+    const size = Number(opened.size);
+    if (size < 0 || size > maxBytes) {
+      throw new Error(`Regular file exceeds byte limit (${size} > ${maxBytes}): ${filePath}`);
+    }
+    const beforeFrame = statFull9(opened);
+    openedFrame = beforeFrame;
+    const namedBefore = await lstat(filePath, { bigint: true });
+    if (namedBefore.isSymbolicLink() || !namedBefore.isFile() || !full9Equal(statFull9(namedBefore), beforeFrame)) {
+      throw new Error(`Named file drift on open: ${filePath}`);
     }
     const buf = Buffer.allocUnsafe(size);
     let offset = 0;
@@ -1050,19 +1077,28 @@ async function readRegularDescriptorChecked(filePath, maxBytes) {
     if (!full9Equal(statFull9(ended), beforeFrame)) {
       throw new Error(`Descriptor drift after read: ${filePath}`);
     }
+    const namedAfterRead = await lstat(filePath, { bigint: true });
+    if (namedAfterRead.isSymbolicLink() || !namedAfterRead.isFile() || !full9Equal(statFull9(namedAfterRead), beforeFrame)) {
+      throw new Error(`Named file drift after read: ${filePath}`);
+    }
     const sha256 = createHash("sha256").update(buf).digest("hex");
     return {
       bytes: size,
-      mode: Number(before.mode) & 0o777,
+      mode: Number(opened.mode) & 0o777,
       sha256,
       full9: beforeFrame,
       buffer: buf,
     };
+  } catch (err) {
+    primaryError = err;
+    throw err;
   } finally {
     await fh.close();
-    const afterNamed = await lstat(filePath, { bigint: true });
-    if (!full9Equal(statFull9(afterNamed), beforeFrame)) {
-      throw new Error(`Named file drift after close: ${filePath}`);
+    if (!primaryError && openedFrame) {
+      const afterNamed = await lstat(filePath, { bigint: true });
+      if (afterNamed.isSymbolicLink() || !afterNamed.isFile() || !full9Equal(statFull9(afterNamed), openedFrame)) {
+        throw new Error(`Named file drift after close: ${filePath}`);
+      }
     }
   }
 }

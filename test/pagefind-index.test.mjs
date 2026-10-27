@@ -3,12 +3,13 @@
 // same pages written in a different order must produce byte-identical Pagefind output, and the only
 // platform-specific members are the pinned WASM payloads of the Pagefind release binary.
 import { describe, it, expect, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { PAGEFIND_WASM_PAYLOADS, reindexPagefindSite, sitePages } from "../tools/pagefind-index.mjs";
+import { PAGEFIND_WASM_PAYLOADS, pagefindOutputManifest, reindexPagefindSite, sitePages } from "../tools/pagefind-index.mjs";
 
 const NODE_MODULES = new URL("../loom-preview-source/node_modules", import.meta.url).pathname;
 const installed = existsSync(join(NODE_MODULES, "pagefind/package.json"));
@@ -43,6 +44,42 @@ function inventory(root) {
   visit(root);
   return files;
 }
+
+describe("Pagefind output completeness contract", () => {
+  it("rejects a zero-byte member before output promotion", () => {
+    const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-output-contract-"));
+    roots.push(root);
+    mkdirSync(join(root, "index"), { recursive: true });
+    writeFileSync(join(root, "index", "pagefind-entry.json"), "{}\n");
+    writeFileSync(join(root, "pagefind-component-ui.js"), "");
+    expect(() => pagefindOutputManifest(root)).toThrow(/zero-byte member/);
+  });
+
+  it("returns a stable sorted manifest for complete members", () => {
+    const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-output-contract-"));
+    roots.push(root);
+    mkdirSync(join(root, "index"), { recursive: true });
+    writeFileSync(join(root, "index", "pagefind-entry.json"), "{}\n");
+    writeFileSync(join(root, "pagefind-component-ui.js"), "console.log(1);\n");
+    expect(pagefindOutputManifest(root).map(({ path }) => path)).toEqual(["index/pagefind-entry.json", "pagefind-component-ui.js"]);
+  });
+
+  it("rejects symbolic links before reading a member body", () => {
+    const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-output-contract-"));
+    roots.push(root);
+    writeFileSync(join(root, "target.js"), "const target = true;\n");
+    symlinkSync("target.js", join(root, "member.js"));
+    expect(() => pagefindOutputManifest(root)).toThrow(/symbolic link/);
+  });
+
+  it("rejects non-regular members before reading a member body", () => {
+    const root = mkdtempSync(join(tmpdir(), "nebular-pagefind-output-contract-"));
+    roots.push(root);
+    const fifo = join(root, "member.fifo");
+    execFileSync("mkfifo", [fifo]);
+    expect(() => pagefindOutputManifest(root)).toThrow(/unsupported type/);
+  });
+});
 
 describe.skipIf(!installed)("deterministic Pagefind preview index", () => {
   it("lists pages in sorted order regardless of creation order", () => {

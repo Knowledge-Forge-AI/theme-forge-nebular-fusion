@@ -25,7 +25,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { constants, existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { constants, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -40,12 +40,12 @@ const STUDIO_ROOT = resolve(__dirname, "..");
 export const EXPECTED_BURST_NAME = "@knowledge-forge-ai/theme-forge-stellar-burst";
 export const EXPECTED_BURST_VERSION = "0.7.0";
 export const EXPECTED_BURST_SHA256 =
-  "d17f95cfb3d0661e069f099f196cd5adaa79637d96cfe2d62467324142cb1cbd";
+  "c4b609a0b4705b17483577d5bde5deea518a83af08ce4d93c4662fa7cacc7d88";
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
 export const EXPECTED_LOOM_VERSION = "0.5.0";
 export const EXPECTED_LOOM_SHA256 =
-  "864f38c28cbe62d8c1bd99b4769bb74d2155b96e9de94fcab6552af807f89346";
+  "4e7a7d436c09ba111f5dca8101876c6e085ad15859d96bab8f728c5669880b5f";
 
 import {
   EXPECTED_NODE_VERSION,
@@ -256,7 +256,7 @@ export function locateDependencyDirectories(options = {}) {
       const tPkg = JSON.parse(readFileSync(join(tomlDir, "package.json"), "utf8"));
       if (xPkg.name === "@xmldom/xmldom" && xPkg.version === "0.9.12" &&
           tPkg.name === "smol-toml" && tPkg.version === "1.9.1") {
-        return { xmldomDir, tomlDir };
+        return { xmldomDir: realpathSync(xmldomDir), tomlDir: realpathSync(tomlDir) };
       }
     }
   }

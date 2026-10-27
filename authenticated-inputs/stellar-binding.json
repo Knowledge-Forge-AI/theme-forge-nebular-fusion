@@ -4,7 +4,7 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "4b00553295388a1223947f3130c4bc809f5d27ec",
+    "sourceTree": "f0c758fcc9b14ff64097dd47c1cfa1f6a806f183",
     "sourceRole": "exact-composition-input",
     "sourceMaterializationSha256": null,
     "publicMergeCommit": null,
@@ -14,7 +14,7 @@
     "supportLock": {
       "path": "package-lock.json",
       "source": "exact-composition-input-tree",
-      "sourceTree": "4b00553295388a1223947f3130c4bc809f5d27ec",
+      "sourceTree": "f0c758fcc9b14ff64097dd47c1cfa1f6a806f183",
       "sha256": "8534f5e5d12eeccbc74d3db2036465d4e6a6eb0b9496c0ff5160da765c9bbdbf",
       "size": 57174,
       "packageJson": "burst-rc-archive:package/package.json",
@@ -175,9 +175,9 @@
   "scene": {
     "status": "included-authenticated",
     "filename": "scene-input.tgz",
-    "sha256": "8b60ebd2f60e653315cb137d87988d99dc9c234416a1c193a420a8032867b11e",
-    "bytes": 211241,
-    "sourceTreeDigest": "21f4f3f86e27c4fee37ee3d70fcdeebd1905d665ce72dec4cc6ad9458838b36d"
+    "sha256": "658bb7d36042b828b1e41b10580d9e0872f2648e1f56d9426c4fa3084a6790c3",
+    "bytes": 218447,
+    "sourceTreeDigest": "608b94958cbdc30a43ad492ce92ee8e312f084e93c77a5d3e01e84e35617d9d8"
   },
   "solarSail": {
     "name": "@knowledge-forge-ai/theme-forge-solar-sail",

@@ -1,6 +1,6 @@
 {
   "schema": "tfsb.theme-lab-payload-binding-v1",
-  "packageArchiveSha256": "864f38c28cbe62d8c1bd99b4769bb74d2155b96e9de94fcab6552af807f89346",
+  "packageArchiveSha256": "4e7a7d436c09ba111f5dca8101876c6e085ad15859d96bab8f728c5669880b5f",
   "node": {
     "version": "22.23.3",
     "target": "aarch64-apple-darwin",
@@ -25,8 +25,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 29742,
-      "sha256": "55531a9f16603fa02c8e04130e5b4dbed783f09a4e4a520600d012a4128d7e73"
+      "bytes": 29641,
+      "sha256": "e3add51159724dc17ecd2cd8201a1ca67ded3f90bcec4e3c6203e38d2971ee4a"
     },
     {
       "path": "bin/tfsl-batch.js",
@@ -1591,7 +1591,7 @@
     {
       "path": "package.json",
       "bytes": 1822,
-      "sha256": "8782b7b2de6520773a98edc1503168c44a6a891a39c3f02ed399ce0718245d04"
+      "sha256": "168b43aba5a8966b0caee78d441f4bb63787889bb2895120e44f505194b3236c"
     },
     {
       "path": "protocol/catalog-contract.md",

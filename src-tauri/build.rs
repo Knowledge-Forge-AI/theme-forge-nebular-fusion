@@ -17,7 +17,7 @@ const ADMITTED_SOLAR_SAIL_NAME: &str = "@knowledge-forge-ai/theme-forge-solar-sa
 const ADMITTED_SOLAR_SAIL_VERSION: &str = "0.3.0";
 const ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE: u64 = 110_836;
 const ADMITTED_SOLAR_SAIL_ARCHIVE_SHA256: &str =
-    "5d1c30f55e52b7fbbf5313e70971961bfbe2e2bf8ffec6a706e748058ea3873f";
+    "65070c3478a1d55476c1b09fbe1dcadfdf7c3d3aa54a154bc9ac9e299411f415";
 
 fn validate_solar_sail_provenance(
     prov: &serde_json::Map<String, serde_json::Value>,

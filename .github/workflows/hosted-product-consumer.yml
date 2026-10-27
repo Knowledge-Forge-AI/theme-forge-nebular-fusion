@@ -33,10 +33,28 @@ jobs:
       readback_artifact_id: ${{ steps.upload-source-readbacks.outputs.artifact-id }}
       readback_artifact_digest: ${{ steps.upload-source-readbacks.outputs.artifact-digest }}
     steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
       - name: Check out the exact public source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
@@ -74,9 +92,27 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
     steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
@@ -121,9 +157,27 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
@@ -174,9 +228,27 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.source_commit }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0

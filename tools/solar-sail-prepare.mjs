@@ -2,7 +2,7 @@
 // @ts-check
 import { createHash } from "node:crypto";
 import { lstat, mkdir, mkdtemp, open, readdir, rm, writeFile } from "node:fs/promises";
-import { constants, existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { constants, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -187,39 +187,103 @@ function hasExactKeys(obj, expectedKeys) {
   return keys.length === expectedKeys.length && expectedKeys.every((k) => Object.prototype.hasOwnProperty.call(obj, k));
 }
 
+/** @param {import("node:fs").BigIntStats} stat @returns {(string | number)[]} */
+function statFull9(stat) {
+  return [
+    String(stat.dev),
+    String(stat.ino),
+    Number(stat.size),
+    Number(stat.mode),
+    String(stat.mtimeNs),
+    String(stat.ctimeNs),
+    Number(stat.uid),
+    Number(stat.gid),
+    Number(stat.nlink),
+  ];
+}
+
+/** @param {(string | number)[]} left @param {(string | number)[]} right */
+function sameStatFull9(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 /**
+ * Opens a regular file once, reads only bounded bytes through the held descriptor, and brackets
+ * that read with descriptor and pathname full9 checks. Hardlinks and privilege bits are refused
+ * so the archive identity cannot be redirected through another name or a privileged file.
+ *
  * @param {string} filePath
  * @param {string} [tag]
+ * @param {number} [maxBytes]
  * @returns {Promise<Buffer>}
  */
-async function readRegularFileNoFollow(filePath, tag = "SOLAR_SAIL_PREPARE_FAIL") {
-  let lstatMeta;
-  try {
-    lstatMeta = await lstat(filePath);
-  } catch {
-    throw new Error(`[${tag}] Missing required file: ${filePath}`);
-  }
-  if (lstatMeta.isSymbolicLink() || !lstatMeta.isFile()) {
-    throw new Error(`[${tag}] Path must be a regular non-symlink file: ${filePath}`);
-  }
+async function readRegularFileNoFollow(filePath, tag = "SOLAR_SAIL_PREPARE_FAIL", maxBytes = MAX_SOLAR_SAIL_MEMBER_BYTES) {
   let handle;
+  let openedFrame = null;
   try {
-    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
-  } catch {
-    throw new Error(`[${tag}] Failed to open file with O_NOFOLLOW: ${filePath}`);
+    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    const code = error !== null && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw new Error(`[${tag}] Missing required file: ${filePath}`);
+    }
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new Error(`[${tag}] Path must be a regular non-symlink file: ${filePath}`);
+    }
+    throw new Error(`[${tag}] Failed to open file with O_NOFOLLOW|O_NONBLOCK: ${filePath}`);
   }
   try {
-    const fstatMeta = await handle.stat();
-    if (!fstatMeta.isFile() || fstatMeta.dev !== lstatMeta.dev || fstatMeta.ino !== lstatMeta.ino) {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile()) {
+      throw new Error(`[${tag}] Path must be a regular non-symlink file: ${filePath}`);
+    }
+    if (Number(opened.nlink) !== 1) {
+      throw new Error(`[${tag}] Hardlinked regular file refused (nlink=${String(opened.nlink)}): ${filePath}`);
+    }
+    if ((Number(opened.mode) & 0o7000) !== 0) {
+      throw new Error(`[${tag}] Unexpected privilege bits on regular file: ${filePath}`);
+    }
+    const size = Number(opened.size);
+    if (!Number.isSafeInteger(size) || size <= 0 || size > maxBytes) {
+      if (size === 0) throw new Error(`[${tag}] Empty regular file: ${filePath}`);
+      throw new Error(`[${tag}] Regular file exceeds byte limit (${size} > ${maxBytes}): ${filePath}`);
+    }
+    openedFrame = statFull9(opened);
+    let namedAfterOpen;
+    try {
+      namedAfterOpen = await lstat(filePath, { bigint: true });
+    } catch {
+      throw new Error(`[${tag}] File disappeared during open: ${filePath}`);
+    }
+    if (namedAfterOpen.isSymbolicLink() || !namedAfterOpen.isFile() || !sameStatFull9(statFull9(namedAfterOpen), openedFrame)) {
       throw new Error(`[${tag}] File identity changed during open: ${filePath}`);
     }
-    const bytes = await handle.readFile();
-    if (bytes.byteLength === 0 || bytes.byteLength !== fstatMeta.size) {
-      throw new Error(`[${tag}] Empty or truncated regular file: ${filePath}`);
+    const bytes = Buffer.allocUnsafe(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await handle.read(bytes, offset, size - offset, offset);
+      if (bytesRead === 0) throw new Error(`[${tag}] File was truncated during read: ${filePath}`);
+      offset += bytesRead;
+    }
+    const extra = Buffer.allocUnsafe(1);
+    const { bytesRead: extraRead } = await handle.read(extra, 0, 1, offset);
+    if (extraRead > 0) throw new Error(`[${tag}] File grew during read: ${filePath}`);
+    const ended = await handle.stat({ bigint: true });
+    if (!sameStatFull9(statFull9(ended), openedFrame)) {
+      throw new Error(`[${tag}] File identity changed during read: ${filePath}`);
     }
     return bytes;
   } finally {
     await handle.close();
+    let afterNamed;
+    try {
+      afterNamed = await lstat(filePath, { bigint: true });
+    } catch {
+      throw new Error(`[${tag}] File disappeared after read: ${filePath}`);
+    }
+    if (openedFrame && (afterNamed.isSymbolicLink() || !afterNamed.isFile() || !sameStatFull9(statFull9(afterNamed), openedFrame))) {
+      throw new Error(`[${tag}] File identity changed after read: ${filePath}`);
+    }
   }
 }
 
@@ -254,14 +318,12 @@ export async function authenticateSolarSailCandidate(packageRoot, expectedInvent
   const pkgJsonPath = resolve(packageRoot, "package.json");
   let pkgContent;
   try {
-    const handle = await open(pkgJsonPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    try {
-      pkgContent = await handle.readFile("utf8");
-    } finally {
-      await handle.close();
+    pkgContent = (await readRegularFileNoFollow(pkgJsonPath, "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_BINDING_BYTES)).toString("utf8");
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("Missing required file:")) {
+      throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing package.json at ${pkgJsonPath}`);
     }
-  } catch {
-    throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing package.json at ${pkgJsonPath}`);
+    throw error;
   }
   let pkg;
   try {
@@ -283,34 +345,31 @@ export async function authenticateSolarSailCandidate(packageRoot, expectedInvent
 
   for (const relPath of SOLAR_SAIL_RUNTIME_MEMBERS) {
     const fullPath = resolve(packageRoot, relPath);
-    let handle;
     try {
-      handle = await open(fullPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    } catch {
-      throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing required runtime member: ${relPath}`);
+      const bytes = await readRegularFileNoFollow(fullPath, "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_MEMBER_BYTES);
+      members.push({
+        path: relPath,
+        size: bytes.byteLength,
+        sha256: sha256Hex(bytes),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Missing required file:")) {
+        throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing required runtime member: ${relPath}`);
+      }
+      throw error;
     }
-    let bytes;
-    try {
-      bytes = await handle.readFile();
-    } finally {
-      await handle.close();
-    }
-    members.push({
-      path: relPath,
-      size: bytes.byteLength,
-      sha256: sha256Hex(bytes),
-    });
   }
 
   for (const relPath of SOLAR_SAIL_DECLARATION_MEMBERS) {
     const fullPath = resolve(packageRoot, relPath);
-    let handle;
     try {
-      handle = await open(fullPath, constants.O_RDONLY | constants.O_NOFOLLOW);
-    } catch {
-      throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing required declaration member: ${relPath}`);
+      await readRegularFileNoFollow(fullPath, "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_MEMBER_BYTES);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("Missing required file:")) {
+        throw new Error(`[SOLAR_SAIL_BINDING_FAIL] Missing required declaration member: ${relPath}`);
+      }
+      throw error;
     }
-    await handle.close();
   }
 
   members.sort((a, b) => a.path.localeCompare(b.path));
@@ -454,7 +513,7 @@ async function collectFullDistTree(rootDir, tag = "SOLAR_SAIL_PREPARE_FAIL") {
         await walk(fullPath, relPath);
       } else if (meta.isFile()) {
         validateCanonicalDistMemberPath(relPath, tag);
-        const bytes = await readRegularFileNoFollow(fullPath, tag);
+        const bytes = await readRegularFileNoFollow(fullPath, tag, MAX_SOLAR_SAIL_MEMBER_BYTES);
         if (bytes.byteLength > MAX_SOLAR_SAIL_MEMBER_BYTES) {
           throw new Error(`[${tag}] Solar Sail dist member exceeds size cap: ${relPath}`);
         }
@@ -570,7 +629,7 @@ export async function verifyPreparedSolarSailPayload(targetPayloadRoot, expected
   }
 
   const bindingPath = resolve(targetPayloadRoot, "solar-sail-binding.json");
-  const bindingBytes = await readRegularFileNoFollow(bindingPath, "SOLAR_SAIL_BINDING_FAIL");
+  const bindingBytes = await readRegularFileNoFollow(bindingPath, "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_BINDING_BYTES);
   if (bindingBytes.byteLength > MAX_SOLAR_SAIL_BINDING_BYTES) {
     throw new Error("[SOLAR_SAIL_BINDING_FAIL] solar-sail-binding.json exceeds maximum size");
   }
@@ -619,9 +678,9 @@ export async function verifyPreparedSolarSailPayload(targetPayloadRoot, expected
   }
 
   for (const doc of SOLAR_SAIL_LEGAL_DOCS) {
-    await readRegularFileNoFollow(resolve(targetPayloadRoot, doc), "SOLAR_SAIL_BINDING_FAIL");
+    await readRegularFileNoFollow(resolve(targetPayloadRoot, doc), "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_MEMBER_BYTES);
   }
-  const pkgBytes = await readRegularFileNoFollow(resolve(targetPayloadRoot, "package.json"), "SOLAR_SAIL_BINDING_FAIL");
+  const pkgBytes = await readRegularFileNoFollow(resolve(targetPayloadRoot, "package.json"), "SOLAR_SAIL_BINDING_FAIL", MAX_SOLAR_SAIL_BINDING_BYTES);
   if (sha256Hex(pkgBytes) !== binding.packageJsonSha256) {
     throw new Error("[SOLAR_SAIL_BINDING_FAIL] package.json sha256 mismatch");
   }
@@ -663,27 +722,14 @@ export async function verifyPreparedSolarSailPayload(targetPayloadRoot, expected
  * @param {string | Buffer | Uint8Array} archiveInput
  * @param {string} destination
  */
-export function extractTarballSafely(archiveInput, destination) {
+export async function extractTarballSafely(archiveInput, destination) {
   let archiveBytes;
   if (Buffer.isBuffer(archiveInput)) {
     archiveBytes = archiveInput;
   } else if (archiveInput instanceof Uint8Array) {
     archiveBytes = Buffer.from(archiveInput.buffer, archiveInput.byteOffset, archiveInput.byteLength);
   } else if (typeof archiveInput === "string") {
-    let meta;
-    try {
-      meta = lstatSync(archiveInput);
-    } catch {
-      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Failed to inspect tarball: ${archiveInput}`);
-    }
-    if (meta.isSymbolicLink() || !meta.isFile()) {
-      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Tarball must be a regular file: ${archiveInput}`);
-    }
-    try {
-      archiveBytes = readFileSync(archiveInput);
-    } catch {
-      throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Failed to read tarball: ${archiveInput}`);
-    }
+    archiveBytes = await readRegularFileNoFollow(archiveInput, "SOLAR_SAIL_PREPARE_FAIL", ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE);
   } else {
     throw new Error("[SOLAR_SAIL_PREPARE_FAIL] Invalid tarball input");
   }
@@ -828,7 +874,7 @@ export async function prepareSolarSail(options = {}) {
       if (!tarballPath || !existsSync(tarballPath)) {
         throw new Error("[SOLAR_SAIL_PREPARE_FAIL] No Solar Sail candidate source available in monorepo packages/solar-sail or authenticated-inputs/solar-sail-tarball");
       }
-      const archiveBuf = await readRegularFileNoFollow(tarballPath, "SOLAR_SAIL_PREPARE_FAIL");
+      const archiveBuf = await readRegularFileNoFollow(tarballPath, "SOLAR_SAIL_PREPARE_FAIL", ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE);
       const archiveSha256 = sha256Hex(archiveBuf);
       if (
         archiveBuf.byteLength !== ADMITTED_SOLAR_SAIL_ARCHIVE_SIZE ||
@@ -849,7 +895,7 @@ export async function prepareSolarSail(options = {}) {
         },
       };
       scratchRoot = await mkdtemp(join(tmpdir(), "solar-sail-extract-"));
-      candidateDir = extractTarballSafely(archiveBuf, scratchRoot);
+      candidateDir = await extractTarballSafely(archiveBuf, scratchRoot);
     }
 
     const distSrc = resolve(candidateDir, "dist");
@@ -862,7 +908,7 @@ export async function prepareSolarSail(options = {}) {
       : EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST;
     await authenticateSolarSailCandidate(candidateDir, expectedCoreDigest);
 
-    const pkgBytes = await readRegularFileNoFollow(resolve(candidateDir, "package.json"), "SOLAR_SAIL_PREPARE_FAIL");
+    const pkgBytes = await readRegularFileNoFollow(resolve(candidateDir, "package.json"), "SOLAR_SAIL_PREPARE_FAIL", MAX_SOLAR_SAIL_BINDING_BYTES);
     const pkg = JSON.parse(pkgBytes.toString("utf8"));
     if (pkg.name !== EXPECTED_SOLAR_SAIL_NAME || pkg.version !== EXPECTED_SOLAR_SAIL_VERSION) {
       throw new Error(`[SOLAR_SAIL_PREPARE_FAIL] Solar Sail payload requires ${EXPECTED_SOLAR_SAIL_NAME}@${EXPECTED_SOLAR_SAIL_VERSION}`);
@@ -881,7 +927,7 @@ export async function prepareSolarSail(options = {}) {
     /** @type {Map<string, Buffer>} */
     const docBytesMap = new Map();
     for (const doc of SOLAR_SAIL_LEGAL_DOCS) {
-      docBytesMap.set(doc, await readRegularFileNoFollow(resolve(candidateDir, doc), "SOLAR_SAIL_PREPARE_FAIL"));
+      docBytesMap.set(doc, await readRegularFileNoFollow(resolve(candidateDir, doc), "SOLAR_SAIL_PREPARE_FAIL", MAX_SOLAR_SAIL_MEMBER_BYTES));
     }
 
     const distMembers = await collectFullDistTree(candidateDir, "SOLAR_SAIL_PREPARE_FAIL");

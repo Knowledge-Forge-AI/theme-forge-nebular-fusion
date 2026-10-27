@@ -15,6 +15,11 @@ import { generateReleaseNotices } from "./release-notices.mjs";
 import { loadBuildInputs, validateBuildInputs } from "./build-inputs.mjs";
 import { canonical, identity, inventoryTree, digest } from "./candidate-provenance.mjs";
 
+// Preview members are opened before leaf metadata is trusted.  O_NONBLOCK is
+// required so a non-regular replacement cannot turn a bounded preview read
+// into a FIFO wait; the existing ancestor and full-9 identity checks remain.
+const PREVIEW_REGULAR_READ_FLAGS = fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DEFAULT_STUDIO_ROOT = resolve(__dirname, "..");
@@ -1136,42 +1141,70 @@ async function assertNoSymlinkAncestors(absPath) {
 }
 
 /**
+ * Refuses a protected leaf lexically before any leaf lstat or open.  The
+ * ancestor walk intentionally excludes the leaf so descriptor-first reads
+ * remain the authority for ordinary regular files.
+ * @param {string} absPath
+ */
+function assertProtectedPreviewLeaf(absPath) {
+  const leaf = basename(absPath);
+  if (PREVIEW_PROTECTED_COMPONENTS.has(leaf.toLowerCase()) || PREVIEW_PROTECTED_SUFFIX_RE.test(leaf)) {
+    throw new Error(`Protected component in path: ${leaf}`);
+  }
+}
+
+/**
  * @param {string} filePath
  * @param {number} maxBytes
  * @param {ReturnType<typeof createPreviewHashBudget>} budget
  * @param {{ requireNonExec?: boolean, requireExec?: boolean, disallowEmpty?: boolean }} [options]
  */
 async function readBoundedPreviewRegular(filePath, maxBytes, budget, options = {}) {
-  await assertNoSymlinkAncestors(filePath);
-  const before = await lstat(filePath, { bigint: true });
-  if (before.isSymbolicLink() || !before.isFile()) {
-    throw new Error(`Expected regular file (not symlink): ${basename(filePath)}`);
+  // Ancestors remain path-checked; the leaf is authenticated by the opened FD
+  // and its named-path full-9 bookends below.
+  assertProtectedPreviewLeaf(filePath);
+  await assertNoSymlinkAncestors(dirname(filePath));
+  let fh;
+  /** @type {(string|number)[] | null} */
+  let openedFrame = null;
+  try {
+    fh = await open(filePath, PREVIEW_REGULAR_READ_FLAGS);
+  } catch (error) {
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "ELOOP" || fsError.code === "EMLINK") {
+      throw new Error(`Expected regular file (not symlink): ${basename(filePath)}`);
+    }
+    throw error;
   }
-  if (Number(before.nlink) !== 1) {
-    throw new Error(`Hardlinked regular file refused (nlink=${String(before.nlink)}): ${basename(filePath)}`);
-  }
-  if ((Number(before.mode) & 0o7000) !== 0) {
-    throw new Error(`Unexpected privilege bits on regular file: ${basename(filePath)}`);
-  }
-  const isExec = (Number(before.mode) & 0o111) !== 0;
-  if (options.requireNonExec && isExec) {
-    throw new Error(`Unexpected executable bit on non-executable file: ${basename(filePath)}`);
-  }
-  if (options.requireExec && !isExec) {
-    throw new Error(`Expected executable bit on runtime file: ${basename(filePath)}`);
-  }
-  const size = Number(before.size);
-  const minBytes = options.disallowEmpty ? 1 : 0;
-  if (size < minBytes || size > maxBytes) {
-    throw new Error(`Regular file size ${size} exceeds limit ${maxBytes}: ${basename(filePath)}`);
-  }
-  budget.charge(size);
-  const beforeFrame = previewStatFull9(before);
-  const fh = await open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   try {
     const opened = await fh.stat({ bigint: true });
-    if (!previewFull9Equal(previewStatFull9(opened), beforeFrame)) {
-      throw new Error(`Descriptor drift on open: ${basename(filePath)}`);
+    if (!opened.isFile()) {
+      throw new Error(`Expected regular file (not symlink): ${basename(filePath)}`);
+    }
+    if (Number(opened.nlink) !== 1) {
+      throw new Error(`Hardlinked regular file refused (nlink=${String(opened.nlink)}): ${basename(filePath)}`);
+    }
+    if ((Number(opened.mode) & 0o7000) !== 0) {
+      throw new Error(`Unexpected privilege bits on regular file: ${basename(filePath)}`);
+    }
+    const isExec = (Number(opened.mode) & 0o111) !== 0;
+    if (options.requireNonExec && isExec) {
+      throw new Error(`Unexpected executable bit on non-executable file: ${basename(filePath)}`);
+    }
+    if (options.requireExec && !isExec) {
+      throw new Error(`Expected executable bit on runtime file: ${basename(filePath)}`);
+    }
+    const size = Number(opened.size);
+    const minBytes = options.disallowEmpty ? 1 : 0;
+    if (size < minBytes || size > maxBytes) {
+      throw new Error(`Regular file size ${size} exceeds limit ${maxBytes}: ${basename(filePath)}`);
+    }
+    budget.charge(size);
+    const beforeFrame = previewStatFull9(opened);
+    openedFrame = beforeFrame;
+    const namedBefore = await lstat(filePath, { bigint: true });
+    if (namedBefore.isSymbolicLink() || !namedBefore.isFile() || !previewFull9Equal(previewStatFull9(namedBefore), beforeFrame)) {
+      throw new Error(`Named file drift on open: ${basename(filePath)}`);
     }
     const buf = Buffer.allocUnsafe(size);
     let offset = 0;
@@ -1189,10 +1222,14 @@ async function readBoundedPreviewRegular(filePath, maxBytes, budget, options = {
     if (!previewFull9Equal(previewStatFull9(ended), beforeFrame)) {
       throw new Error(`Descriptor drift after read: ${basename(filePath)}`);
     }
+    const namedAfterRead = await lstat(filePath, { bigint: true });
+    if (namedAfterRead.isSymbolicLink() || !namedAfterRead.isFile() || !previewFull9Equal(previewStatFull9(namedAfterRead), beforeFrame)) {
+      throw new Error(`Named file drift after read: ${basename(filePath)}`);
+    }
     return {
       bytes: size,
       mode: isExec ? 0o755 : 0o644,
-      physicalMode: Number(before.mode) & 0o777,
+      physicalMode: Number(opened.mode) & 0o777,
       sha256: digest(buf),
       full9: beforeFrame,
       buffer: buf,
@@ -1200,7 +1237,7 @@ async function readBoundedPreviewRegular(filePath, maxBytes, budget, options = {
   } finally {
     await fh.close();
     const afterNamed = await lstat(filePath, { bigint: true });
-    if (!previewFull9Equal(previewStatFull9(afterNamed), beforeFrame)) {
+    if (openedFrame && (afterNamed.isSymbolicLink() || !afterNamed.isFile() || !previewFull9Equal(previewStatFull9(afterNamed), openedFrame))) {
       throw new Error(`Named file drift after close: ${basename(filePath)}`);
     }
   }

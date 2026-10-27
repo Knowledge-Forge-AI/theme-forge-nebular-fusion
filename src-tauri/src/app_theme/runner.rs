@@ -526,7 +526,11 @@ impl AppThemeRunner {
         let verification_status = res.verification_status.ok_or_else(protocol_invalid)?;
 
         if res.status == "bound" {
-            if !res.valid || res.error.is_some() || res.error_code.is_some() || verification_status != ProfileVerificationStatus::Verified {
+            if !res.valid
+                || res.error.is_some()
+                || res.error_code.is_some()
+                || verification_status != ProfileVerificationStatus::Verified
+            {
                 return Err(protocol_invalid());
             }
             let owner_binding = res.owner_binding.ok_or_else(protocol_invalid)?;
@@ -535,42 +539,121 @@ impl AppThemeRunner {
                 ProfileDocumentSchemaVersion::PairedProfileV1 => {
                     let normalized_sha256 = res.normalized_sha256.ok_or_else(protocol_invalid)?;
                     let profile = res.profile.ok_or_else(protocol_invalid)?;
-                    if !is_lower_hex_sha256(&normalized_sha256) || res.v2_profile.is_some() || res.canonical_digest.is_some() || profile.schema_version != "tf-paired-profile-v1" {
+                    if !is_lower_hex_sha256(&normalized_sha256)
+                        || res.v2_profile.is_some()
+                        || res.canonical_digest.is_some()
+                        || profile.schema_version != "tf-paired-profile-v1"
+                    {
                         return Err(protocol_invalid());
                     }
-                    check_owner_binding(&owner_binding, schema_version, alias_resolved, &expected_raw_sha256, raw_len, Some(&normalized_sha256), None)?;
+                    check_owner_binding(
+                        &owner_binding,
+                        schema_version,
+                        alias_resolved,
+                        &expected_raw_sha256,
+                        raw_len,
+                        Some(&normalized_sha256),
+                        None,
+                    )?;
                     Ok(AdapterBindDocumentResponse {
-                        status: res.status, valid: true, schema_version, alias_resolved, verification_status, raw_source_sha256,
-                        normalized_sha256: Some(normalized_sha256), canonical_digest: None, owner_binding: Some(owner_binding),
-                        profile: Some(profile), v2_profile: None, error_code: None, error: None, details: vec![],
+                        status: res.status,
+                        valid: true,
+                        schema_version,
+                        alias_resolved,
+                        verification_status,
+                        raw_source_sha256,
+                        normalized_sha256: Some(normalized_sha256),
+                        canonical_digest: None,
+                        owner_binding: Some(owner_binding),
+                        profile: Some(profile),
+                        v2_profile: None,
+                        error_code: None,
+                        error: None,
+                        details: vec![],
                     })
                 }
                 ProfileDocumentSchemaVersion::PairedProfileV2 => {
                     let canonical_digest = res.canonical_digest.ok_or_else(protocol_invalid)?;
                     let v2_profile = res.v2_profile.ok_or_else(protocol_invalid)?;
-                    if !is_lower_hex_sha256(&canonical_digest) || res.normalized_sha256.is_some() || res.profile.is_some() || alias_resolved || v2_profile.schema_version != "tf-paired-profile-v2" {
+                    if !is_lower_hex_sha256(&canonical_digest)
+                        || res.normalized_sha256.is_some()
+                        || res.profile.is_some()
+                        || alias_resolved
+                        || v2_profile.schema_version != "tf-paired-profile-v2"
+                    {
                         return Err(protocol_invalid());
                     }
-                    check_owner_binding(&owner_binding, schema_version, alias_resolved, &expected_raw_sha256, raw_len, None, Some(&canonical_digest))?;
+                    check_owner_binding(
+                        &owner_binding,
+                        schema_version,
+                        alias_resolved,
+                        &expected_raw_sha256,
+                        raw_len,
+                        None,
+                        Some(&canonical_digest),
+                    )?;
                     Ok(AdapterBindDocumentResponse {
-                        status: res.status, valid: true, schema_version, alias_resolved: false, verification_status, raw_source_sha256,
-                        normalized_sha256: None, canonical_digest: Some(canonical_digest), owner_binding: Some(owner_binding),
-                        profile: None, v2_profile: Some(v2_profile), error_code: None, error: None, details: vec![],
+                        status: res.status,
+                        valid: true,
+                        schema_version,
+                        alias_resolved: false,
+                        verification_status,
+                        raw_source_sha256,
+                        normalized_sha256: None,
+                        canonical_digest: Some(canonical_digest),
+                        owner_binding: Some(owner_binding),
+                        profile: None,
+                        v2_profile: Some(v2_profile),
+                        error_code: None,
+                        error: None,
+                        details: vec![],
                     })
                 }
                 ProfileDocumentSchemaVersion::Corrupt => Err(protocol_invalid()),
             }
         } else {
-            if res.valid || res.owner_binding.is_some() || res.profile.is_some() || res.v2_profile.is_some() || res.normalized_sha256.is_some() || res.canonical_digest.is_some() {
+            if res.valid
+                || res.owner_binding.is_some()
+                || res.profile.is_some()
+                || res.v2_profile.is_some()
+                || res.normalized_sha256.is_some()
+                || res.canonical_digest.is_some()
+            {
                 return Err(protocol_invalid());
             }
-            let error_code = res.error_code.as_deref().map(|c| sanitize_error_code(c, "BIND_ERROR")).unwrap_or_else(|| "BIND_ERROR".to_owned());
-            let error_msg = res.error.as_deref().map(|e| sanitize_untrusted_text(e, 512)).filter(|s| !s.is_empty()).unwrap_or_else(|| "Profile document validation failed".to_owned());
-            let details = res.details.iter().take(16).map(|d| sanitize_untrusted_text(d, 512)).filter(|s| !s.is_empty()).collect();
+            let error_code = res
+                .error_code
+                .as_deref()
+                .map(|c| sanitize_error_code(c, "BIND_ERROR"))
+                .unwrap_or_else(|| "BIND_ERROR".to_owned());
+            let error_msg = res
+                .error
+                .as_deref()
+                .map(|e| sanitize_untrusted_text(e, 512))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Profile document validation failed".to_owned());
+            let details = res
+                .details
+                .iter()
+                .take(16)
+                .map(|d| sanitize_untrusted_text(d, 512))
+                .filter(|s| !s.is_empty())
+                .collect();
             Ok(AdapterBindDocumentResponse {
-                status: "error".to_owned(), valid: false, schema_version, alias_resolved, verification_status, raw_source_sha256,
-                normalized_sha256: None, canonical_digest: None, owner_binding: None, profile: None, v2_profile: None,
-                error_code: Some(error_code), error: Some(error_msg), details,
+                status: "error".to_owned(),
+                valid: false,
+                schema_version,
+                alias_resolved,
+                verification_status,
+                raw_source_sha256,
+                normalized_sha256: None,
+                canonical_digest: None,
+                owner_binding: None,
+                profile: None,
+                v2_profile: None,
+                error_code: Some(error_code),
+                error: Some(error_msg),
+                details,
             })
         }
     }
@@ -622,15 +705,18 @@ impl AppThemeRunner {
             ui_revision: Some(rev),
         };
         let res = self.execute_process(&req)?;
-        let solar_sail = res.solar_sail.map(|b| *b).unwrap_or_else(|| AppThemeCompileResponse {
-            status: res.status.clone(),
-            valid: res.valid,
-            ui_revision: rev,
-            compiled_css: res.compiled_css,
-            descriptor: res.descriptor,
-            diagnostics: res.diagnostics,
-            error: res.error.clone(),
-        });
+        let solar_sail = res
+            .solar_sail
+            .map(|b| *b)
+            .unwrap_or_else(|| AppThemeCompileResponse {
+                status: res.status.clone(),
+                valid: res.valid,
+                ui_revision: rev,
+                compiled_css: res.compiled_css,
+                descriptor: res.descriptor,
+                diagnostics: res.diagnostics,
+                error: res.error.clone(),
+            });
         Ok(AppThemePairedCompileResponse {
             status: res.status,
             valid: res.valid,
@@ -686,7 +772,10 @@ fn check_owner_binding(
     }
     match owner.input_origin {
         OwnerBindingInputOrigin::SourceBytes => {
-            if alias_resolved || owner.raw_source_sha256 != expected_raw_sha256 || owner.byte_length != raw_len {
+            if alias_resolved
+                || owner.raw_source_sha256 != expected_raw_sha256
+                || owner.byte_length != raw_len
+            {
                 return Err(protocol_invalid());
             }
         }
@@ -697,8 +786,18 @@ fn check_owner_binding(
         }
     }
     match schema_version {
-        ProfileDocumentSchemaVersion::PairedProfileV1 if owner.normalized_sha256.as_deref() == top_normalized && owner.canonical_digest.is_none() => Ok(()),
-        ProfileDocumentSchemaVersion::PairedProfileV2 if owner.canonical_digest.as_deref() == top_canonical && owner.normalized_sha256.is_none() => Ok(()),
+        ProfileDocumentSchemaVersion::PairedProfileV1
+            if owner.normalized_sha256.as_deref() == top_normalized
+                && owner.canonical_digest.is_none() =>
+        {
+            Ok(())
+        }
+        ProfileDocumentSchemaVersion::PairedProfileV2
+            if owner.canonical_digest.as_deref() == top_canonical
+                && owner.normalized_sha256.is_none() =>
+        {
+            Ok(())
+        }
         _ => Err(protocol_invalid()),
     }
 }
@@ -710,7 +809,10 @@ type AdapterIoThreads = (
     mpsc::Receiver<Result<Vec<u8>, StudioReasonCode>>,
 );
 
-fn spawn_adapter_io_threads(child: &mut Child, request_bytes: &[u8]) -> StudioResult<AdapterIoThreads> {
+fn spawn_adapter_io_threads(
+    child: &mut Child,
+    request_bytes: &[u8],
+) -> StudioResult<AdapterIoThreads> {
     let mut stdin = child
         .stdin
         .take()
@@ -791,4 +893,3 @@ fn join_io_threads(
 #[cfg(test)]
 #[path = "document_queue_tests.rs"]
 mod document_queue_tests;
-

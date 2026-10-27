@@ -7,10 +7,12 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { descriptorIdentity, readRegularSnapshot, sameIdentity } from "./fs-snapshot.mjs";
+import { inventoryNativePayload } from "./native-runtime.mjs";
 import { RESOURCE_PREPARERS, resourceDirectories } from "./platform-targets.mjs";
 
 export const INPUT_SCHEMA = "nebular.hosted-product-consumer-input-v2";
@@ -52,6 +54,10 @@ const SOURCE_READBACK_PLATFORM_ROLES = Object.freeze({
   "linux-x64": "linux-app-source",
 });
 export const DARWIN_RETAINED_COMMIT_PREFIX = /^b954[a-f0-9]{36}$/u;
+export const DARWIN_AUTHORITIES = Object.freeze([
+  "retained-darwin-b954",
+  "current-darwin-source",
+]);
 export const ALLOWED_RELEASE_HOSTS = Object.freeze(new Set([
   "api.github.com",
   "github.com",
@@ -65,6 +71,7 @@ export const PLATFORMS = Object.freeze({
     scenarios: ["A"],
     qualification: "existing-qualified",
     authority: "retained-darwin-b954",
+    authorities: DARWIN_AUTHORITIES,
     rawRoot: "Theme Forge Nebular Fusion.app",
     rawExecutable: "Theme Forge Nebular Fusion.app/Contents/MacOS/theme-forge-nebular-fusion",
     npmExecutable: "payload/Theme Forge Nebular Fusion.app/Contents/MacOS/theme-forge-nebular-fusion",
@@ -269,14 +276,20 @@ function validateSource(source) {
   });
 }
 
-function validateTargetSources(rawTargetSources) {
+function validateTargetSources(rawTargetSources, source = null) {
   const targetSources = requireRecord(rawTargetSources, "targetSources");
   const normalized = {};
   for (const [platform, contract] of Object.entries(PLATFORMS)) {
     const row = requireRecord(targetSources[platform], `targetSources.${platform}`);
-    if (row.authority !== contract.authority) {
-      fail(`targetSources.${platform}.authority must be ${contract.authority}`);
+    const allowedAuthorities = contract.authorities ?? [contract.authority];
+    if (typeof row.authority !== "string" || !allowedAuthorities.includes(row.authority)) {
+      fail(
+        allowedAuthorities.length === 1
+          ? `targetSources.${platform}.authority must be ${contract.authority}`
+          : `targetSources.${platform}.authority must be one of ${allowedAuthorities.join(", ")}`,
+      );
     }
+    const authority = row.authority;
     const sourceCommit = requireString(row.sourceCommit, `targetSources.${platform}.sourceCommit`, COMMIT);
     const sourceTree = requireString(row.sourceTree, `targetSources.${platform}.sourceTree`, COMMIT);
     const sourceCandidate = requireDigest(row.sourceCandidate, `targetSources.${platform}.sourceCandidate`);
@@ -286,15 +299,22 @@ function validateTargetSources(rawTargetSources) {
       ? requireDigest(row.packageManifestSha256, `targetSources.${platform}.packageManifestSha256`)
       : null;
     if (platform === "darwin-arm64") {
-      if (!DARWIN_RETAINED_COMMIT_PREFIX.test(sourceCommit)) {
-        fail("darwin-arm64 compiler sourceCommit must preserve retained b954 lineage (restamping refused)");
+      if (authority === "retained-darwin-b954") {
+        if (!DARWIN_RETAINED_COMMIT_PREFIX.test(sourceCommit)) {
+          fail("darwin-arm64 compiler sourceCommit must preserve retained b954 lineage (restamping refused)");
+        }
+      } else if (DARWIN_RETAINED_COMMIT_PREFIX.test(sourceCommit)) {
+        fail("darwin-arm64 current-darwin-source compiler sourceCommit must not use retained Darwin b954 lineage");
       }
     } else if (DARWIN_RETAINED_COMMIT_PREFIX.test(sourceCommit)) {
       fail(`${platform} compiler sourceCommit must use current Linux source authority, not retained Darwin b954`);
     }
+    if (source && (sourceCommit === source.commit || sourceTree === source.tree)) {
+      fail(`${platform} compiler sourceCommit/sourceTree must remain distinct from public projection source (restamping refused)`);
+    }
     normalized[platform] = Object.freeze({
       platform,
-      authority: contract.authority,
+      authority,
       sourceCommit,
       sourceTree,
       sourceCandidate,
@@ -314,8 +334,10 @@ function validateTargetSources(rawTargetSources) {
     fail("linux-arm64 and linux-x64 must bind the same current Linux compiler sourceCommit, sourceTree, and sourceCandidate");
   }
   if (
-    darwin.sourceTree === linuxArm.sourceTree ||
-    darwin.sourceCandidate === linuxArm.sourceCandidate
+    darwin.authority === "retained-darwin-b954" &&
+    (darwin.sourceCommit === linuxArm.sourceCommit ||
+      darwin.sourceTree === linuxArm.sourceTree ||
+      darwin.sourceCandidate === linuxArm.sourceCandidate)
   ) {
     fail("retained darwin-arm64 sourceTree/sourceCandidate must remain distinct from current Linux source authority");
   }
@@ -446,20 +468,72 @@ function compareGlibcTuple(a, b) {
   return (a[0] - b[0]) || (a[1] - b[1]) || (a[2] - b[2]);
 }
 
+function validatePayloadInventorySummary(value, label, expectedIdentity, expectedLabel = expectedIdentity) {
+  if (!isRecord(value)) {
+    fail(`${label} must be a non-null object; nativePayload.identity does not match ${expectedLabel}`);
+  }
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || keys.some((key) => key !== "identity" && key !== "files")) {
+    fail(`${label} contains unknown or missing keys`);
+  }
+  if (typeof value.identity !== "string" || !SHA256.test(value.identity) || value.identity !== expectedIdentity) {
+    fail(`${label} nativePayload.identity does not match ${expectedLabel}`);
+  }
+  if (!Number.isSafeInteger(value.files) || value.files < 1) {
+    fail(`${label} nativePayload.files must be a positive integer`);
+  }
+  return Object.freeze({
+    identity: value.identity,
+    files: value.files,
+  });
+}
+
 export function validateQualificationReceipt(qualification, platform, targetSource) {
   requireRecord(qualification, "qualification.json");
+  if (!Object.hasOwn(PLATFORMS, platform)) {
+    fail(`unsupported qualification platform ${platform}`);
+  }
+  requireRecord(targetSource, `targetSources.${platform}`);
   if (
     qualification.schema !== QUALIFICATION_RECEIPT_SCHEMA ||
     qualification.platform !== platform ||
     qualification.status !== "pass" ||
+    (qualification.version !== undefined && qualification.version !== VERSION) ||
     qualification.executableSha256 !== targetSource.executableSha256
   ) {
     fail(`qualification receipt failed schema, status, or executableSha256 check for ${platform}`);
   }
-  if (!isRecord(qualification.nativePayload) || qualification.nativePayload.identity !== targetSource.nativePayloadSha256) {
-    fail(`qualification receipt nativePayload.identity does not match targetSources.${platform}.nativePayloadSha256`);
+  if (!Object.hasOwn(qualification, "nativePayload") || qualification.nativePayload === undefined) {
+    fail(`qualification receipt nativePayload is missing for ${platform}; nativePayload.identity does not match targetSources.${platform}.nativePayloadSha256`);
   }
-  if (!Array.isArray(qualification.checks) || qualification.checks.length === 0 || !qualification.checks.every((entry) => isRecord(entry) && entry.ok === true)) {
+  if (platform === "darwin-arm64") {
+    if (!Object.hasOwn(qualification, "glibcMinimum") || qualification.glibcMinimum !== null) {
+      fail("qualification receipt glibcMinimum must be null for darwin-arm64");
+    }
+    if (!Object.hasOwn(qualification, "materialDigest") || qualification.materialDigest !== null) {
+      fail("qualification receipt materialDigest must be null for darwin-arm64");
+    }
+    if (qualification.nativePayload !== null) {
+      validatePayloadInventorySummary(
+        qualification.nativePayload,
+        `qualification receipt for ${platform}`,
+        targetSource.nativePayloadSha256,
+        `targetSources.${platform}.nativePayloadSha256`,
+      );
+    }
+  } else {
+    validatePayloadInventorySummary(
+      qualification.nativePayload,
+      `qualification receipt for ${platform}`,
+      targetSource.nativePayloadSha256,
+      `targetSources.${platform}.nativePayloadSha256`,
+    );
+  }
+  if (
+    !Array.isArray(qualification.checks) ||
+    qualification.checks.length === 0 ||
+    !qualification.checks.every((entry) => isRecord(entry) && entry.ok === true && typeof entry.id === "string" && entry.id.length > 0)
+  ) {
     fail(`qualification receipt checks are incomplete or failing for ${platform}`);
   }
   const requiredChecks = [
@@ -471,7 +545,21 @@ export function validateQualificationReceipt(qualification, platform, targetSour
       ? ["legal-notices", "codesign"]
       : ["mode:gui", "mode:sidecar", "mode:launcher", "glibc:gui", "glibc:sidecar", "glibc-floor", "linkage"]),
   ];
-  const passedIds = new Set(qualification.checks.filter((entry) => isRecord(entry) && entry.ok === true).map((entry) => String(entry.id)));
+  const allowedChecks = new Set([
+    ...requiredChecks,
+    ...(platform.startsWith("linux") ? ["private-runtime-closure"] : []),
+  ]);
+  const passedIds = new Set();
+  for (const entry of qualification.checks) {
+    const id = String(entry.id);
+    if (!allowedChecks.has(id) || passedIds.has(id)) {
+      fail(`qualification receipt for ${platform} contains unknown or duplicate check '${id}'`);
+    }
+    if (id === "executable-header" && entry.detail !== targetSource.executableSha256) {
+      fail(`qualification receipt executable-header check detail does not match targetSources.${platform}.executableSha256`);
+    }
+    passedIds.add(id);
+  }
   for (const requiredId of requiredChecks) {
     if (!passedIds.has(requiredId)) {
       fail(`qualification receipt for ${platform} is missing required passing check '${requiredId}'`);
@@ -491,15 +579,38 @@ function validateDarwinQualification(row, darwinTargetSource, source, assets) {
   if (row.mode !== "existing-qualified" || row.status !== "pass") {
     fail("Darwin qualification must be existing-qualified and passing");
   }
-  if (
-    !DARWIN_RETAINED_COMMIT_PREFIX.test(String(row.sourceCommit ?? "")) ||
-    row.sourceCommit !== darwinTargetSource.sourceCommit ||
-    row.sourceTree !== darwinTargetSource.sourceTree ||
-    row.sourceCandidate !== darwinTargetSource.sourceCandidate
-  ) {
-    fail("Darwin qualification must preserve retained b954 sourceCommit/sourceTree/sourceCandidate and never be restamped");
+  if (darwinTargetSource.authority === "retained-darwin-b954") {
+    if (row.authority !== undefined && row.authority !== darwinTargetSource.authority) {
+      fail("Darwin qualification authority must match targetSources.darwin-arm64.authority");
+    }
+  } else if (row.authority !== darwinTargetSource.authority) {
+    fail("Darwin qualification authority must match targetSources.darwin-arm64.authority");
   }
-  if (row.sourceCommit === source.commit) {
+  if (darwinTargetSource.authority === "retained-darwin-b954") {
+    if (
+      !DARWIN_RETAINED_COMMIT_PREFIX.test(String(row.sourceCommit ?? "")) ||
+      row.sourceCommit !== darwinTargetSource.sourceCommit ||
+      row.sourceTree !== darwinTargetSource.sourceTree ||
+      row.sourceCandidate !== darwinTargetSource.sourceCandidate
+    ) {
+      fail("Darwin qualification must preserve retained b954 sourceCommit/sourceTree/sourceCandidate and never be restamped");
+    }
+  } else {
+    const rowCommit = requireString(row.sourceCommit, "darwin-arm64.qualification.sourceCommit", COMMIT);
+    const rowTree = requireString(row.sourceTree, "darwin-arm64.qualification.sourceTree", COMMIT);
+    const rowCandidate = requireDigest(row.sourceCandidate, "darwin-arm64.qualification.sourceCandidate");
+    if (DARWIN_RETAINED_COMMIT_PREFIX.test(rowCommit)) {
+      fail("Darwin qualification for current-darwin-source must not use retained b954 sourceCommit");
+    }
+    if (
+      rowCommit !== darwinTargetSource.sourceCommit ||
+      rowTree !== darwinTargetSource.sourceTree ||
+      rowCandidate !== darwinTargetSource.sourceCandidate
+    ) {
+      fail("Darwin qualification sourceCommit/sourceTree/sourceCandidate must match targetSources.darwin-arm64");
+    }
+  }
+  if (row.sourceCommit === source.commit || row.sourceTree === source.tree) {
     fail("Darwin qualification must not be restamped to public projection source.commit");
   }
   const receiptSha256 = requireDigest(row.receiptSha256, "darwin-arm64.qualification.receiptSha256");
@@ -538,7 +649,7 @@ export function validateInput(input) {
   walkPublicValues(input);
   if (input.schema !== INPUT_SCHEMA || input.product !== PRODUCT || input.version !== VERSION) fail("input schema/product/version mismatch");
   const source = validateSource(input.source);
-  const targetSources = validateTargetSources(input.targetSources ?? input.source?.targetSources);
+  const targetSources = validateTargetSources(input.targetSources ?? input.source?.targetSources, source);
   const targetSourceReadbacks = validateTargetSourceReadbacks(input.source.targetSourceReadbacks, targetSources);
   const release = validateRelease(input.release);
   if (!Array.isArray(input.assets)) fail("assets must be an array");
@@ -643,14 +754,39 @@ function assertReadbackOutsideCheckout(checkout, readbackPath, label) {
   }
 }
 
+function readBoundedRegularSnapshot(readbackPath, label, maxBytes) {
+  let snapshot;
+  try {
+    snapshot = readRegularSnapshot(readbackPath, { label, maxBytes, bindPath: true });
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code === "ENOENT") fail(`${label} does not exist`);
+    if (/(?:changed while it was read|was (?:removed|replaced|truncated) while it was read|grew while it was read)/u.test(message)) {
+      fail(`${label} changed while it was read`);
+    }
+    fail(`${label} is not a bounded regular file`);
+  }
+  if (!snapshot || snapshot.bytes.length < 1 || snapshot.bytes.length > maxBytes) {
+    fail(`${label} is not a bounded regular file`);
+  }
+  if ((snapshot.mode & 0o7000) !== 0) fail(`${label} has unexpected privilege bits`);
+  let terminal;
+  try {
+    terminal = lstatSync(readbackPath);
+  } catch {
+    fail(`${label} changed while it was read`);
+  }
+  if (!terminal.isFile() || terminal.isSymbolicLink() || !sameIdentity(descriptorIdentity(terminal), snapshot.identity)) {
+    fail(`${label} changed while it was read`);
+  }
+  return snapshot;
+}
+
 function readTrustedRegularFile(readbackPath, label, maxBytes) {
   if (typeof readbackPath !== "string" || readbackPath.length === 0) fail(`${label} path is required`);
-  let info;
-  try { info = lstatSync(readbackPath); } catch { fail(`${label} does not exist`); }
-  if (!info.isFile() || info.size < 1 || info.size > maxBytes) fail(`${label} is not a bounded regular file`);
-  const bytes = readFileSync(readbackPath);
-  if (bytes.length !== info.size) fail(`${label} changed while it was read`);
-  return { bytes, readback: { bytes: bytes.length, sha256: digestBytes(bytes) } };
+  const snapshot = readBoundedRegularSnapshot(readbackPath, label, maxBytes);
+  return { bytes: snapshot.bytes, readback: { bytes: snapshot.bytes.length, sha256: digestBytes(snapshot.bytes) } };
 }
 
 function verifyTrustedReadbackFiles(normalized, checkout, options) {
@@ -833,10 +969,8 @@ export function verifyAdmissionReceipt(admission, normalizedInput, options = {})
 
 async function readJson(path, maxBytes = 8 * 1024 * 1024) {
   if (typeof path !== "string" || path.length === 0) fail("JSON path is required");
-  let info;
-  try { info = await stat(path); } catch { fail("JSON input does not exist"); }
-  if (!info.isFile() || info.size <= 0 || info.size > maxBytes) fail("JSON input is not a bounded regular file");
-  try { return JSON.parse(await readFile(path, "utf8")); } catch { fail("JSON input is invalid"); }
+  const snapshot = readBoundedRegularSnapshot(path, "JSON input", maxBytes);
+  try { return JSON.parse(snapshot.bytes.toString("utf8")); } catch { fail("JSON input is invalid"); }
 }
 
 async function writeNew(path, value) {
@@ -1384,9 +1518,112 @@ async function verifyAssets(normalized, assetsDir) {
   return rows;
 }
 
-function qualificationFromInput(normalized, platform) {
+export async function verifyExtractedDarwinRawPayload(rawRoot, targetSource, darwinQualification, rawExecutableReadback = null) {
+  if (typeof rawRoot !== "string" || rawRoot.length === 0) {
+    fail("Darwin raw payload root is required");
+  }
+  requireRecord(targetSource, "targetSources.darwin-arm64");
+  requireRecord(darwinQualification, "qualifications.darwin-arm64");
+  const expectedNativePayloadSha256 = requireDigest(
+    targetSource.nativePayloadSha256,
+    "targetSources.darwin-arm64.nativePayloadSha256",
+  );
+  const expectedExecutableSha256 = requireDigest(
+    targetSource.executableSha256,
+    "targetSources.darwin-arm64.executableSha256",
+  );
+  if (darwinQualification.nativePayloadSha256 !== expectedNativePayloadSha256) {
+    fail("Darwin qualification nativePayloadSha256 does not match targetSources.darwin-arm64.nativePayloadSha256");
+  }
+  let rootStat;
+  try {
+    rootStat = lstatSync(rawRoot);
+  } catch {
+    fail("extracted raw Darwin payload root does not exist");
+  }
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    fail("extracted raw Darwin payload root must be a real directory");
+  }
+  const resolvedRawRoot = realpathSync(resolve(rawRoot));
+  const bundleRootName = PLATFORMS["darwin-arm64"].rawRoot;
+  const bundlePath = join(resolvedRawRoot, bundleRootName);
+  let bundleStat;
+  try {
+    bundleStat = lstatSync(bundlePath);
+  } catch {
+    fail(`extracted raw Darwin payload is missing '${bundleRootName}'`);
+  }
+  if (!bundleStat.isDirectory() || bundleStat.isSymbolicLink()) {
+    fail(`extracted raw Darwin '${bundleRootName}' must be a real directory`);
+  }
+  const resolvedBundlePath = realpathSync(bundlePath);
+  const bundleRel = relative(resolvedRawRoot, resolvedBundlePath).split(sep).join("/");
+  if (bundleRel !== bundleRootName) {
+    fail("extracted raw Darwin application bundle escapes the payload root");
+  }
+  const rootEntries = readdirSync(resolvedRawRoot);
+  if (rootEntries.length !== 1 || rootEntries[0] !== bundleRootName) {
+    fail(`extracted raw Darwin payload root must contain only '${bundleRootName}'`);
+  }
+  let inventory;
+  try {
+    inventory = await inventoryNativePayload(resolvedRawRoot);
+  } catch (error) {
+    fail(`extracted raw Darwin native payload inventory failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (
+    !isRecord(inventory) ||
+    inventory.schema !== undefined ||
+    inventory.materialDigest !== undefined ||
+    !Array.isArray(inventory.files) ||
+    inventory.files.length === 0 ||
+    !SHA256.test(String(inventory.identity ?? ""))
+  ) {
+    fail("extracted raw Darwin native payload did not produce an ordinary file inventory");
+  }
+  const bundlePrefix = `${bundleRootName}/`;
+  for (const entry of inventory.files) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.path !== "string" ||
+      !entry.path.startsWith(bundlePrefix) ||
+      !Number.isSafeInteger(entry.bytes) ||
+      entry.bytes < 0 ||
+      (entry.mode !== 0o644 && entry.mode !== 0o755) ||
+      !SHA256.test(String(entry.sha256 ?? ""))
+    ) {
+      fail("extracted raw Darwin native payload inventory contains an invalid or uncontained member");
+    }
+  }
+  const executableEntry = inventory.files.find((entry) => entry.path === PLATFORMS["darwin-arm64"].rawExecutable);
+  if (
+    !executableEntry ||
+    executableEntry.mode !== 0o755 ||
+    executableEntry.sha256 !== expectedExecutableSha256 ||
+    (rawExecutableReadback && executableEntry.bytes !== rawExecutableReadback.bytes)
+  ) {
+    fail("extracted raw Darwin native payload inventory executable entry does not match targetSources.darwin-arm64.executableSha256");
+  }
+  if (inventory.identity !== expectedNativePayloadSha256) {
+    fail(
+      `extracted raw Darwin native payload inventory identity ${inventory.identity} does not match targetSources.darwin-arm64.nativePayloadSha256`,
+    );
+  }
+  return Object.freeze({
+    identity: inventory.identity,
+    files: inventory.files.length,
+  });
+}
+
+function qualificationFromInput(normalized, platform, darwinPayloadReadback = null) {
   if (platform === "darwin-arm64") {
     const darwinQual = normalized.qualifications["darwin-arm64"];
+    const verifiedPayload = validatePayloadInventorySummary(
+      darwinPayloadReadback,
+      "darwin-arm64 observed nativePayload",
+      darwinQual.nativePayloadSha256,
+      "targetSources.darwin-arm64.nativePayloadSha256",
+    );
     return {
       status: darwinQual.status,
       mode: "existing-qualified",
@@ -1396,7 +1633,8 @@ function qualificationFromInput(normalized, platform) {
       sourceCandidate: darwinQual.sourceCandidate,
       receiptSha256: darwinQual.receiptSha256,
       executableSha256: darwinQual.executableSha256,
-      nativePayloadSha256: darwinQual.nativePayloadSha256,
+      nativePayloadSha256: verifiedPayload.identity,
+      nativePayload: verifiedPayload,
     };
   }
   return null;
@@ -1444,6 +1682,14 @@ export async function qualifyPlatform(normalizedInput, assetsDir, platform, chec
     if (rawExecutableReadback.sha256 !== targetSource.executableSha256) {
       fail(`extracted raw executable digest does not match targetSources.${platform}.executableSha256`);
     }
+    const darwinPayloadReadback = platform === "darwin-arm64"
+      ? await verifyExtractedDarwinRawPayload(
+          roots.raw,
+          targetSource,
+          normalized.qualifications["darwin-arm64"],
+          rawExecutableReadback,
+        )
+      : null;
     const resolvedCheckout = resolve(checkout);
     const { qualifyCheckout, resourceComparison } = platform.startsWith("linux")
       ? prepareConsumerQualifyCheckout(resolvedCheckout, roots.npmPayload, scratch)
@@ -1460,7 +1706,7 @@ export async function qualifyPlatform(normalizedInput, assetsDir, platform, chec
     });
     const packageVerifyStdout = parseLastJson(runCommand(plan.packageVerify, "native package verify"), "native package verify");
     if (packageVerifyStdout.status !== "pass") fail(`native package verify did not pass for ${platform}`);
-    let qualification = qualificationFromInput(normalized, platform);
+    let qualification = qualificationFromInput(normalized, platform, darwinPayloadReadback);
     let qualificationReceipt = platform === "darwin-arm64"
       ? normalized.qualifications["darwin-arm64"].receipt
       : null;
@@ -1646,6 +1892,7 @@ export function buildConsumerReceipt(input, platformReceipts, options = {}) {
       !isRecord(row.qualification) ||
       row.qualification.status !== "pass" ||
       row.qualification.mode !== PLATFORMS[platform].qualification ||
+      row.qualification.authority !== targetSource.authority ||
       row.qualification.sourceCommit !== targetSource.sourceCommit ||
       row.qualification.sourceTree !== targetSource.sourceTree ||
       row.qualification.sourceCandidate !== targetSource.sourceCandidate ||
@@ -1667,6 +1914,14 @@ export function buildConsumerReceipt(input, platformReceipts, options = {}) {
     }
     if (platform === "darwin-arm64" && qualificationReceiptSha256 !== normalized.qualifications["darwin-arm64"].receiptSha256) {
       fail("darwin-arm64 complete qualification receipt does not bind the existing-qualified receiptSha256");
+    }
+    if (platform === "darwin-arm64") {
+      validatePayloadInventorySummary(
+        row.qualification.nativePayload,
+        "darwin-arm64 receipt qualification.nativePayload",
+        targetSource.nativePayloadSha256,
+        "targetSources.darwin-arm64.nativePayloadSha256",
+      );
     }
     if (!Array.isArray(row.smoke) || row.smoke.some((run) => !isRecord(run) || run.platform !== platform)) {
       fail(`${platform} receipt smoke rows must belong to ${platform}`);

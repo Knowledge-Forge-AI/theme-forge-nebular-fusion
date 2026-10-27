@@ -3,9 +3,9 @@
 // the evidence seal and the release-candidate catalog.
 import { describe, it, expect, afterEach } from "vitest";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { LANES, RETENTION, artifactName, planLanes, workflowOutputs } from "../tools/native-rc-plan.mjs";
@@ -17,9 +17,10 @@ import { buildReceipt, seal } from "../tools/native-rc-evidence.mjs";
 import { identity } from "../tools/candidate-provenance.mjs";
 import { buildIndex } from "../tools/native-rc-index.mjs";
 import { nativeLauncher } from "../tools/native-launcher.mjs";
-import { NODE_RELEASE_IDENTITY } from "../tools/node-runtime-authority.mjs";
-import { TARGETS as NPM_TARGETS, verifyPayload } from "../../../packages/nebular-fusion-npm/bin/payload.mjs";
+import { NODE_RELEASE_IDENTITY, readRegularFile } from "../tools/node-runtime-authority.mjs";
+import { createPreviewHashBudget, inspectBoundedPreviewTree } from "../tools/prepare-app-resources.mjs";
 import {
+  MAX_RUNTIME_INPUT_BYTES,
   PRIVATE_RUNTIME_PREFIX,
   PRIVATE_RUNTIME_MARKER,
   REQUIRED_RUNTIME_DIRECTORIES,
@@ -28,17 +29,42 @@ import {
   createNativeRuntimeAliasProjection,
   externalFloorForTarget,
   computeMaterialDigest,
+  authenticateNativeRuntimeInput,
   inventoryNativePayload,
   selectPayloadNativeRuntime,
 } from "../tools/native-runtime.mjs";
+
+const testRoot = dirname(fileURLToPath(import.meta.url));
+const payloadModuleCandidates = [
+  resolve(testRoot, "../../../packages/nebular-fusion-npm/bin/payload.mjs"),
+  resolve(testRoot, "../packages/nebular-fusion-npm/bin/payload.mjs"),
+];
+const payloadModulePath = payloadModuleCandidates.find((candidate) => existsSync(candidate));
+if (!payloadModulePath) {
+  throw new Error("Nebular npm payload module is missing from the private or flattened public layout");
+}
+const { TARGETS: NPM_TARGETS, verifyPayload } = await import(payloadModulePath);
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const SHA = "93c8da8d8cfd4923869ec8d11c51d1e7349802cc";
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) { spawnSync("chmod", ["-R", "u+w", root]); rmSync(root, { recursive: true, force: true }); } });
 const scratch = (name) => { const root = mkdtempSync(join(tmpdir(), `native-rc-${name}-`)); roots.push(root); return root; };
+const physicalScratch = (name) => { const root = mkdtempSync(join(realpathSync(tmpdir()), `native-rc-${name}-`)); roots.push(root); return root; };
 const write = (path, content, mode) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); if (mode) chmodSync(path, mode); };
 const plan = (eventName, inputs = {}, overrides = {}) => planLanes({ eventName, inputs, sha: SHA, runId: 123, runAttempt: 1, version: "0.6.1", ...overrides });
+
+it("refuses a protected preview leaf before any leaf filesystem read", async () => {
+  const root = physicalScratch("protected-preview-leaf");
+  write(join(root, "db"), "private", 0o644);
+  await expect(inspectBoundedPreviewTree(root, {
+    files: 1,
+    nodes: 1,
+    aggregateBytes: 7,
+    perFileBytes: 1024,
+    relativePathBytes: 128,
+  }, createPreviewHashBudget(1024))).rejects.toThrow(/protected entry.*db/i);
+});
 
 describe("lane planning", () => {
   it("runs every lane on a pull request with routine retention", () => {
@@ -147,7 +173,7 @@ describe("deterministic packaging", () => {
 
   it("renders the platform package templates of the private owner", () => {
     expect(platformPackageJson("linux-arm64")).toMatchObject({ name: "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-arm64", os: ["linux"], cpu: ["arm64"],
-      files: ["payload", "package-manifest.json", "README.md", "LICENSE", "NOTICE"], license: "AGPL-3.0-or-later OR Commercial" });
+      files: ["payload", "package-manifest.json", "README.md", "LICENSE", "NOTICE"], license: "AGPL-3.0-or-later" });
     expect(platformReadme("darwin-arm64")).toContain("`payload/Theme Forge Nebular Fusion.app`");
     expect(() => verifyPlatformPackage(scratch("empty"), "linux-x64", "0".repeat(64))).toThrow();
   });
@@ -1145,6 +1171,80 @@ describe("linux private-runtime RC integration", () => {
     return { root, material };
   }
 
+  function nativeRuntimeInput(root, material, size = null) {
+    const inputPath = join(scratch("runtime-input"), "native-runtime-input.json");
+    const input = {
+      schema: "nebular-native-runtime-input-v1",
+      target: "x86_64-unknown-linux-gnu",
+      sourceRoot: root,
+      material,
+      evidence: { fixture: sha256(Buffer.from("fixture")) },
+    };
+    const json = Buffer.from(`${JSON.stringify(input)}\n`);
+    const bytes = size === null ? json : Buffer.concat([json, Buffer.alloc(Math.max(0, size - json.length), 0x20)]);
+    write(inputPath, bytes, 0o644);
+    return { inputPath, bytes, expectedSha256: sha256(bytes) };
+  }
+
+  async function authenticateInput(fixture) {
+    return authenticateNativeRuntimeInput(fixture.inputPath, fixture.expectedSha256, {
+      expectedTarget: "x86_64-unknown-linux-gnu",
+    });
+  }
+
+  it("uses descriptor-first bounded admission for regular, symlink, nonregular, and oversize inputs", async () => {
+    const validPayload = populatePrivateLinuxPayload(scratch("descriptor-regular"));
+    const valid = nativeRuntimeInput(validPayload.root, validPayload.material);
+    await expect(authenticateInput(valid)).resolves.toMatchObject({ inputSha256: valid.expectedSha256 });
+
+    const symlinkPayload = populatePrivateLinuxPayload(scratch("descriptor-symlink"));
+    const symlinkInput = nativeRuntimeInput(symlinkPayload.root, symlinkPayload.material);
+    const symlinkTarget = join(dirname(symlinkInput.inputPath), "native-runtime-input-target.json");
+    write(symlinkTarget, symlinkInput.bytes, 0o644);
+    rmSync(symlinkInput.inputPath);
+    symlinkSync(symlinkTarget, symlinkInput.inputPath);
+    await expect(authenticateInput(symlinkInput)).rejects.toThrow(/regular file|symbolic link|ELOOP/i);
+
+    const nonregularPayload = populatePrivateLinuxPayload(scratch("descriptor-nonregular"));
+    const nonregular = nativeRuntimeInput(nonregularPayload.root, nonregularPayload.material);
+    rmSync(nonregular.inputPath);
+    expect(spawnSync("mkfifo", [nonregular.inputPath]).status).toBe(0);
+    await expect(authenticateInput(nonregular)).rejects.toThrow(/regular file|FIFO|non-regular/i);
+
+    const oversizePayload = populatePrivateLinuxPayload(scratch("descriptor-oversize"));
+    const oversize = nativeRuntimeInput(oversizePayload.root, oversizePayload.material);
+    truncateSync(oversize.inputPath, MAX_RUNTIME_INPUT_BYTES + 1);
+    await expect(authenticateInput(oversize)).rejects.toThrow(/byte limit|exceeds/i);
+  });
+
+  it("fails closed when a bounded input is shortened, grown, replaced, or identity-mutated during admission", async () => {
+    const runMutationCase = async (name, mutate, expected) => {
+      const payload = populatePrivateLinuxPayload(scratch(`descriptor-${name}`));
+      const fixture = nativeRuntimeInput(payload.root, payload.material, 8 * 1024 * 1024);
+      const timer = setInterval(() => {
+        try {
+          mutate(fixture.inputPath);
+        } catch {
+          // The mutation is intentionally racing the real descriptor reader.
+        }
+      }, 1);
+      try {
+        await expect(authenticateInput(fixture)).rejects.toThrow(expected);
+      } finally {
+        clearInterval(timer);
+      }
+    };
+
+    await runMutationCase("short", (path) => truncateSync(path, 1), /truncated|size changed|drift|Malformed|keys differ/i);
+    await runMutationCase("grow", (path) => appendFileSync(path, Buffer.from("x")), /grew|size changed|drift|Malformed|keys differ/i);
+    await runMutationCase("replacement", (path) => {
+      const replacement = `${path}.replacement`;
+      renameSync(path, replacement);
+      writeFileSync(path, Buffer.from("replacement\n"));
+    }, /drift|changed|Malformed|keys differ|ENOENT/i);
+    await runMutationCase("identity", (path) => chmodSync(path, 0o4755), /privilege|drift|changed|Malformed|keys differ/i);
+  });
+
   it("packages private-runtime Linux payloads, preserves SONAME aliases, and refuses ordinary launchers, malformed markers, or missing roles", async () => {
     const checkout = scratch("checkout-private");
     write(join(checkout, "LICENSE"), "license\n");
@@ -1194,8 +1294,10 @@ describe("linux private-runtime RC integration", () => {
     expect(assembled.manifest.runtimeAliasProjection.aliases).toHaveLength(2);
     for (const alias of assembled.manifest.runtimeAliasProjection.aliases) {
       const copied = join(assembled.packageDir, "payload", alias.path);
-      expect(lstatSync(copied).isSymbolicLink()).toBe(false);
-      expect(readFileSync(copied)).toEqual(readFileSync(join(payload, alias.canonical)));
+      const copiedSnapshot = readRegularFile(copied, { label: `projected alias ${alias.path}` });
+      const canonicalSnapshot = readRegularFile(join(payload, alias.canonical), { label: `canonical alias ${alias.canonical}` });
+      expect(copiedSnapshot.identity.mode & 0o777).toBe(0o644);
+      expect(copiedSnapshot.bytes).toEqual(canonicalSnapshot.bytes);
     }
     expect(() => verifyPlatformPackage(assembled.packageDir, "linux-x64", assembled.manifestSha256)).not.toThrow();
     expect(() => authenticateNpmPackageContext(assembled.packageDir, "linux-x64", assembled.manifestSha256)).not.toThrow();
@@ -1372,7 +1474,7 @@ describe("linux private-runtime RC integration", () => {
 
     // Consumer-mode qualification with expectedNativePayloadSha256 succeeds on private-runtime-closure without local source paths
     const runtimeLib = join(payload, "opt/nebular-private/lib");
-    const hostFixtureRoot = dirname(payload);
+    const hostFixtureRoot = scratch("host-fixture");
     const hostLibc = join(hostFixtureRoot, "host-libc.so.6");
     const hostLoader = join(hostFixtureRoot, "ld-linux-x86-64.so.2");
     write(hostLibc, Buffer.alloc(64), 0o755);

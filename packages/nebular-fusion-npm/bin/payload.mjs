@@ -1,5 +1,16 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, realpathSync, readlinkSync } from "node:fs";
+import {
+  closeSync,
+  constants as FS_CONSTANTS,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  readlinkSync
+} from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
 /** @typedef {"darwin-arm64" | "linux-arm64" | "linux-x64"} TargetKey */
@@ -112,6 +123,128 @@ function safeMember(root, path) {
   return full;
 }
 
+const AUTHENTICATED_STAT_FIELDS = Object.freeze([
+  "dev",
+  "ino",
+  "size",
+  "mode",
+  "mtimeNs",
+  "ctimeNs",
+  "uid",
+  "gid",
+  "nlink"
+]);
+const AUTHENTICATED_READ_CHUNK = 64 * 1024;
+
+/** @param {import("node:fs").Stats} stat @returns {string} */
+function statFingerprint(stat) {
+  const values = AUTHENTICATED_STAT_FIELDS.map(field => stat[field]);
+  if (values.some(value => typeof value !== "bigint" && typeof value !== "number")) {
+    throw new Error("Authenticated file stat is missing a full9 field");
+  }
+  const [dev, ino, size, mode, mtimeNs, ctimeNs, uid, gid, nlink] = values;
+  return [String(dev), String(ino), Number(size), Number(mode), String(mtimeNs), String(ctimeNs), Number(uid), Number(gid), Number(nlink)].join("\0");
+}
+
+/** @param {import("node:fs").Stats} stat @returns {number} */
+function statMode(stat) {
+  const mode = stat.mode;
+  return Number(typeof mode === "bigint" ? mode & 0o7777n : mode & 0o7777);
+}
+
+/**
+ * Read an authenticated descriptor without reopening the pathname for the
+ * bytes that are parsed or hashed. The path and held descriptor are compared
+ * before and after the bounded read; callers still own any later pathname
+ * execution race (the launcher documents that boundary separately).
+ *
+ * @param {string} path
+ * @param {{ label: string, maxBytes: number, expectedSize?: number, minBytes?: number, expectedModes: number[] }} options
+ * @returns {Buffer}
+ */
+function readAuthenticatedRegularFile(path, options) {
+  const { label, maxBytes, expectedSize, minBytes = 0, expectedModes } = options;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(minBytes) || minBytes < 0
+      || minBytes > maxBytes || !Array.isArray(expectedModes) || expectedModes.length === 0) {
+    throw new Error(`${label} has invalid bounded-read options`);
+  }
+  if (expectedSize !== undefined && (!Number.isSafeInteger(expectedSize) || expectedSize < minBytes || expectedSize > maxBytes)) {
+    throw new Error(`${label} has an invalid expected size`);
+  }
+  if (!Number.isInteger(FS_CONSTANTS.O_NOFOLLOW) || !Number.isInteger(FS_CONSTANTS.O_NONBLOCK)) {
+    throw new Error(`${label} authenticated read flags are unavailable`);
+  }
+  const maxBytesBig = BigInt(maxBytes);
+  const minBytesBig = BigInt(minBytes);
+  const expectedSizeBig = expectedSize === undefined ? undefined : BigInt(expectedSize);
+  const validateStat = stat => {
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} is not a regular file`);
+    if (typeof stat.size !== "bigint" || stat.size < minBytesBig || stat.size > maxBytesBig
+        || (expectedSizeBig !== undefined && stat.size !== expectedSizeBig)) {
+      throw new Error(`${label} size is outside the bounded contract`);
+    }
+    if (!expectedModes.includes(statMode(stat))) throw new Error(`${label} mode is outside the bounded contract`);
+    return statFingerprint(stat);
+  };
+
+  let beforePath;
+  try {
+    beforePath = lstatSync(path, { bigint: true });
+  } catch {
+    throw new Error(`${label} is unavailable`);
+  }
+  const beforeFingerprint = validateStat(beforePath);
+  let fd;
+  try {
+    fd = openSync(path, FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW | FS_CONSTANTS.O_NONBLOCK);
+    const opened = fstatSync(fd, { bigint: true });
+    if (validateStat(opened) !== beforeFingerprint) throw new Error(`${label} changed while opening`);
+
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const requested = Math.min(AUTHENTICATED_READ_CHUNK, maxBytes - total + 1);
+      const chunk = Buffer.alloc(Math.max(1, requested));
+      const count = readSync(fd, chunk, 0, chunk.length, null);
+      if (count === 0) break;
+      total += count;
+      if (total > maxBytes) throw new Error(`${label} exceeds its bounded read cap`);
+      chunks.push(count === chunk.length ? chunk : chunk.subarray(0, count));
+    }
+
+    const afterDescriptor = fstatSync(fd, { bigint: true });
+    if (validateStat(afterDescriptor) !== beforeFingerprint) throw new Error(`${label} changed during read`);
+    let afterPath;
+    try {
+      afterPath = lstatSync(path, { bigint: true });
+    } catch {
+      throw new Error(`${label} pathname disappeared during read`);
+    }
+    if (validateStat(afterPath) !== beforeFingerprint || statFingerprint(afterPath) !== statFingerprint(afterDescriptor)) {
+      throw new Error(`${label} pathname changed during read`);
+    }
+    const bytes = Buffer.concat(chunks, total);
+    if (bytes.length < minBytes || bytes.length > maxBytes || (expectedSize !== undefined && bytes.length !== expectedSize)) {
+      throw new Error(`${label} byte length is outside the bounded contract`);
+    }
+    return bytes;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+      let terminalPath;
+      try {
+        terminalPath = lstatSync(path, { bigint: true });
+      } catch {
+        throw new Error(`${label} pathname disappeared while closing`);
+      }
+      if (statFingerprint(terminalPath) !== beforeFingerprint) {
+        throw new Error(`${label} pathname changed while closing`);
+      }
+    }
+  }
+}
+
 /** @param {unknown} value @returns {string} */
 function canonicalProjection(value) {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
@@ -152,17 +285,19 @@ function validateAliasProjection(manifest, root, target) {
     throw new Error("Invalid runtime alias projection");
   }
   const markerPath = join(root, "payload", "native-runtime.json");
-  let markerInfo;
+  let material;
+  let markerBytes;
   try {
-    markerInfo = lstatSync(markerPath);
+    markerBytes = readAuthenticatedRegularFile(markerPath, {
+      label: "Projected package native runtime marker",
+      maxBytes: 16 * 1024 * 1024,
+      minBytes: 1,
+      expectedModes: [0o644]
+    });
   } catch {
     throw new Error("Projected package is missing a regular native runtime marker");
   }
-  if (!markerInfo.isFile() || markerInfo.isSymbolicLink() || markerInfo.size <= 0 || markerInfo.size > 16 * 1024 * 1024) {
-    throw new Error("Projected package is missing a regular native runtime marker");
-  }
-  let material;
-  try { material = JSON.parse(readFileSync(markerPath, "utf8")); } catch { throw new Error("Projected native runtime marker is invalid JSON"); }
+  try { material = JSON.parse(markerBytes.toString("utf8")); } catch { throw new Error("Projected native runtime marker is invalid JSON"); }
   if (material?.schema !== "nebular-native-runtime-material-v1" || material.materialDigest !== projection.materialDigest
       || !Array.isArray(material.regulars) || !Array.isArray(material.aliases)) {
     throw new Error("Projected package material identity mismatch");
@@ -217,15 +352,18 @@ export function verifyPayload(packageRoot, target, expectedManifestSha256) {
   }
   const root = realpathSync(packageRoot);
   const pkgPath = join(root, "package.json");
-  const pkgInfo = lstatSync(pkgPath);
-  if (!pkgInfo.isFile() || pkgInfo.isSymbolicLink() || pkgInfo.size <= 0 || pkgInfo.size > 1024 * 1024) {
-    throw new Error("Invalid platform package.json");
-  }
   let pkg;
   try {
-    pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-  } catch {
-    throw new Error("Platform package.json is invalid JSON");
+    const pkgBytes = readAuthenticatedRegularFile(pkgPath, {
+      label: "Platform package.json",
+      maxBytes: 1024 * 1024,
+      minBytes: 1,
+      expectedModes: [0o644]
+    });
+    pkg = JSON.parse(pkgBytes.toString("utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Platform package.json is invalid JSON");
+    throw new Error("Invalid platform package.json");
   }
   if (pkg.name !== target.package || pkg.version !== VERSION
       || !Array.isArray(pkg.os) || pkg.os.length !== 1 || pkg.os[0] !== target.os
@@ -234,11 +372,17 @@ export function verifyPayload(packageRoot, target, expectedManifestSha256) {
   }
 
   const manifestPath = join(root, "package-manifest.json");
-  const manifestInfo = lstatSync(manifestPath);
-  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink() || manifestInfo.size <= 0 || manifestInfo.size > 4 * 1024 * 1024) {
+  let bytes;
+  try {
+    bytes = readAuthenticatedRegularFile(manifestPath, {
+      label: "Payload manifest",
+      maxBytes: 4 * 1024 * 1024,
+      minBytes: 1,
+      expectedModes: [0o644]
+    });
+  } catch {
     throw new Error("Invalid payload manifest file");
   }
-  const bytes = readFileSync(manifestPath);
   if (digest(bytes) !== expectedManifestSha256) {
     throw new Error("Payload manifest authentication failed");
   }
@@ -331,9 +475,22 @@ export function verifyPayload(packageRoot, target, expectedManifestSha256) {
         throw new Error("Payload file identity mismatch");
       }
       total += memberSize;
-      if (total > 2 * 1024 * 1024 * 1024 || digest(readFileSync(path)) !== member.sha256) {
+      if (total > 2 * 1024 * 1024 * 1024) {
         throw new Error("Payload checksum mismatch");
       }
+      let memberBytes;
+      try {
+        memberBytes = readAuthenticatedRegularFile(path, {
+          label: "Payload member",
+          maxBytes: memberSize,
+          expectedSize: memberSize,
+          minBytes: memberSize === 0 ? 0 : 1,
+          expectedModes: [memberMode]
+        });
+      } catch {
+        throw new Error("Payload checksum mismatch");
+      }
+      if (digest(memberBytes) !== member.sha256) throw new Error("Payload checksum mismatch");
     } else {
       throw new Error("Invalid payload member type");
     }

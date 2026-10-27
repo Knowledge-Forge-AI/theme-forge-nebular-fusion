@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, chmod, stat, symlink, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, chmod, stat, symlink, lstat, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { populateNativeCaches } from "./native-candidate-build.mjs";
+import { readRegularFile } from "./node-runtime-authority.mjs";
+import { chooseNativeCargoHome, workingCargoHomeMetadataIdentity } from "./native-cargo-home-contract.mjs";
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "native-cache-copy-"));
@@ -28,13 +30,46 @@ test("populates both precreated homes with writable dereferenced children and pr
   for (const [name, destination] of [["cargoHome", "cargo-home"], ["npmCache", "npm-cache"]]) {
     const input = join(execution[name], "registry/nested/data");
     const output = join(work, destination, "registry/nested/data");
-    assert.equal(await readFile(output, "utf8"), name);
-    assert.ok((await stat(output)).mode & 0o200);
-    assert.equal((await stat(input)).mode & 0o777, 0o444);
-    assert.equal(await readFile(input, "utf8"), name);
+    const outputSnapshot = readRegularFile(output, { label: `${destination} copied member` });
+    const inputSnapshot = readRegularFile(input, { label: `${name} source member` });
+    assert.equal(outputSnapshot.bytes.toString("utf8"), name);
+    assert.ok(outputSnapshot.identity.mode & 0o200);
+    assert.equal(inputSnapshot.identity.mode & 0o777, 0o444);
+    assert.equal(inputSnapshot.bytes.toString("utf8"), name);
     assert.equal((await lstat(join(work, destination, "linked-data"))).isSymbolicLink(), false);
     assert.equal((await lstat(join(execution[name], "linked-data"))).isSymbolicLink(), true);
   }
+});
+
+test("binds an existing Cargo home to a descriptor-checked config without reading cache members", async t => {
+  const { work, execution } = await fixture(t);
+  const cargoHome = execution.cargoHome;
+  const expectedCargoConfig = "[net]\noffline = true\n";
+  await writeFile(join(cargoHome, "config.toml"), expectedCargoConfig, { mode: 0o644 });
+  const locator = await lstat(cargoHome);
+  const identity = workingCargoHomeMetadataIdentity(await realpath(cargoHome), locator);
+  const selected = await chooseNativeCargoHome({
+    workingCargoHome: cargoHome,
+    workingCargoHomeIdentity: identity,
+    defaultCargoHome: join(work, "cargo-home"),
+    expectedCargoConfig,
+  });
+  assert.equal(selected.mode, "direct-existing");
+  assert.equal(selected.cargoHome, await realpath(cargoHome));
+
+  await rm(join(cargoHome, "config.toml"));
+  await symlink("registry/nested/data", join(cargoHome, "config.toml"));
+  const symlinkLocator = await lstat(cargoHome);
+  const symlinkIdentity = workingCargoHomeMetadataIdentity(await realpath(cargoHome), symlinkLocator);
+  await assert.rejects(
+    chooseNativeCargoHome({
+      workingCargoHome: cargoHome,
+      workingCargoHomeIdentity: symlinkIdentity,
+      defaultCargoHome: join(work, "cargo-home"),
+      expectedCargoConfig,
+    }),
+    /config\.toml.*regular file|symbolic link|ELOOP/i,
+  );
 });
 
 test("absent optional caches leave owned homes empty", async t => {

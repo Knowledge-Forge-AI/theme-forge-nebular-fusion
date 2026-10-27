@@ -13,11 +13,11 @@
 // (Linux arm64 and x64 differ only in the gzip header time). PAGEFIND_WASM_PAYLOADS pins those decoded
 // payloads so a cross-platform comparison can accept exactly these members and nothing else.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readRegularSnapshot } from "./fs-snapshot.mjs";
+import { inspectSnapshot, readRegularSnapshot } from "./fs-snapshot.mjs";
 
 export const PAGEFIND_VERSION = "1.5.2";
 export const PAGEFIND_BINARIES = Object.freeze(["pagefind_extended", "pagefind"]);
@@ -39,6 +39,34 @@ export const PAGEFIND_WASM_PAYLOADS = Object.freeze({
 });
 
 export const PAGEFIND_WASM_MEMBER = /(^|\/)pagefind\/wasm\.[a-z0-9_-]+\.pagefind$/u;
+
+/**
+ * Read back a completed Pagefind tree before it is promoted into the preview.
+ * A successful child exit and an indexed-page count are not sufficient: the
+ * Pagefind writer can otherwise leave zero-byte members behind while reporting
+ * no API errors.  The manifest is sorted so it is also suitable for a stable
+ * byte/inventory comparison by callers and tests.
+ * @param {string} outputPath
+ * @returns {{ path: string, bytes: number, sha256: string }[]}
+ */
+export function pagefindOutputManifest(outputPath) {
+  /** @type {{ path: string, bytes: number, sha256: string }[]} */
+  const files = [];
+  const visit = (directory) => {
+    const inspection = inspectSnapshot(directory, { bindPath: true, label: "Pagefind output member" });
+    if (!inspection) throw new Error(`Pagefind output member is missing: ${directory}`);
+    if (inspection.type === "directory") {
+      for (const name of inspection.entries) visit(join(directory, name));
+      return;
+    }
+    const bytes = inspection.bytes;
+    if (bytes.length === 0) throw new Error(`Pagefind output contains a zero-byte member: ${directory}`);
+    files.push({ path: relative(outputPath, directory).split(sep).join("/"), bytes: inspection.size, sha256: inspection.sha256 });
+  };
+  visit(outputPath);
+  if (files.length === 0) throw new Error(`Pagefind output is empty: ${outputPath}`);
+  return files.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+}
 
 /** @param {string} path @returns {string} */
 function packageVersion(path) {
@@ -98,19 +126,19 @@ const [library, siteDir, outputPath, pagesJson] = process.argv.slice(1);
 const { readFileSync } = await import("node:fs");
 const pagefind = await import(library);
 const fail = (label, response) => { if (response.errors.length) throw new Error(label + ": " + response.errors.join("; ")); return response; };
+let indexed = 0;
 try {
   const { index } = fail("createIndex", await pagefind.createIndex());
-  let indexed = 0;
   for (const sourcePath of JSON.parse(pagesJson)) {
     const content = readFileSync(siteDir + "/" + sourcePath, "utf8");
     fail(sourcePath, await index.addHTMLFile({ sourcePath, content }));
     indexed += 1;
   }
   fail("writeFiles", await index.writeFiles({ outputPath }));
-  process.stdout.write(JSON.stringify({ indexed }));
 } finally {
   await pagefind.close();
 }
+process.stdout.write(JSON.stringify({ indexed }));
 `;
 
 /**
@@ -126,10 +154,12 @@ export function reindexPagefindSite(siteDir, { nodeModules }) {
   if (pages.length === 0) throw new Error(`No HTML pages to index in ${siteDir}`);
   const output = join(siteDir, "pagefind");
   rmSync(output, { recursive: true, force: true });
+  const stagingParent = mkdtempSync(join(siteDir, ".nebular-pagefind-stage-"));
+  const staging = join(stagingParent, "pagefind");
   const cwd = mkdtempSync(join(tmpdir(), "nebular-pagefind-"));
   try {
     const library = pathToFileURL(join(nodeModules, "pagefind/lib/index.js")).href;
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", INDEXER, library, siteDir, output, JSON.stringify(pages)], {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", INDEXER, library, siteDir, staging, JSON.stringify(pages)], {
       cwd,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
@@ -140,8 +170,11 @@ export function reindexPagefindSite(siteDir, { nodeModules }) {
     if (result.status !== 0) throw new Error(`Pagefind indexing failed for ${siteDir} (exit ${result.status}): ${result.stderr || result.stdout}`);
     const { indexed } = JSON.parse(result.stdout);
     if (indexed !== pages.length) throw new Error(`Pagefind indexed ${indexed} of ${pages.length} pages in ${siteDir}`);
-    return { binary, siteDir, output, pages };
+    const manifest = pagefindOutputManifest(staging);
+    renameSync(staging, output);
+    return { binary, siteDir, output, pages, manifest };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(stagingParent, { recursive: true, force: true });
   }
 }

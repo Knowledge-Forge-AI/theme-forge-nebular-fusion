@@ -22,33 +22,59 @@ use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn supported_profile_formats() -> Vec<String> {
-    vec!["tf-paired-profile-v1".to_owned(), "tf-paired-profile-v2".to_owned()]
+    vec![
+        "tf-paired-profile-v1".to_owned(),
+        "tf-paired-profile-v2".to_owned(),
+    ]
 }
 
 fn open_cancelled() -> AppThemeOpenProfileResponse {
-    AppThemeOpenProfileResponse { cancelled: true, ..Default::default() }
+    AppThemeOpenProfileResponse {
+        cancelled: true,
+        ..Default::default()
+    }
 }
 
 fn open_error(msg: impl Into<String>) -> AppThemeOpenProfileResponse {
-    AppThemeOpenProfileResponse { error: Some(msg.into()), ..Default::default() }
+    AppThemeOpenProfileResponse {
+        error: Some(msg.into()),
+        ..Default::default()
+    }
 }
 
 fn save_cancelled() -> AppThemeSaveProfileResponse {
-    AppThemeSaveProfileResponse { cancelled: true, ..Default::default() }
+    AppThemeSaveProfileResponse {
+        cancelled: true,
+        ..Default::default()
+    }
 }
 
 fn save_error(msg: impl Into<String>) -> AppThemeSaveProfileResponse {
-    AppThemeSaveProfileResponse { error: Some(msg.into()), ..Default::default() }
+    AppThemeSaveProfileResponse {
+        error: Some(msg.into()),
+        ..Default::default()
+    }
 }
 
 fn save_ok(doc: AppThemeOpenedDocument) -> AppThemeSaveProfileResponse {
-    AppThemeSaveProfileResponse { saved: true, document: Some(doc), ..Default::default() }
+    AppThemeSaveProfileResponse {
+        saved: true,
+        document: Some(doc),
+        ..Default::default()
+    }
 }
 
 fn sanitize_display_name(path: &Path) -> String {
-    let raw = path.file_name().and_then(|n| n.to_str()).unwrap_or("profile.json");
+    let raw = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("profile.json");
     let cleaned = sanitize_untrusted_text(raw, 128);
-    if cleaned.is_empty() { "profile.json".to_owned() } else { cleaned }
+    if cleaned.is_empty() {
+        "profile.json".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 fn default_profile_filename(name: &str) -> String {
@@ -64,7 +90,11 @@ fn default_profile_filename(name: &str) -> String {
         }
     }
     let trimmed = slug.trim_matches('-');
-    if trimmed.is_empty() { "profile.json".to_owned() } else { format!("{trimmed}.profile.json") }
+    if trimmed.is_empty() {
+        "profile.json".to_owned()
+    } else {
+        format!("{trimmed}.profile.json")
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -72,7 +102,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 fn fmt_io_err(prefix: &str, err: &std::io::Error) -> String {
-    format!("{prefix}: {}", sanitize_untrusted_text(&err.to_string(), 200))
+    format!(
+        "{prefix}: {}",
+        sanitize_untrusted_text(&err.to_string(), 200)
+    )
 }
 
 fn read_bounded_profile_bytes(path: &Path) -> Result<(Vec<u8>, Option<SystemTime>), String> {
@@ -239,15 +272,32 @@ impl ProfileDocumentCustody {
         doc
     }
 
-    fn with_diag(mut self, reason: Option<&str>, code: Option<&str>, summary: Option<String>) -> Self {
+    fn with_diag(
+        mut self,
+        reason: Option<&str>,
+        code: Option<&str>,
+        summary: Option<String>,
+    ) -> Self {
         self.readonly_reason = reason.map(str::to_owned);
         self.diagnostic_code = code.map(str::to_owned);
         self.diagnostic_summary = summary;
         self
     }
 
-    fn new_corrupt(src: FileSourceMeta, alias_resolved: bool, reason: &str, code: Option<&str>, summary: Option<String>) -> Self {
-        let mut doc = Self::from_source(src, ProfileDocumentSchemaVersion::Corrupt, ProfileVerificationStatus::Corrupt, ProfileSemanticStatus::Rejected, false);
+    fn new_corrupt(
+        src: FileSourceMeta,
+        alias_resolved: bool,
+        reason: &str,
+        code: Option<&str>,
+        summary: Option<String>,
+    ) -> Self {
+        let mut doc = Self::from_source(
+            src,
+            ProfileDocumentSchemaVersion::Corrupt,
+            ProfileVerificationStatus::Corrupt,
+            ProfileSemanticStatus::Rejected,
+            false,
+        );
         doc.alias_resolved = alias_resolved;
         doc.with_diag(Some(reason), code, summary)
     }
@@ -405,7 +455,11 @@ fn validate_save_request(
             {
                 return Err("Corrupt documents cannot be saved".to_owned());
             }
-            Ok((mode, Some(custody.backing_path.clone()), custody.display_name.clone()))
+            Ok((
+                mode,
+                Some(custody.backing_path.clone()),
+                custody.display_name.clone(),
+            ))
         }
         ProfileSaveMode::Edited => {
             let Some(ref profile) = request.profile else {
@@ -421,7 +475,7 @@ fn validate_save_request(
                     && req_id != &custody.document_id
                 {
                     return Err(
-                        "Document handle does not match the active profile document".to_owned(),
+                        "Document handle does not match the active profile document".to_owned()
                     );
                 }
                 if !custody.editable
@@ -432,7 +486,11 @@ fn validate_save_request(
                             .to_owned(),
                     );
                 }
-                Ok((mode, Some(custody.backing_path.clone()), custody.display_name.clone()))
+                Ok((
+                    mode,
+                    Some(custody.backing_path.clone()),
+                    custody.display_name.clone(),
+                ))
             } else if request.document_id.is_some() {
                 Err("Document handle does not match the active profile document".to_owned())
             } else {
@@ -640,7 +698,8 @@ impl AppThemeState {
     }
 
     pub fn document_ticket_counts(&self) -> (u64, u64) {
-        self.lock().map_or((0, 0), |s| s.runner.document_ticket_counts())
+        self.lock()
+            .map_or((0, 0), |s| s.runner.document_ticket_counts())
     }
 
     pub fn open_profile_path(&self, path: PathBuf) -> StudioResult<AppThemeOpenProfileResponse> {
@@ -677,8 +736,12 @@ impl AppThemeState {
         let mut pending_custody = match runner.bind_document(&src.raw_bytes, None) {
             Ok(bound) => match classify_bound_document(&runner, src, bound) {
                 Ok(doc) => doc,
-                Err(err) if err.reason_code() == StudioReasonCode::Cancelled
-                    || self.lock()?.open_generation != ticket => return Ok(open_cancelled()),
+                Err(err)
+                    if err.reason_code() == StudioReasonCode::Cancelled
+                        || self.lock()?.open_generation != ticket =>
+                {
+                    return Ok(open_cancelled());
+                }
                 Err(err) => return Ok(open_error(sanitize_untrusted_text(&err.to_string(), 512))),
             },
             Err(err) if err.reason_code() == StudioReasonCode::SidecarArtifactUnavailable => {
@@ -716,8 +779,12 @@ impl AppThemeState {
                     ),
                 }
             }
-            Err(err) if err.reason_code() == StudioReasonCode::Cancelled
-                || self.lock()?.open_generation != ticket => return Ok(open_cancelled()),
+            Err(err)
+                if err.reason_code() == StudioReasonCode::Cancelled
+                    || self.lock()?.open_generation != ticket =>
+            {
+                return Ok(open_cancelled());
+            }
             Err(err) => return Ok(open_error(sanitize_untrusted_text(&err.to_string(), 512))),
         };
 
@@ -731,7 +798,11 @@ impl AppThemeState {
         session.active_document = Some(pending_custody);
         session.dirty = false;
 
-        Ok(AppThemeOpenProfileResponse { cancelled: false, document: Some(opened_doc), error: None })
+        Ok(AppThemeOpenProfileResponse {
+            cancelled: false,
+            document: Some(opened_doc),
+            error: None,
+        })
     }
 
     pub fn prepare_save_target(
@@ -739,8 +810,10 @@ impl AppThemeState {
         request: &AppThemeSaveProfileRequest,
     ) -> StudioResult<Result<(Option<PathBuf>, String), String>> {
         let session = self.lock()?;
-        Ok(validate_save_request(session.active_document.as_ref(), request)
-            .map(|(_, path, default_name)| (path, default_name)))
+        Ok(
+            validate_save_request(session.active_document.as_ref(), request)
+                .map(|(_, path, default_name)| (path, default_name)),
+        )
     }
 
     pub fn save_profile_path(
@@ -763,11 +836,17 @@ impl AppThemeState {
             if session.open_generation != eff_ticket {
                 return Ok(save_cancelled());
             }
-            let (mode, _, _) = match validate_save_request(session.active_document.as_ref(), &request) {
-                Ok(triple) => triple,
-                Err(err_msg) => return Ok(save_error(err_msg)),
-            };
-            (session.runner.clone(), mode, session.active_document.clone(), eff_ticket)
+            let (mode, _, _) =
+                match validate_save_request(session.active_document.as_ref(), &request) {
+                    Ok(triple) => triple,
+                    Err(err_msg) => return Ok(save_error(err_msg)),
+                };
+            (
+                session.runner.clone(),
+                mode,
+                session.active_document.clone(),
+                eff_ticket,
+            )
         };
 
         if let Some(ref custody) = active_snapshot
@@ -812,7 +891,9 @@ impl AppThemeState {
         effective_ticket: u64,
     ) -> StudioResult<AppThemeSaveProfileResponse> {
         let Some(mut updated) = active_snapshot else {
-            return Ok(save_error("Save Original requires an active opened profile document"));
+            return Ok(save_error(
+                "Save Original requires an active opened profile document",
+            ));
         };
         if sha256_hex(&updated.raw_bytes) != updated.raw_source_sha256 {
             return Ok(save_error("Custodial source digest mismatch; save aborted"));
@@ -929,8 +1010,12 @@ impl AppThemeState {
                         Box::new(profile.clone()),
                     )
                 }
-                Err(err) if err.reason_code() == StudioReasonCode::Cancelled
-                    || self.lock()?.open_generation != effective_ticket => return Ok(save_cancelled()),
+                Err(err)
+                    if err.reason_code() == StudioReasonCode::Cancelled
+                        || self.lock()?.open_generation != effective_ticket =>
+                {
+                    return Ok(save_cancelled());
+                }
                 Err(err) => return Ok(save_error(sanitize_untrusted_text(&err.to_string(), 512))),
             };
 
@@ -950,8 +1035,13 @@ impl AppThemeState {
             _ => session.mint_document_id(),
         };
         let src = FileSourceMeta::new(path, raw_bytes, backing_mtime);
-        let mut new_custody =
-            ProfileDocumentCustody::v1_editable(src, semantic, bound_profile, normalized_sha256, false);
+        let mut new_custody = ProfileDocumentCustody::v1_editable(
+            src,
+            semantic,
+            bound_profile,
+            normalized_sha256,
+            false,
+        );
         new_custody.verification_status = ver_status;
         new_custody.is_transformed = is_transformed;
         new_custody.owner_binding = owner_binding;

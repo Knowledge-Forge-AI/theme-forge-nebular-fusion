@@ -1,7 +1,7 @@
 {
-  "sha256": "8b60ebd2f60e653315cb137d87988d99dc9c234416a1c193a420a8032867b11e",
-  "bytes": 211241,
-  "sourceTreeDigest": "21f4f3f86e27c4fee37ee3d70fcdeebd1905d665ce72dec4cc6ad9458838b36d",
+  "sha256": "658bb7d36042b828b1e41b10580d9e0872f2648e1f56d9426c4fa3084a6790c3",
+  "bytes": 218447,
+  "sourceTreeDigest": "608b94958cbdc30a43ad492ce92ee8e312f084e93c77a5d3e01e84e35617d9d8",
   "executableFiles": 39,
   "schema": "tfsb.nebular-scene-binding-v1",
   "engineSchema": "tfsb.vector-scene-v1",
@@ -229,8 +229,8 @@
     },
     {
       "path": "node_modules/smol-toml/README.md",
-      "bytes": 23654,
-      "sha256": "6170186cc4c4e3e5b755e5d54939d01a4e2c5a930a650dde0ee0d3eef04cc3a2"
+      "bytes": 37677,
+      "sha256": "bcaaa3befbd5bc5373cc6d80f4502afbe83179f96dcf9a336c43deb7ffa24c65"
     },
     {
       "path": "node_modules/smol-toml/dist/date.d.ts",
@@ -239,83 +239,83 @@
     },
     {
       "path": "node_modules/smol-toml/dist/date.js",
-      "bytes": 4942,
-      "sha256": "fcc8fcce1a3e8660ac572fb827c20e49d269ad50686c085bb72c3c50771323d5"
+      "bytes": 6256,
+      "sha256": "ef924a2a42c7f16761e7098c3ed8e04195ecbcb02d5c369db0aee76f251a409c"
     },
     {
       "path": "node_modules/smol-toml/dist/error.d.ts",
-      "bytes": 1878,
-      "sha256": "c5ada15420e52bcc8a451a7c4f2daff318e6d0bf5f8c691b25158555a4508f0e"
+      "bytes": 1874,
+      "sha256": "02e33cdc5ca75f517f44b31070640be0fe6d0169dd91c266d02a1e2a71e064ac"
     },
     {
       "path": "node_modules/smol-toml/dist/error.js",
-      "bytes": 2787,
-      "sha256": "28dbfc2871c0707f97cebb5a8be7e343a9cee58250b5814813d748b90d9e0d3b"
+      "bytes": 2910,
+      "sha256": "76f8e47f5fc57273748242d59570656d7c921a80bceb2291ca5a4d7a723e9f29"
     },
     {
       "path": "node_modules/smol-toml/dist/extract.js",
-      "bytes": 3359,
-      "sha256": "851ddbb4ae8571fda887a03511a6688d9b168c49deceda34243ad77d6f2a39ec"
+      "bytes": 13083,
+      "sha256": "3e6f1e5764a091acf2df6a3f257d0467c37a2b9dbfecab1573f17a6489349c90"
     },
     {
       "path": "node_modules/smol-toml/dist/index.cjs",
-      "bytes": 22907,
-      "sha256": "195ca51fc784617d361af3697756a896518e45bec4e35976baec2dffd656cb8f"
+      "bytes": 28642,
+      "sha256": "f9029370259e9a43a2f3e64fa1d39e72f3598188380ace83a0abb8261fa33555"
     },
     {
       "path": "node_modules/smol-toml/dist/index.d.ts",
-      "bytes": 2208,
-      "sha256": "b741d3219913446a93fe07e00dafe9fa3e857fa478e85b483cbf2e11d84521a5"
+      "bytes": 2282,
+      "sha256": "b4556819c2ed0cd4016d05a6bfd7d4773c0b5ffb39c8ed547796ce4a1093d9b8"
     },
     {
       "path": "node_modules/smol-toml/dist/index.js",
-      "bytes": 1883,
-      "sha256": "ded3ee91f3ce1ef746f6b57459b0c68475658eacb8e88fd18336a5408de009a1"
+      "bytes": 1949,
+      "sha256": "dc8e0afc74477e514f5cb8492b587560c1d7d68cec03a994cc8bc4af99c8da2a"
     },
     {
       "path": "node_modules/smol-toml/dist/parse.d.ts",
-      "bytes": 2058,
-      "sha256": "ebb272a8381742aad17e0445e0872c0496561e4bfa465576a70efdb23117a99f"
+      "bytes": 3194,
+      "sha256": "2b230dc984b6e51b545bfe222f9965cc2ff434164ed9428bec415c5e508a9854"
     },
     {
       "path": "node_modules/smol-toml/dist/parse.js",
-      "bytes": 5754,
-      "sha256": "92d512a52a44f72b3258e817e4cf3e6d576ffc5059666b9fe27341e7871ecead"
+      "bytes": 6484,
+      "sha256": "195e33ea068bf6f3acb5b3342792ac4aa954bba7e751519ba869c00da395ecdb"
     },
     {
       "path": "node_modules/smol-toml/dist/primitive.js",
-      "bytes": 11015,
-      "sha256": "64418c1b056c86d24053caee06ec44bd48187c061b7ff09c21159f2e0e5dd8f5"
+      "bytes": 7694,
+      "sha256": "be47fe90bf9a410af0b9204b6b34617f4b38e57f08198b10cb024a0272eb5936"
     },
     {
       "path": "node_modules/smol-toml/dist/stringify.d.ts",
-      "bytes": 1759,
-      "sha256": "c9a75924aa75b4e60542ff06437b3abd9679ee9f740245080fbe528f05fb8763"
+      "bytes": 1805,
+      "sha256": "628a6a55714fcf4a4eb0e59866ab1e5cc67c1b9e0cfc8524ccc8d6b5ee24ad7c"
     },
     {
       "path": "node_modules/smol-toml/dist/stringify.js",
-      "bytes": 7272,
-      "sha256": "a96ec2fa840067eff015a38a18849f1e3b2ff2e9cb9ad52cd9266497ad12b3de"
+      "bytes": 9662,
+      "sha256": "c717d95456426dc8a0b07c9d03a4e434d5dea8254fca24e5fd93a22de3bcd44c"
     },
     {
       "path": "node_modules/smol-toml/dist/struct.js",
-      "bytes": 7009,
-      "sha256": "dbd94692ef8225459b29232f23e82fd67ad84002349e67458456a09695f063b0"
+      "bytes": 6273,
+      "sha256": "736742cfa645bbd08bc5396c5f7ddbea5c3b7ac5d61fe86031846f5769131deb"
     },
     {
       "path": "node_modules/smol-toml/dist/util.d.ts",
-      "bytes": 2130,
-      "sha256": "e08c5ba5f398c27b34b966b1b8427e7599394927c5397f765b7a085cd7f4541a"
+      "bytes": 2473,
+      "sha256": "e6b1d3eecb240dc71d0dc28d1beee69cefd6ee014507c822909be0a7117517e0"
     },
     {
       "path": "node_modules/smol-toml/dist/util.js",
-      "bytes": 3404,
-      "sha256": "332fda936c5d81a493d1a7dfa574221d27d585657b337e5db466cc26aec26302"
+      "bytes": 2636,
+      "sha256": "6327e40efd957128da15867c3a32293950a925570b457b1b78c735452cebc08e"
     },
     {
       "path": "node_modules/smol-toml/package.json",
       "bytes": 1548,
-      "sha256": "fa2995d429c856669968d6281c14e6be93a40cd404dad43aa2e4599608f20bdc"
+      "sha256": "d7ad6488e35b31d46bac6412d2d35225db4d693f02a415d872714ceb7e3d7138"
     },
     {
       "path": "package.json",
@@ -325,7 +325,7 @@
     {
       "path": "scene-input.json",
       "bytes": 8363,
-      "sha256": "f1917eecc93bdd5c9e31ee9d916bf0ecc6593efe4079675db7c4459e5f37a0d3"
+      "sha256": "9ba1eb6a6b4e12e6b6d121318f1b84186b607d4547436ed4f90bd44741ce4b6b"
     }
   ]
 }

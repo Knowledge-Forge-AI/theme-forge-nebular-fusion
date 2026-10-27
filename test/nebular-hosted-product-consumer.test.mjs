@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,8 +11,10 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { RESOURCE_PREPARERS } from "../tools/platform-targets.mjs";
 import { assemblePlatformPackage } from "../tools/native-rc-package.mjs";
+import { inventoryNativePayload } from "../tools/native-runtime.mjs";
 import {
   CORRESPONDING_SOURCE_OFFER_SCHEMA,
+  DARWIN_AUTHORITIES,
   INPUT_SCHEMA,
   PACKAGE_MANIFEST_SCHEMAS,
   PLATFORM_RECEIPT_SCHEMA,
@@ -45,6 +47,7 @@ import {
   validateQualificationReceipt,
   validateSmokeRunReport,
   verifyAdmissionReceipt,
+  verifyExtractedDarwinRawPayload,
 } from "../tools/nebular-hosted-product-consumer.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -63,9 +66,82 @@ const canonical = (value) =>
           .join(",")}}`;
 const digest = (character) => character.repeat(64);
 
-function makeQualificationChecks(platform) {
+const RETAINED_DARWIN_QUALIFICATION_JSON = `{
+  "schema": "nebular.native-rc-qualification-v1",
+  "platform": "darwin-arm64",
+  "status": "pass",
+  "executableSha256": "4c8ce3b880e87943f1e09614ff6a9639f3bbe0111b4bba61e00a3f4ec811f1b9",
+  "glibcMinimum": null,
+  "nativePayload": null,
+  "materialDigest": null,
+  "checks": [
+    {
+      "id": "executable-header",
+      "ok": true,
+      "detail": "4c8ce3b880e87943f1e09614ff6a9639f3bbe0111b4bba61e00a3f4ec811f1b9"
+    },
+    {
+      "id": "launcher",
+      "ok": true,
+      "detail": "c46bc5c96cd401caf7ba44eaf136927ba2464ee04fd3d59479f63c99d7f8077b"
+    },
+    {
+      "id": "sidecar-runtime",
+      "ok": true,
+      "detail": "node 22.23.3 68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b"
+    },
+    {
+      "id": "resource:sidecar-payload",
+      "ok": true,
+      "detail": "f8eb572fd0873245e120b69bbf53718005e86323b9c56fb44b80bce659ce4c66"
+    },
+    {
+      "id": "resource:loom-payload",
+      "ok": true,
+      "detail": "bbfbacba78d4b4bd84061f8a327b3c9bb7a9207dbcecd9712d01eddc5b5374a9"
+    },
+    {
+      "id": "resource:loom-adapter",
+      "ok": true,
+      "detail": "01c55e6442ab41c4de58dbc2e0675aa7b1949b4c0c0dc4a811ec0fcc31764714"
+    },
+    {
+      "id": "resource:solar-sail-payload",
+      "ok": true,
+      "detail": "9cc892091fd614e0425f4eadb2cb90e136e8299b6236b86c2605bd08f2ad6d31"
+    },
+    {
+      "id": "resource:solar-sail-adapter",
+      "ok": true,
+      "detail": "5f3f504267c82c4e55c3f28ba7780b5f29de0a7b16e2e8a5a3fdaf543d64053a"
+    },
+    {
+      "id": "resource:scene-payload",
+      "ok": true,
+      "detail": "a4cadda2a99a115cf2f94e208fb182549165f5cd2aa77326a77f188bc0847918"
+    },
+    {
+      "id": "resource:release-notices",
+      "ok": true,
+      "detail": "b0c9439afa05c5a8929a26d079a8b48a754df1242531c87cd263ba0bf71849c5"
+    },
+    {
+      "id": "legal-notices",
+      "ok": true,
+      "detail": "LICENSE, NOTICE"
+    },
+    {
+      "id": "codesign",
+      "ok": true,
+      "detail": "valid · Signature=adhoc"
+    }
+  ]
+}
+`;
+
+function makeQualificationChecks(platform, executableDetail = targetSources[platform]?.executableSha256 ?? digest("0")) {
   const checks = [
-    { id: "executable-header", ok: true, detail: "ok" },
+    { id: "executable-header", ok: true, detail: executableDetail },
     { id: "launcher", ok: true, detail: "ok" },
     { id: "sidecar-runtime", ok: true, detail: "ok" },
     ...Object.keys(RESOURCE_PREPARERS).map((dir) => ({ id: `resource:${dir}`, ok: true, detail: "1 files" })),
@@ -90,16 +166,28 @@ function makeQualificationChecks(platform) {
 }
 
 function makeQualificationReceipt(platform, targetSource) {
+  if (platform === "darwin-arm64") {
+    return {
+      schema: QUALIFICATION_RECEIPT_SCHEMA,
+      platform,
+      status: "pass",
+      executableSha256: targetSource.executableSha256,
+      glibcMinimum: null,
+      nativePayload: null,
+      materialDigest: null,
+      checks: makeQualificationChecks(platform, targetSource.executableSha256),
+    };
+  }
   return {
     schema: QUALIFICATION_RECEIPT_SCHEMA,
     platform,
-    triple: platform === "darwin-arm64" ? "aarch64-apple-darwin" : platform === "linux-arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu",
+    triple: platform === "linux-arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu",
     version: VERSION,
     status: "pass",
     executableSha256: targetSource.executableSha256,
-    glibcMinimum: platform.startsWith("linux") ? "2.36" : null,
+    glibcMinimum: "2.36",
     nativePayload: { identity: targetSource.nativePayloadSha256, files: 10 },
-    checks: makeQualificationChecks(platform),
+    checks: makeQualificationChecks(platform, targetSource.executableSha256),
   };
 }
 
@@ -168,14 +256,17 @@ const correspondingSourceOffer = {
   manifestSha256: sha256(Buffer.from(canonical(correspondingSourceOfferBody))),
 };
 
+const retainedDarwinExecutableSha256 = "4c8ce3b880e87943f1e09614ff6a9639f3bbe0111b4bba61e00a3f4ec811f1b9";
+const retainedDarwinNativePayloadSha256 = "b621e93397130738cea0f64f56959286b398861e0b190c73674449757b1eecaa";
+
 const targetSources = {
   "darwin-arm64": {
     authority: "retained-darwin-b954",
     sourceCommit: darwinCommit,
     sourceTree: darwinTree,
     sourceCandidate: darwinCandidate,
-    nativePayloadSha256: digest("7"),
-    executableSha256: digest("c"),
+    nativePayloadSha256: retainedDarwinNativePayloadSha256,
+    executableSha256: retainedDarwinExecutableSha256,
     packageManifestSha256: digest("8"),
   },
   "linux-arm64": {
@@ -224,10 +315,28 @@ const assets = [
   asset("linux-x64", "npm-package", 6),
 ];
 
-const darwinQualReceipt = makeQualificationReceipt("darwin-arm64", targetSources["darwin-arm64"]);
-const darwinQualReceiptSha256 = sha256(Buffer.from(canonical(darwinQualReceipt)));
-const darwinQualificationReadbackBytes = Buffer.from(canonical(darwinQualReceipt), "utf8");
+const darwinQualificationReadbackBytes = Buffer.from(RETAINED_DARWIN_QUALIFICATION_JSON, "utf8");
 const darwinQualificationReadbackSha256 = sha256(darwinQualificationReadbackBytes);
+assert.equal(darwinQualificationReadbackBytes.length, 1997);
+assert.equal(
+  darwinQualificationReadbackSha256,
+  "2a366f1d0edfc7d19133a838c5eed72ee7c9d08ed2d2229f2526a719b898c805",
+);
+const darwinQualReceipt = JSON.parse(RETAINED_DARWIN_QUALIFICATION_JSON);
+assert.equal(darwinQualReceipt.nativePayload, null);
+assert.equal(darwinQualReceipt.materialDigest, null);
+assert.equal(darwinQualReceipt.glibcMinimum, null);
+assert.equal(darwinQualReceipt.checks.length, 12);
+assert.equal(darwinQualReceipt.executableSha256, retainedDarwinExecutableSha256);
+assert.equal(
+  validateQualificationReceipt(darwinQualReceipt, "darwin-arm64", targetSources["darwin-arm64"]),
+  darwinQualReceipt,
+);
+const darwinQualReceiptSha256 = sha256(Buffer.from(canonical(darwinQualReceipt)));
+assert.equal(
+  darwinQualReceiptSha256,
+  "3f8fb0cf8248ce99cd3026d3d976f7bc42f1a3b2b717f37617af9a6f77c76f02",
+);
 const darwinSourceReadbackBytes = Buffer.from("darwin-source\n");
 const linuxSourceReadbackBytes = Buffer.from("linux-source\n");
 const targetSourceReadbacks = {
@@ -405,6 +514,244 @@ assert.throws(
   /current Linux source authority, not retained Darwin b954/,
 );
 
+// Explicit opt-in current-darwin-source authority validation and cross-lineage refusal checks
+assert.deepEqual(DARWIN_AUTHORITIES, ["retained-darwin-b954", "current-darwin-source"]);
+const currentDarwinCommit = "c490000000000000000000000000000000000001";
+const currentDarwinTree = "3333333333333333333333333333333333333333";
+const currentDarwinCandidate = digest("c");
+const currentDarwinExecutableSha256 = digest("6");
+const currentDarwinNativePayloadSha256 = digest("7");
+const currentDarwinPackageManifestSha256 = digest("5");
+const currentDarwinSourceReadbackBytes = Buffer.from("current-darwin-source\n");
+const currentDarwinTargetSources = {
+  ...targetSources,
+  "darwin-arm64": {
+    authority: "current-darwin-source",
+    sourceCommit: currentDarwinCommit,
+    sourceTree: currentDarwinTree,
+    sourceCandidate: currentDarwinCandidate,
+    nativePayloadSha256: currentDarwinNativePayloadSha256,
+    executableSha256: currentDarwinExecutableSha256,
+    packageManifestSha256: currentDarwinPackageManifestSha256,
+  },
+};
+const currentDarwinQualReceipt = makeQualificationReceipt(
+  "darwin-arm64",
+  currentDarwinTargetSources["darwin-arm64"],
+);
+const currentDarwinQualReceiptBytes = Buffer.from(canonical(currentDarwinQualReceipt), "utf8");
+const currentDarwinQualReceiptRawSha256 = sha256(currentDarwinQualReceiptBytes);
+const currentDarwinQualReceiptCanonicalSha256 = sha256(Buffer.from(canonical(currentDarwinQualReceipt)));
+const currentDarwinAssets = assets.map((row) =>
+  row.platform === "darwin-arm64"
+    ? {
+        ...row,
+        sourceCommit: currentDarwinCommit,
+        sourceTree: currentDarwinTree,
+        sourceCandidate: currentDarwinCandidate,
+      }
+    : row,
+);
+const currentDarwinInput = {
+  ...input,
+  source: {
+    ...input.source,
+    trustedReadback: {
+      ...input.source.trustedReadback,
+      darwinQualificationReceipt: {
+        bytes: currentDarwinQualReceiptBytes.length,
+        sha256: currentDarwinQualReceiptRawSha256,
+        canonicalSha256: currentDarwinQualReceiptCanonicalSha256,
+      },
+    },
+    targetSourceReadbacks: {
+      ...targetSourceReadbacks,
+      "darwin-arm64": {
+        role: "darwin-app-source",
+        sourceCandidate: currentDarwinCandidate,
+        bytes: currentDarwinSourceReadbackBytes.length,
+        sha256: sha256(currentDarwinSourceReadbackBytes),
+      },
+    },
+  },
+  targetSources: currentDarwinTargetSources,
+  assets: currentDarwinAssets,
+  qualifications: {
+    "darwin-arm64": {
+      mode: "existing-qualified",
+      status: "pass",
+      authority: "current-darwin-source",
+      receiptSha256: currentDarwinQualReceiptCanonicalSha256,
+      receipt: currentDarwinQualReceipt,
+      executableSha256: currentDarwinExecutableSha256,
+      nativePayloadSha256: currentDarwinNativePayloadSha256,
+      sourceCommit: currentDarwinCommit,
+      sourceTree: currentDarwinTree,
+      sourceCandidate: currentDarwinCandidate,
+      rawSha256: currentDarwinAssets[0].sha256,
+      npmSha256: currentDarwinAssets[1].sha256,
+    },
+  },
+};
+const normalizedCurrentDarwinInput = validateInput(currentDarwinInput);
+const revalidatedCurrentDarwinInput = validateInput(normalizedCurrentDarwinInput);
+assert.equal(revalidatedCurrentDarwinInput.targetSources["darwin-arm64"].authority, "current-darwin-source");
+assert.equal(revalidatedCurrentDarwinInput.qualifications["darwin-arm64"].authority, "current-darwin-source");
+assert.equal(revalidatedCurrentDarwinInput.targetSources["darwin-arm64"].sourceCommit, currentDarwinCommit);
+
+// current-darwin-source also permits sharing compiler commit/tree with current Linux when built from the same compiler tree
+const sharedCompilerCurrentDarwinInput = validateInput({
+  ...currentDarwinInput,
+  targetSources: {
+    ...currentDarwinTargetSources,
+    "darwin-arm64": {
+      ...currentDarwinTargetSources["darwin-arm64"],
+      sourceCommit: linuxCommit,
+      sourceTree: linuxTree,
+    },
+  },
+  assets: currentDarwinAssets.map((row) =>
+    row.platform === "darwin-arm64"
+      ? { ...row, sourceCommit: linuxCommit, sourceTree: linuxTree }
+      : row,
+  ),
+  qualifications: {
+    "darwin-arm64": {
+      ...currentDarwinInput.qualifications["darwin-arm64"],
+      sourceCommit: linuxCommit,
+      sourceTree: linuxTree,
+    },
+  },
+});
+assert.equal(sharedCompilerCurrentDarwinInput.targetSources["darwin-arm64"].authority, "current-darwin-source");
+assert.equal(sharedCompilerCurrentDarwinInput.targetSources["darwin-arm64"].sourceCommit, linuxCommit);
+
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      targetSources: {
+        ...currentDarwinTargetSources,
+        "darwin-arm64": {
+          ...currentDarwinTargetSources["darwin-arm64"],
+          authority: "unknown-darwin-authority",
+        },
+      },
+    }),
+  /targetSources\.darwin-arm64\.authority must be one of retained-darwin-b954, current-darwin-source/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      targetSources: {
+        ...currentDarwinTargetSources,
+        "darwin-arm64": {
+          ...currentDarwinTargetSources["darwin-arm64"],
+          sourceCommit: darwinCommit,
+        },
+      },
+    }),
+  /current-darwin-source compiler sourceCommit must not use retained Darwin b954 lineage/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...input,
+      targetSources: {
+        ...targetSources,
+        "darwin-arm64": {
+          ...targetSources["darwin-arm64"],
+          sourceTree: linuxTree,
+        },
+      },
+    }),
+  /retained darwin-arm64 sourceTree\/sourceCandidate must remain distinct from current Linux source authority/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      targetSources: {
+        ...currentDarwinTargetSources,
+        "darwin-arm64": {
+          ...currentDarwinTargetSources["darwin-arm64"],
+          sourceCommit: publicCommit,
+        },
+      },
+    }),
+  /darwin-arm64 compiler sourceCommit\/sourceTree must remain distinct from public projection source/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      qualifications: {
+        "darwin-arm64": {
+          ...currentDarwinInput.qualifications["darwin-arm64"],
+          authority: "retained-darwin-b954",
+        },
+      },
+    }),
+  /Darwin qualification authority must match targetSources\.darwin-arm64\.authority/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      qualifications: {
+        "darwin-arm64": {
+          ...currentDarwinInput.qualifications["darwin-arm64"],
+          authority: undefined,
+        },
+      },
+    }),
+  /Darwin qualification authority must match targetSources\.darwin-arm64\.authority/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      qualifications: {
+        "darwin-arm64": {
+          ...currentDarwinInput.qualifications["darwin-arm64"],
+          sourceCommit: darwinCommit,
+        },
+      },
+    }),
+  /Darwin qualification for current-darwin-source must not use retained b954 sourceCommit/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      qualifications: {
+        "darwin-arm64": {
+          ...currentDarwinInput.qualifications["darwin-arm64"],
+          sourceTree: darwinTree,
+        },
+      },
+    }),
+  /Darwin qualification sourceCommit\/sourceTree\/sourceCandidate must match targetSources\.darwin-arm64/,
+);
+assert.throws(
+  () =>
+    validateInput({
+      ...currentDarwinInput,
+      source: {
+        ...currentDarwinInput.source,
+        targetSourceReadbacks: {
+          ...currentDarwinInput.source.targetSourceReadbacks,
+          "darwin-arm64": {
+            ...currentDarwinInput.source.targetSourceReadbacks["darwin-arm64"],
+            sourceCandidate: darwinCandidate,
+          },
+        },
+      },
+    }),
+  /source\.targetSourceReadbacks\.darwin-arm64\.sourceCandidate does not bind targetSources\.darwin-arm64/,
+);
+
 // Archive member & verbose listing checks
 assert.throws(() => validateArchiveMemberNames("safe/file\n../escape\n"), /unsafe member/);
 assert.deepEqual(validateArchiveMemberNames("package/\npackage/package.json\n"), ["package/", "package/package.json"]);
@@ -472,7 +819,12 @@ for (const platform of Object.keys(PLATFORMS)) {
       sourceCandidate: targetSource.sourceCandidate,
       executableSha256: targetSource.executableSha256,
       nativePayloadSha256: targetSource.nativePayloadSha256,
-      ...(platform === "darwin-arm64" ? { receiptSha256: input.qualifications["darwin-arm64"].receiptSha256 } : {}),
+      ...(platform === "darwin-arm64"
+        ? {
+            receiptSha256: input.qualifications["darwin-arm64"].receiptSha256,
+            nativePayload: { identity: targetSource.nativePayloadSha256, files: 12 },
+          }
+        : {}),
     },
     qualificationReceipt,
     qualificationReceiptSha256: sha256(Buffer.from(canonical(qualificationReceipt))),
@@ -578,6 +930,193 @@ assert.throws(
       },
     }),
   /smoke rows must belong to darwin-arm64/,
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(input, {
+      ...receiptRows,
+      "darwin-arm64": {
+        ...receiptRows["darwin-arm64"],
+        qualification: {
+          ...receiptRows["darwin-arm64"].qualification,
+          nativePayload: null,
+        },
+      },
+    }),
+  /darwin-arm64 receipt qualification\.nativePayload must be a non-null object/,
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(input, {
+      ...receiptRows,
+      "darwin-arm64": {
+        ...receiptRows["darwin-arm64"],
+        qualification: {
+          ...receiptRows["darwin-arm64"].qualification,
+          nativePayload: true,
+        },
+      },
+    }),
+  /darwin-arm64 receipt qualification\.nativePayload must be a non-null object/,
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(input, {
+      ...receiptRows,
+      "darwin-arm64": {
+        ...receiptRows["darwin-arm64"],
+        qualification: {
+          ...receiptRows["darwin-arm64"].qualification,
+          nativePayload: { identity: digest("z"), files: 12 },
+        },
+      },
+    }),
+  /darwin-arm64 receipt qualification\.nativePayload nativePayload\.identity does not match/,
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(input, {
+      ...receiptRows,
+      "darwin-arm64": {
+        ...receiptRows["darwin-arm64"],
+        qualification: {
+          ...receiptRows["darwin-arm64"].qualification,
+          nativePayload: { identity: targetSources["darwin-arm64"].nativePayloadSha256, files: 12, extra: true },
+        },
+      },
+    }),
+  /darwin-arm64 receipt qualification\.nativePayload contains unknown or missing keys/,
+);
+
+const currentDarwinReceiptRows = {
+  ...receiptRows,
+  "darwin-arm64": {
+    ...receiptRows["darwin-arm64"],
+    source: {
+      ...receiptRows["darwin-arm64"].source,
+      targetSourceReadbacks: normalizedCurrentDarwinInput.source.targetSourceReadbacks,
+    },
+    compilerSource: normalizedCurrentDarwinInput.targetSources["darwin-arm64"],
+    assets: normalizedCurrentDarwinInput.assets.filter((row) => row.platform === "darwin-arm64"),
+    transport: normalizedCurrentDarwinInput.assets.map((row) => ({
+      platform: row.platform,
+      kind: row.kind,
+      assetId: row.assetId,
+      name: row.name,
+      bytes: row.bytes,
+      sha256: row.sha256,
+      sourceCommit: row.sourceCommit,
+      sourceTree: row.sourceTree,
+      sourceCandidate: row.sourceCandidate,
+    })),
+    packageManifestSha256: currentDarwinPackageManifestSha256,
+    qualification: {
+      status: "pass",
+      mode: "existing-qualified",
+      authority: "current-darwin-source",
+      sourceCommit: currentDarwinCommit,
+      sourceTree: currentDarwinTree,
+      sourceCandidate: currentDarwinCandidate,
+      executableSha256: currentDarwinExecutableSha256,
+      nativePayloadSha256: currentDarwinNativePayloadSha256,
+      receiptSha256: currentDarwinQualReceiptCanonicalSha256,
+      nativePayload: { identity: currentDarwinNativePayloadSha256, files: 12 },
+    },
+    qualificationReceipt: currentDarwinQualReceipt,
+    qualificationReceiptSha256: currentDarwinQualReceiptCanonicalSha256,
+    smoke: PLATFORMS["darwin-arm64"].scenarios.flatMap((scenario) => [
+      {
+        platform: "darwin-arm64",
+        scenario,
+        source: "raw-archive",
+        status: "pass",
+        executableSha256: currentDarwinExecutableSha256,
+        receiptSha256: digest("1"),
+      },
+      {
+        platform: "darwin-arm64",
+        scenario,
+        source: "npm-package",
+        status: "pass",
+        executableSha256: currentDarwinExecutableSha256,
+        receiptSha256: digest("2"),
+      },
+    ]),
+  },
+  "linux-arm64": {
+    ...receiptRows["linux-arm64"],
+    source: {
+      ...receiptRows["linux-arm64"].source,
+      targetSourceReadbacks: normalizedCurrentDarwinInput.source.targetSourceReadbacks,
+    },
+    transport: normalizedCurrentDarwinInput.assets.map((row) => ({
+      platform: row.platform,
+      kind: row.kind,
+      assetId: row.assetId,
+      name: row.name,
+      bytes: row.bytes,
+      sha256: row.sha256,
+      sourceCommit: row.sourceCommit,
+      sourceTree: row.sourceTree,
+      sourceCandidate: row.sourceCandidate,
+    })),
+  },
+  "linux-x64": {
+    ...receiptRows["linux-x64"],
+    source: {
+      ...receiptRows["linux-x64"].source,
+      targetSourceReadbacks: normalizedCurrentDarwinInput.source.targetSourceReadbacks,
+    },
+    transport: normalizedCurrentDarwinInput.assets.map((row) => ({
+      platform: row.platform,
+      kind: row.kind,
+      assetId: row.assetId,
+      name: row.name,
+      bytes: row.bytes,
+      sha256: row.sha256,
+      sourceCommit: row.sourceCommit,
+      sourceTree: row.sourceTree,
+      sourceCandidate: row.sourceCandidate,
+    })),
+  },
+};
+const builtCurrentDarwinReceipt = buildConsumerReceipt(currentDarwinInput, currentDarwinReceiptRows);
+assert.equal(builtCurrentDarwinReceipt.targetSources["darwin-arm64"].authority, "current-darwin-source");
+assert.equal(
+  builtCurrentDarwinReceipt.platforms.find((row) => row.platform === "darwin-arm64").compilerSource.authority,
+  "current-darwin-source",
+);
+assert.equal(
+  builtCurrentDarwinReceipt.platforms.find((row) => row.platform === "darwin-arm64").qualification.authority,
+  "current-darwin-source",
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(currentDarwinInput, {
+      ...currentDarwinReceiptRows,
+      "darwin-arm64": {
+        ...currentDarwinReceiptRows["darwin-arm64"],
+        qualification: {
+          ...currentDarwinReceiptRows["darwin-arm64"].qualification,
+          authority: "retained-darwin-b954",
+        },
+      },
+    }),
+  /darwin-arm64 receipt qualification lineage is invalid or restamped/,
+);
+assert.throws(
+  () =>
+    buildConsumerReceipt(currentDarwinInput, {
+      ...currentDarwinReceiptRows,
+      "darwin-arm64": {
+        ...currentDarwinReceiptRows["darwin-arm64"],
+        compilerSource: {
+          ...currentDarwinReceiptRows["darwin-arm64"].compilerSource,
+          authority: "retained-darwin-b954",
+        },
+      },
+    }),
+  /darwin-arm64 receipt compilerSource does not match authenticated targetSources\.darwin-arm64/,
 );
 
 // Command plan, Git source admission, self-inventory cycle refusal, real native-rc-package verify,
@@ -749,10 +1288,12 @@ try {
   const qualifyScript = `#!/usr/bin/env node
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { inventoryNativePayload } from "./native-runtime.mjs";
 const args = process.argv.slice(2);
 const val = (flag) => args[args.indexOf(flag) + 1];
 const out = val("--output");
 const platform = val("--platform");
+const payload = val("--payload");
 const checkout = val("--checkout");
 const expectedPayload = val("--expected-native-payload-sha256");
 const resourceDirs = ${JSON.stringify(allResourceDirs)};
@@ -762,8 +1303,13 @@ for (const dir of resourceDirs) {
     process.exit(1);
   }
 }
+const observedPayload = await inventoryNativePayload(payload);
+if (observedPayload.identity !== expectedPayload) {
+  process.stderr.write("Payload inventory mismatch: " + observedPayload.identity + " !== " + expectedPayload + "\\n");
+  process.exit(1);
+}
 const executableSha256 = platform === "linux-x64" ? "__LINUX_X64_EXE__" : "__LINUX_ARM64_EXE__";
-const checks = ${JSON.stringify(makeQualificationChecks("linux-x64"))};
+const checks = ${JSON.stringify(makeQualificationChecks("linux-x64"))}.map((c) => c.id === "executable-header" ? { ...c, detail: executableSha256 } : c);
 writeFileSync(out, JSON.stringify({
   schema: "${QUALIFICATION_RECEIPT_SCHEMA}",
   platform,
@@ -772,7 +1318,7 @@ writeFileSync(out, JSON.stringify({
   status: "pass",
   executableSha256,
   glibcMinimum: "2.36",
-  nativePayload: { identity: expectedPayload, files: 10 },
+  nativePayload: { identity: observedPayload.identity, files: observedPayload.files.length },
   checks
 }, null, 2));
 process.stdout.write(JSON.stringify({ status: "pass", glibcMinimum: "2.36", failed: [] }) + "\\n");
@@ -891,6 +1437,11 @@ exec "$@"
       );
       await mkdir(join(rawExeFile, ".."), { recursive: true });
       await writeFile(rawExeFile, exeBytes, { mode: 0o755 });
+      if (platform.startsWith("darwin")) {
+        const darwinResDir = join(rawStage, PLATFORMS[platform].rawRoot, "Contents/Resources");
+        await mkdir(darwinResDir, { recursive: true });
+        await writeFile(join(darwinResDir, "resource-marker.txt"), "darwin-resource-v1\n", { mode: 0o644 });
+      }
       if (platform.startsWith("linux")) {
         for (const dir of allResourceDirs) {
           const resDir = join(rawStage, PLATFORMS[platform].rawRoot, "lib/theme-forge-nebular-fusion", dir);
@@ -898,17 +1449,30 @@ exec "$@"
           await writeFile(join(resDir, "marker.txt"), `${platform}-${dir}\n`, { mode: 0o644 });
         }
       }
+      const payloadSource = platform.startsWith("darwin")
+        ? rawStage
+        : join(rawStage, PLATFORMS[platform].rawRoot);
+      const actualPayloadInventory = await inventoryNativePayload(payloadSource);
+      dynamicTargetSources[platform].nativePayloadSha256 = actualPayloadInventory.identity;
+
       const rawTarDir = join(nestedArtifactDir, "raw", platform);
       await mkdir(rawTarDir, { recursive: true });
       const rawName = `${PRODUCT}-${platform}-raw.tar.gz`;
       const rawTarPath = join(rawTarDir, rawName);
-      execFileSync("tar", ["-czf", rawTarPath, "-C", rawStage, "."]);
+      execFileSync(
+        "tar",
+        [
+          "-czf",
+          rawTarPath,
+          "-C",
+          rawStage,
+          platform.startsWith("darwin") ? PLATFORMS[platform].rawRoot : ".",
+        ],
+        { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+      );
       const rawBytes = await readFile(rawTarPath);
       const rawSha = sha256(rawBytes);
 
-      const payloadSource = platform.startsWith("darwin")
-        ? rawStage
-        : join(rawStage, PLATFORMS[platform].rawRoot);
       const npmStage = join(temp, `stage-npm-${platform}`);
       const npmPkgDir = join(npmStage, "package");
       const assembled = assemblePlatformPackage({
@@ -1096,7 +1660,8 @@ exec "$@"
     };
     await writeFile(trustedDarwinReceiptPath, dynamicDarwinQualReceiptBytes);
     const externalDescriptorPath = join(temp, "late-bound-consumer-input.json");
-    await writeFile(externalDescriptorPath, JSON.stringify(dynamicInput, null, 2));
+    const externalDescriptorBytes = Buffer.from(JSON.stringify(dynamicInput, null, 2));
+    await writeFile(externalDescriptorPath, externalDescriptorBytes);
 
     const trustedReadbackOptions = {
       inputPath: externalDescriptorPath,
@@ -1113,6 +1678,69 @@ exec "$@"
     assert.equal(admission.trustedReadback.darwinAppSource.sha256, sha256(darwinSourceReadbackBytes));
     assert.equal(admission.trustedReadback.linuxAppSource.sha256, sha256(linuxSourceReadbackBytes));
     assert.equal(verifyAdmissionReceipt(admission, dynamicInput, trustedReadbackOptions).commit, actualCommit);
+
+    // Descriptor-bound trusted readbacks refuse deterministic pathname substitutions,
+    // non-regular FIFOs, privilege bits, and changed bytes without waiting on a FIFO.
+    const sourceOfferLinkTarget = join(trustedReadbackDir, "source-offer-copy.tar.gz");
+    await writeFile(sourceOfferLinkTarget, sourceArchiveReadbackBytes);
+    await rm(trustedSourceArchivePath);
+    await symlink(sourceOfferLinkTarget, trustedSourceArchivePath);
+    assert.throws(
+      () => resolveSourceAdmission(dynamicInput, checkoutDir, trustedReadbackOptions),
+      /source archive readback is not a bounded regular file/,
+    );
+    await rm(trustedSourceArchivePath);
+    await mkdir(trustedSourceArchivePath);
+    assert.throws(
+      () => resolveSourceAdmission(dynamicInput, checkoutDir, trustedReadbackOptions),
+      /source archive readback is not a bounded regular file/,
+    );
+    await rm(trustedSourceArchivePath, { recursive: true });
+    execFileSync("mkfifo", [trustedSourceArchivePath]);
+    assert.throws(
+      () => resolveSourceAdmission(dynamicInput, checkoutDir, trustedReadbackOptions),
+      /source archive readback is not a bounded regular file/,
+    );
+    await rm(trustedSourceArchivePath);
+    await writeFile(trustedSourceArchivePath, Buffer.from("changed-before-read\n"));
+    assert.throws(
+      () => resolveSourceAdmission(dynamicInput, checkoutDir, trustedReadbackOptions),
+      /source archive readback bytes or SHA-256/,
+    );
+    await writeFile(trustedSourceArchivePath, sourceArchiveReadbackBytes);
+
+    const validateInputResult = (inputPath) => spawnSync(
+      process.execPath,
+      [CONSUMER_TOOL_PATH, "validate", "--input", inputPath],
+      { encoding: "utf8", timeout: 5000 },
+    );
+    const descriptorLink = join(temp, "descriptor-link.json");
+    await symlink(externalDescriptorPath, descriptorLink);
+    const descriptorLinkResult = validateInputResult(descriptorLink);
+    assert.equal(descriptorLinkResult.error, undefined);
+    assert.notEqual(descriptorLinkResult.status, 0);
+    assert.match(descriptorLinkResult.stderr, /JSON input is not a bounded regular file/);
+    await rm(descriptorLink);
+    const descriptorFifo = join(temp, "descriptor.fifo");
+    execFileSync("mkfifo", [descriptorFifo]);
+    const descriptorFifoResult = validateInputResult(descriptorFifo);
+    assert.equal(descriptorFifoResult.error, undefined);
+    assert.notEqual(descriptorFifoResult.status, 0);
+    assert.match(descriptorFifoResult.stderr, /JSON input is not a bounded regular file/);
+    await rm(descriptorFifo);
+    await chmod(externalDescriptorPath, 0o4644);
+    const descriptorModeResult = validateInputResult(externalDescriptorPath);
+    assert.equal(descriptorModeResult.error, undefined);
+    assert.notEqual(descriptorModeResult.status, 0);
+    assert.match(descriptorModeResult.stderr, /JSON input has unexpected privilege bits/);
+    await chmod(externalDescriptorPath, 0o644);
+    await writeFile(externalDescriptorPath, Buffer.from("{\n"));
+    const descriptorMutationResult = validateInputResult(externalDescriptorPath);
+    assert.equal(descriptorMutationResult.error, undefined);
+    assert.notEqual(descriptorMutationResult.status, 0);
+    assert.match(descriptorMutationResult.stderr, /JSON input is invalid/);
+    await writeFile(externalDescriptorPath, externalDescriptorBytes);
+
     assert.throws(
       () => resolveSourceAdmission(dynamicInput, checkoutDir, { ...trustedReadbackOptions, inputPath: join(checkoutDir, "tracked-descriptor.json") }),
       /self-inventory hash cycle refused/,
@@ -1155,6 +1783,155 @@ exec "$@"
     );
     assert.equal(darwinReceipt.qualification.sourceCommit, darwinCommit);
     assert.equal(darwinReceipt.source.commit, actualCommit);
+    assert.equal(darwinReceipt.qualificationReceipt.nativePayload, null);
+    assert.equal(
+      darwinReceipt.qualification.nativePayloadSha256,
+      dynamicTargetSources["darwin-arm64"].nativePayloadSha256,
+    );
+    assert.deepEqual(darwinReceipt.qualification.nativePayload, {
+      identity: dynamicTargetSources["darwin-arm64"].nativePayloadSha256,
+      files: 2,
+    });
+
+    // Negative Darwin raw payload inventory checks: must refuse BEFORE any command invocation or qualification acceptance.
+    // A checkout with missing/broken command scripts proves qualifyPlatform fails before packageVerify or smoke commands run.
+    const noCommandCheckout = join(temp, "no-command-checkout");
+    const noCommandMarker = join(temp, "unexpected-command-invoked.txt");
+    await mkdir(join(noCommandCheckout, "tools"), { recursive: true });
+    for (const scriptName of ["native-rc-package.mjs", "native-rc-qualify.mjs", "native-rc-smoke.mjs"]) {
+      await writeFile(
+        join(noCommandCheckout, "tools", scriptName),
+        `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(noCommandMarker)}, ${JSON.stringify(scriptName)});\nprocess.exit(99);\n`,
+      );
+    }
+
+    // 1. Wrong expected Darwin nativePayloadSha256 (while executableSha256, packageManifestSha256, and null-payload Darwin receipt all match)
+    const wrongExpectedDarwinPayload = digest("9");
+    const wrongExpectedDarwinInput = {
+      ...dynamicInput,
+      targetSources: {
+        ...dynamicTargetSources,
+        "darwin-arm64": {
+          ...dynamicTargetSources["darwin-arm64"],
+          nativePayloadSha256: wrongExpectedDarwinPayload,
+        },
+      },
+      qualifications: {
+        ...dynamicInput.qualifications,
+        "darwin-arm64": {
+          ...dynamicInput.qualifications["darwin-arm64"],
+          nativePayloadSha256: wrongExpectedDarwinPayload,
+        },
+      },
+    };
+    const wrongExpectedOutDir = join(temp, "receipts-wrong-expected-darwin");
+    await assert.rejects(
+      () =>
+        qualifyPlatform(
+          wrongExpectedDarwinInput,
+          assetsDir,
+          "darwin-arm64",
+          noCommandCheckout,
+          wrongExpectedOutDir,
+          trustedReadbackOptions,
+        ),
+      /extracted raw Darwin native payload inventory identity .* does not match targetSources\.darwin-arm64\.nativePayloadSha256/,
+    );
+    await assert.rejects(() => readFile(noCommandMarker, "utf8"), { code: "ENOENT" });
+    await assert.rejects(() => readFile(join(wrongExpectedOutDir, "darwin-arm64.consumer-receipt.json"), "utf8"), {
+      code: "ENOENT",
+    });
+
+    // 2. Tampered raw Darwin payload member outside the GUI executable (executableSha256 and npm packageManifestSha256 remain intact)
+    const tamperedDarwinStage = join(temp, "stage-raw-darwin-tampered");
+    const tamperedDarwinExeFile = join(tamperedDarwinStage, PLATFORMS["darwin-arm64"].rawExecutable);
+    await mkdir(join(tamperedDarwinExeFile, ".."), { recursive: true });
+    await writeFile(tamperedDarwinExeFile, makeNativeExecutableBytes("darwin-arm64"), { mode: 0o755 });
+    const tamperedDarwinResDir = join(tamperedDarwinStage, PLATFORMS["darwin-arm64"].rawRoot, "Contents/Resources");
+    await mkdir(tamperedDarwinResDir, { recursive: true });
+    await writeFile(join(tamperedDarwinResDir, "resource-marker.txt"), "darwin-resource-TAMPERED\n", { mode: 0o644 });
+
+    const tamperedAssetsDir = join(temp, "assets-darwin-tampered");
+    await mkdir(join(tamperedAssetsDir, "raw", "darwin-arm64"), { recursive: true });
+    await mkdir(join(tamperedAssetsDir, "npm", "darwin-arm64"), { recursive: true });
+    for (const platform of ["linux-arm64", "linux-x64"]) {
+      await mkdir(join(tamperedAssetsDir, "raw", platform), { recursive: true });
+      await mkdir(join(tamperedAssetsDir, "npm", platform), { recursive: true });
+      const rawRow = dynamicAssets.find((row) => row.platform === platform && row.kind === "raw-archive");
+      const npmRow = dynamicAssets.find((row) => row.platform === platform && row.kind === "npm-package");
+      await copyFile(join(nestedArtifactDir, "raw", platform, rawRow.name), join(tamperedAssetsDir, "raw", platform, rawRow.name));
+      await copyFile(join(nestedArtifactDir, "npm", platform, npmRow.name), join(tamperedAssetsDir, "npm", platform, npmRow.name));
+    }
+    const darwinNpmRow = dynamicAssets.find((row) => row.platform === "darwin-arm64" && row.kind === "npm-package");
+    await copyFile(
+      join(nestedArtifactDir, "npm", "darwin-arm64", darwinNpmRow.name),
+      join(tamperedAssetsDir, "npm", "darwin-arm64", darwinNpmRow.name),
+    );
+    const darwinRawRow = dynamicAssets.find((row) => row.platform === "darwin-arm64" && row.kind === "raw-archive");
+    const tamperedDarwinRawPath = join(tamperedAssetsDir, "raw", "darwin-arm64", darwinRawRow.name);
+    execFileSync(
+      "tar",
+      ["-czf", tamperedDarwinRawPath, "-C", tamperedDarwinStage, PLATFORMS["darwin-arm64"].rawRoot],
+      { env: { ...process.env, COPYFILE_DISABLE: "1" } },
+    );
+    const tamperedDarwinRawBytes = await readFile(tamperedDarwinRawPath);
+    const tamperedDarwinRawSha = sha256(tamperedDarwinRawBytes);
+    const tamperedDarwinInput = {
+      ...dynamicInput,
+      assets: dynamicAssets.map((row) =>
+        row.platform === "darwin-arm64" && row.kind === "raw-archive"
+          ? {
+              ...row,
+              bytes: tamperedDarwinRawBytes.length,
+              sha256: tamperedDarwinRawSha,
+              integrity: `sha256-${createHash("sha256").update(tamperedDarwinRawBytes).digest("base64")}`,
+            }
+          : row,
+      ),
+      qualifications: {
+        ...dynamicInput.qualifications,
+        "darwin-arm64": {
+          ...dynamicInput.qualifications["darwin-arm64"],
+          rawSha256: tamperedDarwinRawSha,
+        },
+      },
+    };
+    const tamperedDarwinOutDir = join(temp, "receipts-tampered-darwin");
+    await assert.rejects(
+      () =>
+        qualifyPlatform(
+          tamperedDarwinInput,
+          tamperedAssetsDir,
+          "darwin-arm64",
+          noCommandCheckout,
+          tamperedDarwinOutDir,
+          trustedReadbackOptions,
+        ),
+      /extracted raw Darwin native payload inventory identity .* does not match targetSources\.darwin-arm64\.nativePayloadSha256/,
+    );
+    await assert.rejects(() => readFile(noCommandMarker, "utf8"), { code: "ENOENT" });
+    await assert.rejects(() => readFile(join(tamperedDarwinOutDir, "darwin-arm64.consumer-receipt.json"), "utf8"), {
+      code: "ENOENT",
+    });
+
+    // 3. Uncontained root sibling outside Theme Forge Nebular Fusion.app in Darwin raw root refused
+    const uncontainedDarwinStage = join(temp, "stage-raw-darwin-uncontained");
+    await mkdir(join(uncontainedDarwinStage, PLATFORMS["darwin-arm64"].rawRoot, "Contents/MacOS"), { recursive: true });
+    await writeFile(
+      join(uncontainedDarwinStage, PLATFORMS["darwin-arm64"].rawExecutable),
+      makeNativeExecutableBytes("darwin-arm64"),
+      { mode: 0o755 },
+    );
+    await writeFile(join(uncontainedDarwinStage, "stray-outside-app.txt"), "stray\n", { mode: 0o644 });
+    await assert.rejects(
+      () =>
+        verifyExtractedDarwinRawPayload(
+          uncontainedDarwinStage,
+          dynamicTargetSources["darwin-arm64"],
+          dynamicInput.qualifications["darwin-arm64"],
+        ),
+      /must contain only 'Theme Forge Nebular Fusion\.app'/,
+    );
 
     const linuxArmReceipt = await qualifyPlatform(
       dynamicInput,
@@ -1289,6 +2066,197 @@ exec "$@"
     );
     assert.equal(receiptCliOut.status, "pass");
     assert.equal(receiptCliOut.schema, RECEIPT_SCHEMA);
+
+    // End-to-end current-darwin-source qualification, aggregation, and negative readback/inventory checks
+    const trustedCurrentDarwinSourceArchivePath = join(trustedReadbackDir, "current-darwin-app-source.tar.gz");
+    await writeFile(trustedCurrentDarwinSourceArchivePath, currentDarwinSourceReadbackBytes);
+    const currentDarwinDynamicTargetSources = {
+      ...dynamicTargetSources,
+      "darwin-arm64": {
+        ...dynamicTargetSources["darwin-arm64"],
+        authority: "current-darwin-source",
+        sourceCommit: currentDarwinCommit,
+        sourceTree: currentDarwinTree,
+        sourceCandidate: currentDarwinCandidate,
+      },
+    };
+    const currentDarwinDynamicAssets = dynamicAssets.map((row) =>
+      row.platform === "darwin-arm64"
+        ? {
+            ...row,
+            sourceCommit: currentDarwinCommit,
+            sourceTree: currentDarwinTree,
+            sourceCandidate: currentDarwinCandidate,
+          }
+        : row,
+    );
+    const currentDarwinDynamicInput = {
+      ...dynamicInput,
+      source: {
+        ...dynamicInput.source,
+        targetSourceReadbacks: {
+          ...dynamicInput.source.targetSourceReadbacks,
+          "darwin-arm64": {
+            role: "darwin-app-source",
+            sourceCandidate: currentDarwinCandidate,
+            bytes: currentDarwinSourceReadbackBytes.length,
+            sha256: sha256(currentDarwinSourceReadbackBytes),
+          },
+        },
+      },
+      targetSources: currentDarwinDynamicTargetSources,
+      assets: currentDarwinDynamicAssets,
+      qualifications: {
+        "darwin-arm64": {
+          mode: "existing-qualified",
+          status: "pass",
+          authority: "current-darwin-source",
+          receiptSha256: dynamicDarwinQualReceiptSha,
+          receipt: dynamicDarwinQualReceipt,
+          executableSha256: currentDarwinDynamicTargetSources["darwin-arm64"].executableSha256,
+          nativePayloadSha256: currentDarwinDynamicTargetSources["darwin-arm64"].nativePayloadSha256,
+          sourceCommit: currentDarwinCommit,
+          sourceTree: currentDarwinTree,
+          sourceCandidate: currentDarwinCandidate,
+          rawSha256: currentDarwinDynamicAssets[0].sha256,
+          npmSha256: currentDarwinDynamicAssets[1].sha256,
+        },
+      },
+    };
+    const currentDarwinExternalDescriptorPath = join(temp, "late-bound-current-darwin-consumer-input.json");
+    await writeFile(currentDarwinExternalDescriptorPath, JSON.stringify(currentDarwinDynamicInput, null, 2));
+    const currentDarwinReadbackOptions = {
+      ...trustedReadbackOptions,
+      inputPath: currentDarwinExternalDescriptorPath,
+      darwinSourceArchivePath: trustedCurrentDarwinSourceArchivePath,
+    };
+    const currentDarwinAdmission = resolveSourceAdmission(
+      currentDarwinDynamicInput,
+      checkoutDir,
+      currentDarwinReadbackOptions,
+    );
+    assert.equal(currentDarwinAdmission.status, "pass");
+    assert.equal(
+      currentDarwinAdmission.trustedReadback.darwinAppSource.sourceCandidate,
+      currentDarwinCandidate,
+    );
+    assert.equal(
+      verifyAdmissionReceipt(
+        currentDarwinAdmission,
+        currentDarwinDynamicInput,
+        currentDarwinReadbackOptions,
+      ).commit,
+      actualCommit,
+    );
+    assert.throws(
+      () =>
+        resolveSourceAdmission(currentDarwinDynamicInput, checkoutDir, {
+          ...currentDarwinReadbackOptions,
+          darwinSourceArchivePath: join(trustedReadbackDir, "tampered-source-offer.tar.gz"),
+        }),
+      /Darwin app source readback bytes or SHA-256/,
+    );
+    assert.throws(
+      () =>
+        resolveSourceAdmission(currentDarwinDynamicInput, checkoutDir, {
+          ...currentDarwinReadbackOptions,
+          darwinReceiptPath: join(trustedReadbackDir, "tampered-source-offer.tar.gz"),
+        }),
+      /Darwin qualification readback bytes or SHA-256/,
+    );
+
+    const currentDarwinReceiptsOutDir = join(temp, "receipts-current-darwin");
+    const currentDarwinPlatformReceipt = await qualifyPlatform(
+      currentDarwinDynamicInput,
+      assetsDir,
+      "darwin-arm64",
+      canonicalCheckoutDir,
+      currentDarwinReceiptsOutDir,
+      {
+        ...currentDarwinReadbackOptions,
+        trustedReadback: currentDarwinAdmission.trustedReadback,
+      },
+    );
+    assert.equal(currentDarwinPlatformReceipt.compilerSource.authority, "current-darwin-source");
+    assert.equal(currentDarwinPlatformReceipt.qualification.authority, "current-darwin-source");
+    assert.equal(currentDarwinPlatformReceipt.qualification.sourceCommit, currentDarwinCommit);
+    assert.equal(currentDarwinPlatformReceipt.qualificationReceipt.nativePayload, null);
+    assert.deepEqual(currentDarwinPlatformReceipt.qualification.nativePayload, {
+      identity: currentDarwinDynamicTargetSources["darwin-arm64"].nativePayloadSha256,
+      files: 2,
+    });
+    assert.equal(currentDarwinPlatformReceipt.smoke.length, 2);
+
+    const adaptLinuxReceiptForCurrentDarwin = (linuxReceipt) => ({
+      ...linuxReceipt,
+      source: {
+        ...linuxReceipt.source,
+        targetSourceReadbacks: currentDarwinAdmission.targetSourceReadbacks,
+      },
+      transport: linuxReceipt.transport.map((entry) =>
+        entry.platform === "darwin-arm64"
+          ? {
+              ...entry,
+              sourceCommit: currentDarwinCommit,
+              sourceTree: currentDarwinTree,
+              sourceCandidate: currentDarwinCandidate,
+            }
+          : entry,
+      ),
+    });
+    const currentDarwinAggregateReceipt = buildConsumerReceipt(
+      currentDarwinDynamicInput,
+      {
+        "darwin-arm64": currentDarwinPlatformReceipt,
+        "linux-arm64": adaptLinuxReceiptForCurrentDarwin(linuxArmReceipt),
+        "linux-x64": adaptLinuxReceiptForCurrentDarwin(linuxX64Receipt),
+      },
+      currentDarwinReadbackOptions,
+    );
+    assert.equal(currentDarwinAggregateReceipt.schema, RECEIPT_SCHEMA);
+    assert.equal(currentDarwinAggregateReceipt.targetSources["darwin-arm64"].authority, "current-darwin-source");
+    assert.equal(
+      currentDarwinAggregateReceipt.platforms.find((row) => row.platform === "darwin-arm64").qualification.authority,
+      "current-darwin-source",
+    );
+
+    const tamperedCurrentDarwinInput = {
+      ...currentDarwinDynamicInput,
+      assets: currentDarwinDynamicAssets.map((row) =>
+        row.platform === "darwin-arm64" && row.kind === "raw-archive"
+          ? {
+              ...row,
+              bytes: tamperedDarwinRawBytes.length,
+              sha256: tamperedDarwinRawSha,
+              integrity: `sha256-${createHash("sha256").update(tamperedDarwinRawBytes).digest("base64")}`,
+            }
+          : row,
+      ),
+      qualifications: {
+        "darwin-arm64": {
+          ...currentDarwinDynamicInput.qualifications["darwin-arm64"],
+          rawSha256: tamperedDarwinRawSha,
+        },
+      },
+    };
+    const tamperedCurrentDarwinOutDir = join(temp, "receipts-tampered-current-darwin");
+    await assert.rejects(
+      () =>
+        qualifyPlatform(
+          tamperedCurrentDarwinInput,
+          tamperedAssetsDir,
+          "darwin-arm64",
+          noCommandCheckout,
+          tamperedCurrentDarwinOutDir,
+          currentDarwinReadbackOptions,
+        ),
+      /extracted raw Darwin native payload inventory identity .* does not match targetSources\.darwin-arm64\.nativePayloadSha256/,
+    );
+    await assert.rejects(() => readFile(noCommandMarker, "utf8"), { code: "ENOENT" });
+    await assert.rejects(
+      () => readFile(join(tamperedCurrentDarwinOutDir, "darwin-arm64.consumer-receipt.json"), "utf8"),
+      { code: "ENOENT" },
+    );
   } finally {
     process.env.PATH = previousPath;
   }
@@ -1297,6 +2265,213 @@ exec "$@"
 }
 
 // Receipt & manifest unit validation checks
+// Positive check: Darwin non-null nativePayload matching targetSources.darwin-arm64.nativePayloadSha256 is also accepted
+assert.equal(
+  validateQualificationReceipt(
+    {
+      ...darwinQualReceipt,
+      nativePayload: { identity: targetSources["darwin-arm64"].nativePayloadSha256, files: 12 },
+    },
+    "darwin-arm64",
+    targetSources["darwin-arm64"],
+  ).platform,
+  "darwin-arm64",
+);
+// Darwin wrong executableSha256 refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        executableSha256: digest("0"),
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /failed schema, status, or executableSha256 check for darwin-arm64/,
+);
+// Darwin wrong executable-header check detail refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        checks: darwinQualReceipt.checks.map((check) =>
+          check.id === "executable-header" ? { ...check, detail: digest("0") } : check,
+        ),
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /executable-header check detail does not match/,
+);
+// Darwin unknown check ID refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        checks: [...darwinQualReceipt.checks, { id: "unknown-check", ok: true, detail: "ok" }],
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /contains unknown or duplicate check 'unknown-check'/,
+);
+// Darwin missing nativePayload property refused
+assert.throws(
+  () => {
+    const { nativePayload: _omitted, ...withoutNativePayload } = darwinQualReceipt;
+    return validateQualificationReceipt(withoutNativePayload, "darwin-arm64", targetSources["darwin-arm64"]);
+  },
+  /nativePayload is missing for darwin-arm64/,
+);
+// Darwin undefined nativePayload refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        nativePayload: undefined,
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /nativePayload is missing for darwin-arm64/,
+);
+// Darwin arbitrary/unknown nativePayload object refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        nativePayload: { identity: targetSources["darwin-arm64"].nativePayloadSha256, files: 12, unknownField: true },
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /contains unknown or missing keys/,
+);
+// Darwin mismatched non-null nativePayload.identity refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        nativePayload: { identity: digest("z"), files: 12 },
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /nativePayload\.identity does not match targetSources\.darwin-arm64\.nativePayloadSha256/,
+);
+// Darwin non-null or missing materialDigest / glibcMinimum refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        materialDigest: digest("a"),
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /materialDigest must be null for darwin-arm64/,
+);
+assert.throws(
+  () => {
+    const { materialDigest: _omitted, ...withoutMaterialDigest } = darwinQualReceipt;
+    return validateQualificationReceipt(withoutMaterialDigest, "darwin-arm64", targetSources["darwin-arm64"]);
+  },
+  /materialDigest must be null for darwin-arm64/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...darwinQualReceipt,
+        glibcMinimum: "2.36",
+      },
+      "darwin-arm64",
+      targetSources["darwin-arm64"],
+    ),
+  /glibcMinimum must be null for darwin-arm64/,
+);
+assert.throws(
+  () => {
+    const { glibcMinimum: _omitted, ...withoutGlibcMinimum } = darwinQualReceipt;
+    return validateQualificationReceipt(withoutGlibcMinimum, "darwin-arm64", targetSources["darwin-arm64"]);
+  },
+  /glibcMinimum must be null for darwin-arm64/,
+);
+// Linux null, missing, and unknown-key nativePayload refused
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        schema: QUALIFICATION_RECEIPT_SCHEMA,
+        platform: "linux-x64",
+        status: "pass",
+        executableSha256: targetSources["linux-x64"].executableSha256,
+        nativePayload: null,
+        checks: makeQualificationChecks("linux-x64"),
+        glibcMinimum: "2.36",
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /must be a non-null object; nativePayload\.identity does not match targetSources\.linux-x64\.nativePayloadSha256/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        schema: QUALIFICATION_RECEIPT_SCHEMA,
+        platform: "linux-arm64",
+        status: "pass",
+        executableSha256: targetSources["linux-arm64"].executableSha256,
+        nativePayload: null,
+        checks: makeQualificationChecks("linux-arm64"),
+        glibcMinimum: "2.36",
+      },
+      "linux-arm64",
+      targetSources["linux-arm64"],
+    ),
+  /must be a non-null object; nativePayload\.identity does not match targetSources\.linux-arm64\.nativePayloadSha256/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        schema: QUALIFICATION_RECEIPT_SCHEMA,
+        platform: "linux-x64",
+        status: "pass",
+        executableSha256: targetSources["linux-x64"].executableSha256,
+        checks: makeQualificationChecks("linux-x64"),
+        glibcMinimum: "2.36",
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /nativePayload is missing for linux-x64/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        schema: QUALIFICATION_RECEIPT_SCHEMA,
+        platform: "linux-x64",
+        status: "pass",
+        executableSha256: targetSources["linux-x64"].executableSha256,
+        nativePayload: { identity: targetSources["linux-x64"].nativePayloadSha256, files: 1, unknown: true },
+        checks: makeQualificationChecks("linux-x64"),
+        glibcMinimum: "2.36",
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /contains unknown or missing keys/,
+);
 assert.throws(
   () =>
     validateExtractedPackageManifest(
@@ -1340,7 +2515,7 @@ assert.throws(
         status: "pass",
         executableSha256: targetSources["linux-x64"].executableSha256,
         nativePayload: { identity: targetSources["linux-x64"].nativePayloadSha256, files: 1 },
-        checks: [{ id: "executable-header", ok: true }],
+        checks: [{ id: "executable-header", ok: true, detail: targetSources["linux-x64"].executableSha256 }],
         glibcMinimum: "2.36",
       },
       "linux-x64",
@@ -1455,11 +2630,11 @@ try {
 process.stdout.write(
   JSON.stringify({
     status: "pass",
-    refusalCases: 26,
+    refusalCases: 69,
     sourceInventoryCases: 2,
     commandPlanCases: 7,
     fetchCases: 5,
-    endToEndQualifyCases: 3,
+    endToEndQualifyCases: 4,
     cliSubcommandCases: 5,
   }) + "\n",
 );

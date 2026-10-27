@@ -1,7 +1,7 @@
 {
   "fileCount": 15,
-  "totalBytes": 6284648,
-  "treeDigest": "bfda5b94b9e71a4c0c4c96d2687c0495b83cfdc39186557518c3bf71b65c7ca6",
+  "totalBytes": 6291854,
+  "treeDigest": "80833b2f6d0ad66a22eaab4fe3677a2e65a06040ed505444406f7a0d0789adc6",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.7.0.tgz",
@@ -37,7 +37,7 @@
       "path": "publication-manifest.json",
       "size": 2934,
       "mode": 420,
-      "sha256": "6cf403224649c243b035ca72e4545114ecc15713e871b72ea0049e74384980ab"
+      "sha256": "ac755c4b3e073d8e43222be9d87d65d7c6f2a5bd3e12d9ff41409cb9f235df75"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -53,9 +53,9 @@
     },
     {
       "path": "scene-tarball/scene-input.tgz",
-      "size": 211241,
+      "size": 218447,
       "mode": 420,
-      "sha256": "8b60ebd2f60e653315cb137d87988d99dc9c234416a1c193a420a8032867b11e"
+      "sha256": "658bb7d36042b828b1e41b10580d9e0872f2648e1f56d9426c4fa3084a6790c3"
     },
     {
       "path": "solar-sail-tarball/knowledge-forge-ai-theme-forge-solar-sail-0.3.0.tgz",
@@ -67,13 +67,13 @@
       "path": "source-candidate.json",
       "size": 317,
       "mode": 420,
-      "sha256": "80641d576114897fa49df8ba99989d2213c51fc74a3b3d88bd25ee511038d297"
+      "sha256": "74b38d4c0a9bdbed43ae24eb21c1e41c5fbe07e971224127384d109f93dfa32c"
     },
     {
       "path": "stellar-binding.json",
       "size": 8397,
       "mode": 420,
-      "sha256": "d93a7e08a5e7e81f8c22a1b875f6b21a7f059f4a271b62ba32020cfe8a9e2edf"
+      "sha256": "08d4ebf8f36a61de9024865e978270191d01c9b83c37230e09be678ca30003b6"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",
