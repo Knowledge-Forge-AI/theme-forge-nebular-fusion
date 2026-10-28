@@ -1384,7 +1384,7 @@ describe("linux private-runtime RC integration", () => {
       const replacement = `${path}.replacement`;
       renameSync(path, replacement);
       writeFileSync(path, Buffer.from("replacement\n"));
-    }, /drift|changed|Malformed|keys differ|ENOENT|Native runtime input SHA-256 mismatch/i);
+    }, /drift|changed|Malformed|keys differ|ENOENT|Native runtime input SHA-256 mismatch|Hardlinked regular file refused \(nlink=0\)/i);
     await runMutationCase("identity", (path) => chmodSync(path, 0o4755), /privilege|drift|changed|Malformed|keys differ|Native runtime input SHA-256 mismatch/i);
   });
 

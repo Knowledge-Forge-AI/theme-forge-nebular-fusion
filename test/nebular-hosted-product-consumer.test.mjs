@@ -96,6 +96,8 @@ function resolveConsumerSourceLayout() {
 const CONSUMER_SOURCE_LAYOUT = resolveConsumerSourceLayout();
 const REPO_ROOT = CONSUMER_SOURCE_LAYOUT.root;
 const CONSUMER_TOOL_PATH = resolve(__dirname, "../tools/nebular-hosted-product-consumer.mjs");
+const EXACT_RELEASE_FETCH_TOOL_PATH = resolve(__dirname, "../tools/nebular-exact-release-asset-fetch.mjs");
+const EXACT_SOURCE_FETCH_TOOL_PATH = resolve(__dirname, "../tools/nebular-exact-source-readback-fetch.mjs");
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 const canonical = (value) =>
@@ -292,6 +294,152 @@ const targetSources = {
     packageManifestSha256: digest("f"),
   },
 };
+
+async function runExactFetchDescriptorContract() {
+  const temp = await mkdtemp(join(tmpdir(), "nebular-exact-fetch-descriptor-test-"));
+  try {
+    const helperPath = join(temp, "fake-consumer-helper.mjs");
+    await writeFile(helperPath, `
+export function validateInput(input) { return input; }
+export function verifyAdmissionReceipt() {}
+export async function fetchReleaseAsset(asset) {
+  return {
+    platform: asset.platform,
+    kind: asset.kind,
+    assetId: asset.assetId,
+    name: asset.name,
+    bytes: 1,
+    sha256: "${digest("a")}",
+    sourceCommit: "${"c".repeat(40)}",
+    sourceTree: "${digest("b").slice(0, 40)}",
+    sourceCandidate: "${digest("c")}",
+  };
+}
+export async function fetchSourceReadbacks() {
+  return { status: "pass", schema: "fixture", sourceAssets: {} };
+}
+`);
+
+    const source = {
+      commit: "c".repeat(40),
+      tree: digest("d").slice(0, 40),
+      manifestSha256: digest("e"),
+      correspondingSourceOfferSha256: digest("f"),
+    };
+    const assetKinds = ["raw-archive", "npm-package"];
+    const assets = Array.from({ length: 6 }, (_, index) => ({
+      platform: ["darwin-arm64", "linux-arm64", "linux-x64"][Math.floor(index / 2)],
+      kind: assetKinds[index % 2],
+      assetId: String(1001 + index),
+      name: `fixture-${index}.tar.gz`,
+      apiUrl: `https://api.github.com/repos/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/assets/${1001 + index}`,
+    }));
+    const releaseInput = { source, assets };
+    const sourceInput = { source };
+    const admission = { targetSourceReadbacks: { "darwin-arm64": { status: "pass" } } };
+    const validReleaseInput = join(temp, "release-input.json");
+    const validSourceInput = join(temp, "source-input.json");
+    const admissionPath = join(temp, "admission.json");
+    const manifestPath = join(temp, "source-manifest.json");
+    await writeFile(validReleaseInput, `${JSON.stringify(releaseInput)}\n`);
+    await writeFile(validSourceInput, `${JSON.stringify(sourceInput)}\n`);
+    await writeFile(admissionPath, `${JSON.stringify(admission)}\n`);
+    await writeFile(manifestPath, `${JSON.stringify({
+      sourceAssets: {
+        "corresponding-source-offer": { url: "https://api.github.com/repos/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/assets/2001" },
+        "darwin-app-source": { url: "https://api.github.com/repos/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/assets/2002" },
+        "linux-app-source": { url: "https://api.github.com/repos/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/assets/2003" },
+      },
+      darwinQualificationReceipt: { url: "https://api.github.com/repos/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/assets/2004" },
+    })}\n`);
+
+    const run = (tool, args) => spawnSync(
+      process.execPath,
+      [tool, ...args],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        env: {
+          ...process.env,
+          GITHUB_TOKEN: "fixture-token",
+          NEBULAR_EXACT_RELEASE_ASSET_FETCH: "1",
+          NEBULAR_EXACT_SOURCE_READBACK_FETCH: "1",
+        },
+      },
+    );
+    let outputCounter = 0;
+    const releaseArgs = (inputPath, outputPath) => [
+      "--helper", helperPath,
+      "--input", inputPath,
+      "--admission", admissionPath,
+      "--checkout", temp,
+      "--source-archive", validReleaseInput,
+      "--darwin-source-archive", validSourceInput,
+      "--linux-source-archive", admissionPath,
+      "--darwin-receipt", manifestPath,
+      "--output", outputPath,
+    ];
+    const sourceArgs = (inputPath) => [
+      "--helper", helperPath,
+      "--input", inputPath,
+      "--manifest", manifestPath,
+      "--output", join(temp, `source-output-${outputCounter++}`),
+    ];
+    const releaseSuccess = run(EXACT_RELEASE_FETCH_TOOL_PATH, releaseArgs(validReleaseInput, join(temp, "release-output")));
+    assert.equal(releaseSuccess.error, undefined);
+    assert.equal(releaseSuccess.status, 0, releaseSuccess.stderr);
+    assert.match(releaseSuccess.stdout, /"status":"pass"/);
+    const sourceSuccess = run(EXACT_SOURCE_FETCH_TOOL_PATH, sourceArgs(validSourceInput));
+    assert.equal(sourceSuccess.error, undefined);
+    assert.equal(sourceSuccess.status, 0, sourceSuccess.stderr);
+    assert.match(sourceSuccess.stdout, /"status":"pass"/);
+
+    const assertRejected = (result, prefix, detail) => {
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, new RegExp(`\\[${prefix}\\] JSON input ${detail}`));
+    };
+    const runBoth = (releaseInputPath, sourceInputPath, detail) => {
+      assertRejected(
+        run(EXACT_RELEASE_FETCH_TOOL_PATH, releaseArgs(releaseInputPath, join(temp, `bad-release-${outputCounter++}`))),
+        "NEBULAR_EXACT_RELEASE_FETCH",
+        detail,
+      );
+      assertRejected(
+        run(EXACT_SOURCE_FETCH_TOOL_PATH, sourceArgs(sourceInputPath)),
+        "NEBULAR_EXACT_SOURCE_FETCH",
+        detail,
+      );
+    };
+
+    const symlinkRelease = join(temp, "release-input-link.json");
+    const symlinkSource = join(temp, "source-input-link.json");
+    await symlink(validReleaseInput, symlinkRelease);
+    await symlink(validSourceInput, symlinkSource);
+    runBoth(symlinkRelease, symlinkSource, "is not a bounded regular file");
+    await rm(symlinkRelease);
+    await rm(symlinkSource);
+
+    const fifoRelease = join(temp, "release-input.fifo");
+    const fifoSource = join(temp, "source-input.fifo");
+    execFileSync("mkfifo", [fifoRelease]);
+    execFileSync("mkfifo", [fifoSource]);
+    runBoth(fifoRelease, fifoSource, "is not a bounded regular file");
+    await rm(fifoRelease);
+    await rm(fifoSource);
+
+    const oversize = join(temp, "oversize-input.json");
+    await writeFile(oversize, Buffer.alloc(8 * 1024 * 1024 + 1, 0x20));
+    runBoth(oversize, oversize, "is not a bounded regular file");
+
+    const malformed = join(temp, "malformed-input.json");
+    await writeFile(malformed, "{\n");
+    runBoth(malformed, malformed, "is invalid");
+    return { status: "pass", cases: 10, adapters: 2, boundedBytes: 8 * 1024 * 1024 };
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}
 
 async function runConsumerContract() {
 const fixture = JSON.parse(
@@ -2663,6 +2811,8 @@ try {
   await rm(fetchTemp, { recursive: true, force: true });
 }
 
+await runExactFetchDescriptorContract();
+
 return {
     status: "pass",
     refusalCases: 69,
@@ -2671,6 +2821,7 @@ return {
     fetchCases: 5,
     endToEndQualifyCases: 4,
     cliSubcommandCases: 5,
+    exactFetchDescriptorCases: 10,
   };
 }
 

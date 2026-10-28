@@ -10,9 +10,10 @@
  * consumer or qualification command.
  */
 
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readRegularSnapshot } from "./fs-snapshot.mjs";
 
 const JSON_LIMIT = 8 * 1024 * 1024;
 const FETCH_READBACK_SCHEMA = "nebular.hosted-product-fetch-readback-v2";
@@ -52,20 +53,32 @@ function parseFlags(argv) {
 }
 
 async function readJson(path) {
-  let bytes;
   try {
-    const info = await lstat(path);
-    if (!info.isFile() || info.size < 1 || info.size > JSON_LIMIT) fail(`JSON input is not a bounded regular file: ${path}`);
-    bytes = await readFile(path);
+    const snapshot = readRegularSnapshot(path, {
+      bindPath: true,
+      label: "JSON input",
+      maxBytes: JSON_LIMIT,
+      messages: {
+        missing: `JSON input could not be read: ${path}`,
+        symlink: `JSON input is not a bounded regular file: ${path}`,
+        notRegular: `JSON input is not a bounded regular file: ${path}`,
+        tooLarge: `JSON input is not a bounded regular file: ${path}`,
+        truncated: `JSON input changed while being read: ${path}`,
+        grew: "JSON input exceeded its bounded byte limit",
+        changed: `JSON input changed while being read: ${path}`,
+        replaced: `JSON input changed while being read: ${path}`,
+      },
+    });
+    if (!snapshot || snapshot.bytes.length < 1) fail(`JSON input is not a bounded regular file: ${path}`);
+    try {
+      return JSON.parse(snapshot.bytes.toString("utf8"));
+    } catch {
+      fail(`JSON input is invalid: ${path}`);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("[NEBULAR_EXACT_RELEASE_FETCH]")) throw error;
+    if (error instanceof Error && error.message.startsWith("JSON input ")) fail(error.message);
     fail(`JSON input could not be read: ${path}`);
-  }
-  if (bytes.length > JSON_LIMIT) fail("JSON input exceeded its bounded byte limit");
-  try {
-    return JSON.parse(bytes.toString("utf8"));
-  } catch {
-    fail(`JSON input is invalid: ${path}`);
   }
 }
 

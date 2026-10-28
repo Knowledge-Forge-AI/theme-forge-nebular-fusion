@@ -6,13 +6,13 @@
  * module only supplies the dedicated authenticated initial-GET sequence.
  */
 
-import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   assertExactAssetApiUrl,
   createAuthenticatedAssetFetch,
 } from "./nebular-exact-release-asset-fetch.mjs";
+import { readRegularSnapshot } from "./fs-snapshot.mjs";
 
 const JSON_LIMIT = 8 * 1024 * 1024;
 const REQUIRED_FLAGS = Object.freeze(["--helper", "--input", "--manifest", "--output"]);
@@ -43,13 +43,30 @@ function parseFlags(argv) {
 
 async function readJson(path) {
   try {
-    const info = await lstat(path);
-    if (!info.isFile() || info.size < 1 || info.size > JSON_LIMIT) fail(`JSON input is not a bounded regular file: ${path}`);
-    const bytes = await readFile(path);
-    if (bytes.length > JSON_LIMIT) fail("JSON input exceeded its bounded byte limit");
-    return JSON.parse(bytes.toString("utf8"));
+    const snapshot = readRegularSnapshot(path, {
+      bindPath: true,
+      label: "JSON input",
+      maxBytes: JSON_LIMIT,
+      messages: {
+        missing: `JSON input could not be read: ${path}`,
+        symlink: `JSON input is not a bounded regular file: ${path}`,
+        notRegular: `JSON input is not a bounded regular file: ${path}`,
+        tooLarge: `JSON input is not a bounded regular file: ${path}`,
+        truncated: `JSON input changed while being read: ${path}`,
+        grew: "JSON input exceeded its bounded byte limit",
+        changed: `JSON input changed while being read: ${path}`,
+        replaced: `JSON input changed while being read: ${path}`,
+      },
+    });
+    if (!snapshot || snapshot.bytes.length < 1) fail(`JSON input is not a bounded regular file: ${path}`);
+    try {
+      return JSON.parse(snapshot.bytes.toString("utf8"));
+    } catch {
+      fail(`JSON input is invalid or unreadable: ${path}`);
+    }
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("[NEBULAR_EXACT_SOURCE_FETCH]")) throw error;
+    if (error instanceof Error && error.message.startsWith("JSON input ")) fail(error.message);
     fail(`JSON input is invalid or unreadable: ${path}`);
   }
 }
