@@ -1,7 +1,7 @@
 {
   "fileCount": 15,
   "totalBytes": 6291854,
-  "treeDigest": "802a455c9a70e7354b3dcef530ed4bc6ba43fc4e259c381238e6cef80e298690",
+  "treeDigest": "f688ec6e4ad224389b8a20134e678e5663be6b88c44cbccd3eb79b100cb4c664",
   "files": [
     {
       "path": "core-tarball/knowledge-forge-ai-theme-forge-stellar-burst-0.7.0.tgz",
@@ -37,7 +37,7 @@
       "path": "publication-manifest.json",
       "size": 2934,
       "mode": 420,
-      "sha256": "19df9590c9afd71985f5f2f1bcf12916bc4323627c909553efaa69bd208c9e1f"
+      "sha256": "24e5526bd4ca0f3b6625b892f5a1cdca39d7e10845c6188302c7ea883fb04a9c"
     },
     {
       "path": "raster-tarball/knowledge-forge-ai-tfsb-raster-resvg-0.0.0-tfsb47f.tgz",
@@ -67,13 +67,13 @@
       "path": "source-candidate.json",
       "size": 317,
       "mode": 420,
-      "sha256": "17b3922388c79d6cfbd840896b9387f5e6c0c5df0b2a88b16857717b8227a600"
+      "sha256": "2bb851d08d9f909c96df553628bce01933e00961a980eca0d1b01c584c05cbda"
     },
     {
       "path": "stellar-binding.json",
       "size": 8397,
       "mode": 420,
-      "sha256": "45b90f10b2aafff603a4bd1aed69d6ff8e8880ff67b59ec4ebe55360a288f7d1"
+      "sha256": "0784693cbe0ec765c1604bbb5242ea92cb76f050854002d23150142f047eb677"
     },
     {
       "path": "tooling-tarball/node-build-types.tgz",

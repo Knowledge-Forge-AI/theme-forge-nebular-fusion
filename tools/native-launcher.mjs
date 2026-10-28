@@ -76,7 +76,7 @@ payload_root=$(dirname -- "$root")
 gui_dir=$(CDPATH= cd -P -- "$root/${executableDirectory}" && pwd)
 gui="$gui_dir/${APPLICATION_NAME}"
 [ -f "$gui" ] && [ -x "$gui" ] && [ ! -L "$gui" ] || { echo 'tfnf: native GUI target unavailable' >&2; exit 1; }
-for rel_dir in opt opt/nebular-private opt/nebular-private/lib opt/nebular-private/lib/webkit2gtk-4.1 opt/nebular-private/lib/webkit2gtk-4.1/injected-bundle opt/nebular-private/libexec opt/nebular-private/libexec/sandbox opt/nebular-private/libexec/webkit2gtk-4.1; do
+for rel_dir in opt opt/nebular-private opt/nebular-private/lib opt/nebular-private/lib/dri opt/nebular-private/lib/webkit2gtk-4.1 opt/nebular-private/lib/webkit2gtk-4.1/injected-bundle opt/nebular-private/libexec opt/nebular-private/libexec/sandbox opt/nebular-private/libexec/webkit2gtk-4.1 opt/nebular-private/share opt/nebular-private/share/glvnd opt/nebular-private/share/glvnd/egl_vendor.d; do
   req_dir="$root/../$rel_dir"
   [ -d "$req_dir" ] && [ ! -L "$req_dir" ] || { echo "tfnf: private runtime directory unavailable: $rel_dir" >&2; exit 1; }
 done
@@ -95,16 +95,34 @@ for soname_role in lib/libjavascriptcoregtk-4.1.so.0 lib/libwebkit2gtk-4.1.so.0;
   role_path="$private_root/$soname_role"
   [ -f "$role_path" ] || { echo "tfnf: private runtime SONAME unavailable: $soname_role" >&2; exit 1; }
 done
+for provider_rel in lib/libEGL.so.1 lib/libEGL_mesa.so.0 lib/libGLX.so.0 lib/libGLX_mesa.so.0 lib/libGLdispatch.so.0 lib/libgbm.so.1 lib/dri/swrast_dri.so; do
+  provider_path="$private_root/$provider_rel"
+  provider_resolved=$(readlink -f -- "$provider_path") || { echo "tfnf: private graphics provider unavailable: $provider_rel" >&2; exit 1; }
+  case "$provider_resolved" in
+    "$private_root"/*) ;; *) echo "tfnf: private graphics provider escapes runtime: $provider_rel" >&2; exit 1 ;;
+  esac
+  [ -f "$provider_resolved" ] && [ ! -L "$provider_resolved" ] || { echo "tfnf: private graphics provider is not regular: $provider_rel" >&2; exit 1; }
+done
+vendor_json="$private_root/share/glvnd/egl_vendor.d/50_mesa.json"
+[ -f "$vendor_json" ] && [ ! -L "$vendor_json" ] || { echo 'tfnf: private Mesa EGL vendor JSON unavailable' >&2; exit 1; }
+[ "$(wc -c < "$vendor_json")" -le 65536 ] || { echo 'tfnf: private Mesa EGL vendor JSON exceeds bound' >&2; exit 1; }
+vendor_json_compact=$(LC_ALL=C tr -d '[:space:]' < "$vendor_json") || { echo 'tfnf: private Mesa EGL vendor JSON unreadable' >&2; exit 1; }
+case "$vendor_json_compact" in
+  '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_mesa.so.0"}}') ;;
+  *) echo 'tfnf: private Mesa EGL vendor JSON route is invalid' >&2; exit 1 ;;
+esac
 if [ "\${1-}" = --path ]; then printf '%s\\n' "$gui"; exit 0; fi
 for var in $(env | LC_ALL=C sed -n 's/^\\(LD_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(GLIBC_TUNABLES\\)=.*/\\1/p'); do
   unset "$var"
 done
-unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG GLIBC_TUNABLES
+unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG GLIBC_TUNABLES __EGL_VENDOR_LIBRARY_FILENAMES __EGL_VENDOR_LIBRARY_DIRS LIBGL_DRIVERS_PATH
 canonical_webkit="$private_root/lib/libwebkit2gtk-4.1.so.0.19.9"
 [ -f "$canonical_webkit" ] && [ ! -L "$canonical_webkit" ] || { echo 'tfnf: canonical WebKit runtime anchor unavailable' >&2; exit 1; }
 LD_LIBRARY_PATH="$private_root/lib"
 LD_PRELOAD='libwebkit2gtk-4.1.so.0.19.9'
-export LD_LIBRARY_PATH LD_PRELOAD
+__EGL_VENDOR_LIBRARY_FILENAMES="$vendor_json"
+LIBGL_DRIVERS_PATH="$private_root/lib/dri"
+export LD_LIBRARY_PATH LD_PRELOAD __EGL_VENDOR_LIBRARY_FILENAMES LIBGL_DRIVERS_PATH
 exec "$gui" "$@"
 `;
 }

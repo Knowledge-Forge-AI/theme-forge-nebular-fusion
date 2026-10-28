@@ -19,9 +19,12 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import {
   cp,
+  lstat,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
@@ -35,6 +38,7 @@ const studioRoot = resolve(__dirname, "..");
 
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
 import { reindexPagefindSite } from "./pagefind-index.mjs";
+import { readRegularSnapshot } from "./fs-snapshot.mjs";
 
 /** @typedef {typeof import("../src/features/theme-lab/gallery-contract.js")} GalleryContract */
 /** @typedef {import("../src/features/theme-lab/gallery-contract.js").GalleryScenarioId} GalleryScenarioId */
@@ -116,6 +120,277 @@ export {
   BRIDGE_CONTRACT,
   GALLERY_COVERAGE,
 };
+
+const MAX_GALLERY_THEME_ARCHIVE_BYTES = 64 * 1024 * 1024;
+const MAX_GALLERY_THEME_ARCHIVE_ENTRIES = 1024;
+const MAX_GALLERY_THEME_TAR_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_GALLERY_THEME_TAR_MILLISECONDS = 30_000;
+const EXPECTED_GALLERY_THEME_PEERS = Object.freeze({
+  astro: "^7.3.1",
+  "@astrojs/starlight": "^0.42.0",
+});
+
+/** @param {string} message @returns {never} */
+function rejectGalleryThemeArchive(message) {
+  throw new Error(`Generated gallery theme archive rejected: ${message}`);
+}
+
+/** @param {unknown} error @returns {boolean} */
+function isMissingPath(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+/** @param {string} path @returns {Promise<import("node:fs").Stats | null>} */
+async function optionalLstat(path) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isMissingPath(error)) return null;
+    throw error;
+  }
+}
+
+/** @param {string} path @param {string} label */
+async function requireGalleryDirectory(path, label) {
+  const info = await optionalLstat(path);
+  if (!info || info.isSymbolicLink() || !info.isDirectory()) rejectGalleryThemeArchive(`${label} is not a directory`);
+  return info;
+}
+
+/** @param {string} value @param {string} label @returns {string} */
+function validateGalleryRelativePath(value, label) {
+  if (typeof value !== "string" || value.length === 0 || value.startsWith("/") || value.includes("\\") || value.includes("\0")) {
+    rejectGalleryThemeArchive(`${label} is not a safe relative path`);
+  }
+  const normalized = value.normalize("NFC");
+  if (normalized !== value) rejectGalleryThemeArchive(`${label} is not NFC-normalized`);
+  const components = value.split("/");
+  if (components.some((component) => component.length === 0 || component === "." || component === "..")) {
+    rejectGalleryThemeArchive(`${label} contains traversal or empty components`);
+  }
+  return value;
+}
+
+/** @param {string} packageName @returns {[string, string]} */
+function galleryPackageParts(packageName) {
+  if (typeof packageName !== "string" || !packageName.startsWith("@gallery/")) {
+    rejectGalleryThemeArchive("package name is not an approved @gallery package");
+  }
+  const parts = packageName.split("/");
+  if (parts.length !== 2) rejectGalleryThemeArchive("package name has an unsafe scope or name");
+  validateGalleryRelativePath(parts[0], "package scope");
+  validateGalleryRelativePath(parts[1], "package name");
+  return /** @type {[string, string]} */ (parts);
+}
+
+/**
+ * @param {GeneratedGalleryTarball} generated
+ * @returns {{files: Map<string, GalleryInventoryFile>, directories: Set<string>}}
+ */
+function expectedGalleryArchiveEntries(generated) {
+  if (!Array.isArray(generated.generatedInventory) || generated.generatedInventory.length === 0) {
+    rejectGalleryThemeArchive("generated inventory is empty");
+  }
+  if (typeof generated.generatedInventoryDigest !== "string" || generated.generatedInventoryDigest !== sha256(JSON.stringify(generated.generatedInventory))) {
+    rejectGalleryThemeArchive("generated inventory digest mismatch");
+  }
+  const files = new Map();
+  const directories = new Set(["package/"]);
+  let totalBytes = 0;
+  for (const member of generated.generatedInventory) {
+    const path = validateGalleryRelativePath(member?.path, "generated inventory member");
+    if (!Number.isSafeInteger(member?.bytes) || member.bytes < 0 || member.bytes > MAX_GALLERY_THEME_ARCHIVE_BYTES) {
+      rejectGalleryThemeArchive(`invalid byte count for ${path}`);
+    }
+    if (typeof member?.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(member.sha256)) {
+      rejectGalleryThemeArchive(`invalid digest for ${path}`);
+    }
+    const archivePath = `package/${path}`;
+    if (files.has(archivePath) || directories.has(`${archivePath}/`)) rejectGalleryThemeArchive(`duplicate inventory member ${path}`);
+    files.set(archivePath, member);
+    totalBytes += member.bytes;
+    const components = path.split("/");
+    let parent = "package/";
+    for (let index = 0; index < components.length - 1; index++) {
+      parent += `${components[index]}/`;
+      if (files.has(parent.slice(0, -1))) rejectGalleryThemeArchive(`inventory file conflicts with directory ${parent}`);
+      directories.add(parent);
+    }
+  }
+  if (!files.has("package/package.json")) rejectGalleryThemeArchive("generated inventory lacks package.json");
+  if (totalBytes > MAX_GALLERY_THEME_ARCHIVE_BYTES) rejectGalleryThemeArchive("generated inventory exceeds byte bound");
+  return { files, directories };
+}
+
+/** @param {string[]} args @param {Buffer} archiveBytes @param {string} label @returns {string} */
+function runGalleryTar(args, archiveBytes, label) {
+  try {
+    return execFileSync("tar", args, {
+      input: archiveBytes,
+      encoding: "utf8",
+      maxBuffer: MAX_GALLERY_THEME_TAR_OUTPUT_BYTES,
+      timeout: MAX_GALLERY_THEME_TAR_MILLISECONDS,
+    });
+  } catch {
+    rejectGalleryThemeArchive(`${label} command failed`);
+  }
+  return "";
+}
+
+/** @param {string} raw @returns {{path: string, directory: boolean}} */
+function parseGalleryArchiveMember(raw) {
+  const normalized = raw.normalize("NFC");
+  if (normalized !== raw || raw.length === 0 || raw.includes("\\") || raw.includes("\0")) {
+    rejectGalleryThemeArchive("archive contains a non-canonical member name");
+  }
+  const directory = raw.endsWith("/");
+  const bare = directory ? raw.slice(0, -1) : raw;
+  const components = bare.split("/");
+  if (components[0] !== "package" || components.some((component) => component.length === 0 || component === "." || component === "..")) {
+    rejectGalleryThemeArchive(`archive contains unsafe member ${raw}`);
+  }
+  if (bare === "package" && !directory) rejectGalleryThemeArchive("package root is not a directory");
+  if (bare !== "package" && !bare.startsWith("package/")) rejectGalleryThemeArchive(`archive member escapes package root: ${raw}`);
+  return { path: directory ? `${bare}/` : bare, directory };
+}
+
+/** @param {string} listing @param {{files: Map<string, GalleryInventoryFile>, directories: Set<string>}} expected */
+function validateGalleryArchiveListing(listing, expected) {
+  const lines = listing.split(/\r?\n/u).filter((line) => line.length > 0);
+  if (lines.length === 0 || lines.length > MAX_GALLERY_THEME_ARCHIVE_ENTRIES) rejectGalleryThemeArchive("archive listing is empty or over its entry bound");
+  const seen = new Set();
+  for (const raw of lines) {
+    const member = parseGalleryArchiveMember(raw);
+    if (seen.has(member.path)) rejectGalleryThemeArchive(`archive contains duplicate member ${member.path}`);
+    seen.add(member.path);
+    if (member.directory) {
+      if (!expected.directories.has(member.path)) rejectGalleryThemeArchive(`archive contains unexpected directory ${member.path}`);
+    } else if (!expected.files.has(member.path)) {
+      rejectGalleryThemeArchive(`archive contains unexpected file ${member.path}`);
+    }
+  }
+  for (const expectedPath of expected.files.keys()) {
+    if (!seen.has(expectedPath)) rejectGalleryThemeArchive(`archive is missing ${expectedPath}`);
+  }
+  return seen;
+}
+
+/** @param {string} verbose @param {number} expectedCount */
+function validateGalleryArchiveTypes(verbose, expectedCount) {
+  const lines = verbose.split(/\r?\n/u).filter((line) => line.length > 0);
+  if (lines.length !== expectedCount) rejectGalleryThemeArchive("archive listing and type listing disagree");
+  for (const line of lines) {
+    if ((line[0] !== "-" && line[0] !== "d") || /\s(?:->|link to)\s/u.test(line)) {
+      rejectGalleryThemeArchive("archive contains a link or special member");
+    }
+  }
+}
+
+/** @param {string} packageRoot @param {{files: Map<string, GalleryInventoryFile>, directories: Set<string>}} expected @param {string} packageName */
+async function validateExtractedGalleryPackage(packageRoot, expected, packageName) {
+  const seen = new Set();
+  async function visit(directory, relativeDirectory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      validateGalleryRelativePath(relativePath, "extracted member");
+      const fullPath = join(directory, entry.name);
+      const info = await lstat(fullPath);
+      if (info.isSymbolicLink()) rejectGalleryThemeArchive(`extracted member is a symbolic link: ${relativePath}`);
+      if (info.isDirectory()) {
+        const archivePath = `package/${relativePath}/`;
+        if (!expected.directories.has(archivePath)) rejectGalleryThemeArchive(`extracted directory is unexpected: ${archivePath}`);
+        await visit(fullPath, relativePath);
+      } else if (info.isFile()) {
+        const archivePath = `package/${relativePath}`;
+        const expectedMember = expected.files.get(archivePath);
+        if (!expectedMember) rejectGalleryThemeArchive(`extracted file is unexpected: ${archivePath}`);
+        const snapshot = readRegularSnapshot(fullPath, { bindPath: true, label: `Gallery member ${relativePath}`, maxBytes: Math.max(expectedMember.bytes, 1) });
+        if (!snapshot || snapshot.size !== expectedMember.bytes || snapshot.sha256 !== expectedMember.sha256) {
+          rejectGalleryThemeArchive(`extracted file bytes differ: ${relativePath}`);
+        }
+        seen.add(archivePath);
+      } else {
+        rejectGalleryThemeArchive(`extracted member is not regular: ${relativePath}`);
+      }
+    }
+  }
+  await visit(packageRoot, "");
+  for (const expectedPath of expected.files.keys()) {
+    if (!seen.has(expectedPath)) rejectGalleryThemeArchive(`extracted package is missing ${expectedPath}`);
+  }
+
+  const packageSnapshot = readRegularSnapshot(join(packageRoot, "package.json"), {
+    bindPath: true,
+    label: "Gallery package.json",
+    maxBytes: 128 * 1024,
+  });
+  if (!packageSnapshot) rejectGalleryThemeArchive("package.json disappeared");
+  let packageJson;
+  try {
+    packageJson = JSON.parse(packageSnapshot.bytes.toString("utf8"));
+  } catch {
+    rejectGalleryThemeArchive("package.json is not valid JSON");
+  }
+  if (!packageJson || packageJson.name !== packageName) rejectGalleryThemeArchive("package.json name mismatch");
+  const peerDependencies = packageJson.peerDependencies;
+  const peerKeys = peerDependencies && typeof peerDependencies === "object" ? Object.keys(peerDependencies).sort() : [];
+  const expectedPeerKeys = Object.keys(EXPECTED_GALLERY_THEME_PEERS).sort();
+  if (JSON.stringify(peerKeys) !== JSON.stringify(expectedPeerKeys) || expectedPeerKeys.some((key) => peerDependencies[key] !== EXPECTED_GALLERY_THEME_PEERS[key])) {
+    rejectGalleryThemeArchive("package.json peer dependencies mismatch");
+  }
+  for (const field of ["dependencies", "optionalDependencies", "bundledDependencies", "bundleDependencies", "scripts", "bin"]) {
+    const value = packageJson[field];
+    const hasEntries = value !== undefined && value !== null && (typeof value !== "object" || Object.keys(value).length > 0);
+    if (hasEntries) rejectGalleryThemeArchive(`package.json contains runtime field ${field}`);
+  }
+}
+
+/** @param {{consumerDir: string, generated: GeneratedGalleryTarball}} input @returns {Promise<{target: string, archiveSha256: string}>} */
+export async function installGeneratedThemePackage({ consumerDir, generated }) {
+  const expected = expectedGalleryArchiveEntries(generated);
+  if (!Number.isSafeInteger(generated.size) || generated.size <= 0 || generated.size > MAX_GALLERY_THEME_ARCHIVE_BYTES) rejectGalleryThemeArchive("invalid generated archive size");
+  if (typeof generated.sha256 !== "string" || !/^[0-9a-f]{64}$/u.test(generated.sha256)) rejectGalleryThemeArchive("invalid generated archive digest");
+  galleryPackageParts(generated.packageName);
+  await requireGalleryDirectory(consumerDir, "consumer directory");
+  const snapshot = readRegularSnapshot(generated.tarballPath, {
+    bindPath: true,
+    label: "generated gallery theme archive",
+    maxBytes: MAX_GALLERY_THEME_ARCHIVE_BYTES,
+  });
+  if (!snapshot || snapshot.size !== generated.size || snapshot.sha256 !== generated.sha256) rejectGalleryThemeArchive("generated archive bytes or digest differ");
+  const nodeModulesDir = join(consumerDir, "node_modules");
+  await requireGalleryDirectory(nodeModulesDir, "consumer node_modules");
+  const stageDir = await mkdtemp(join(consumerDir, ".gallery-theme-stage-"));
+  try {
+    const listing = runGalleryTar(["-tzf", "-"], snapshot.bytes, "archive listing");
+    const seen = validateGalleryArchiveListing(listing, expected);
+    const verbose = runGalleryTar(["-tvzf", "-"], snapshot.bytes, "archive type listing");
+    validateGalleryArchiveTypes(verbose, seen.size);
+    runGalleryTar(["-xzf", "-", "-C", stageDir, "--no-same-owner", "--no-same-permissions"], snapshot.bytes, "archive extraction");
+    const packageRoot = join(stageDir, "package");
+    const packageInfo = await optionalLstat(packageRoot);
+    if (!packageInfo || packageInfo.isSymbolicLink() || !packageInfo.isDirectory()) rejectGalleryThemeArchive("extracted package root is invalid");
+    await validateExtractedGalleryPackage(packageRoot, expected, generated.packageName);
+    const [scope, name] = galleryPackageParts(generated.packageName);
+    const scopeDir = join(nodeModulesDir, scope);
+    const existingScope = await optionalLstat(scopeDir);
+    if (existingScope) {
+      if (existingScope.isSymbolicLink() || !existingScope.isDirectory()) rejectGalleryThemeArchive("package scope parent is not a directory");
+    } else {
+      await mkdir(scopeDir, { mode: 0o755 });
+    }
+    await requireGalleryDirectory(scopeDir, "package scope parent");
+    const target = join(scopeDir, name);
+    if (await optionalLstat(target)) rejectGalleryThemeArchive("package target already exists");
+    await rename(packageRoot, target);
+    await requireGalleryDirectory(target, "installed gallery package");
+    await validateExtractedGalleryPackage(target, expected, generated.packageName);
+    return { target, archiveSha256: snapshot.sha256 };
+  } finally {
+    await rm(stageDir, { recursive: true, force: true });
+  }
+}
 
 import { createBridgeScript } from "../gallery/bridge-runtime.mjs";
 /** @param {string} value @returns {value is GalleryScenarioId} */
@@ -679,13 +954,11 @@ export async function prepareGallery(input = parseCliArgs()) {
     // Copy cached consumer base node_modules
     await cp(baseNodeModules, join(consumerDir, "node_modules"), { recursive: true });
 
-    // Install generated theme tarball
-    const pkgTarball = generatedTarballs[theme.id].tarballPath;
-    execFileSync(
-      "npm",
-      ["install", "--ignore-scripts", "--no-save", "--package-lock=false", pkgTarball],
-      { cwd: consumerDir, stdio: "pipe" }
-    );
+    // Place generated theme tarball contents without invoking npm resolution.
+    await installGeneratedThemePackage({
+      consumerDir,
+      generated: generatedTarballs[theme.id],
+    });
 
     // Verify package-lock.json unchanged
     const lockBytes = await readFile(join(consumerDir, "package-lock.json"));

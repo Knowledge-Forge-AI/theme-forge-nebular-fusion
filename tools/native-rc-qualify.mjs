@@ -25,6 +25,7 @@ import {
   parseLddProviders,
   readRegularDescriptorChecked,
   selectPayloadNativeRuntime,
+  validatePrivateGraphicsPayload,
   verifyRuntimeSourceSnapshot,
 } from "./native-runtime.mjs";
 import { buildElfPortabilityObservation, ELF_PORTABILITY_READELF_ARGS } from "./elf-portability.mjs";
@@ -768,13 +769,18 @@ export async function qualifyPayload({
     let glibcMinimum = null;
     if (platform.os === "linux") {
       const commandDeadline = Date.now() + PRIVATE_PROBE_AGGREGATE_TIMEOUT_MS;
-      const runtimeEnv = runtimeSelection.nativeRuntime
-        ? await createPrivateRuntimeEnvironment(resolvedPayload, {
+      let runtimeEnv;
+      if (runtimeSelection.nativeRuntime) {
+        await check("private-graphics-provider-material", async () => {
+          const graphics = await validatePrivateGraphicsPayload(resolvedPayload, runtimeSelection.material);
+          runtimeEnv = await createPrivateRuntimeEnvironment(resolvedPayload, {
             PATH: process.env.PATH ?? "/usr/bin:/bin",
             LANG: "C",
             LC_ALL: "C",
-          })
-        : undefined;
+          }, runtimeSelection.material);
+          return graphics;
+        });
+      }
       for (const [id, path] of [["mode:gui", located.executable], ["mode:sidecar", located.sidecar], ["mode:launcher", located.launcher]]) {
         await check(id, () => { const file = readRegularSnapshot(path, { label: id, maxBytes: 512 * 1024 * 1024 }); if ((file.mode & 0o777) !== 0o755) throw new Error(`mode ${(file.mode & 0o777).toString(8)}`); return "0755"; });
       }
@@ -804,6 +810,7 @@ export async function qualifyPayload({
       });
       if (runtimeSelection.nativeRuntime) {
         await check("private-runtime-closure", async () => {
+          if (!runtimeEnv) throw new Error("Private graphics provider environment was not admitted");
           const elfRecords = {};
           const allLddRows = [];
           /** @type {Array<Record<string, any>>} */

@@ -22,17 +22,23 @@ import { createPreviewHashBudget, inspectBoundedPreviewTree } from "../tools/pre
 import { buildElfPortabilityObservation, ELF_PORTABILITY_READELF_ARGS, parseElfPortability } from "../tools/elf-portability.mjs";
 import {
   MAX_RUNTIME_INPUT_BYTES,
+  PRIVATE_GRAPHICS_VENDOR_JSON,
   PRIVATE_RUNTIME_PREFIX,
   PRIVATE_RUNTIME_MARKER,
+  REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES,
+  REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS,
   REQUIRED_RUNTIME_DIRECTORIES,
   REQUIRED_EXECUTABLE_RUNTIME_ROLES,
   REQUIRED_RUNTIME_ROLES,
   createNativeRuntimeAliasProjection,
+  createPrivateRuntimeEnvironment,
   externalFloorForTarget,
   computeMaterialDigest,
   authenticateNativeRuntimeInput,
   inventoryNativePayload,
+  parsePrivateGraphicsVendorJson,
   selectPayloadNativeRuntime,
+  validatePrivateGraphicsPayload,
 } from "../tools/native-runtime.mjs";
 
 const testRoot = dirname(fileURLToPath(import.meta.url));
@@ -1261,7 +1267,7 @@ describe("linux private-runtime RC integration", () => {
     mkdirSync(join(root, "opt"), { recursive: true, mode: 0o755 });
     chmodSync(join(root, "opt"), 0o755);
     const directories = [];
-    for (const dir of REQUIRED_RUNTIME_DIRECTORIES) {
+    for (const dir of [...new Set([...REQUIRED_RUNTIME_DIRECTORIES, ...REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES])].sort()) {
       const absDir = join(root, dir);
       mkdirSync(absDir, { recursive: true, mode: 0o755 });
       chmodSync(absDir, 0o755);
@@ -1282,9 +1288,62 @@ describe("linux private-runtime RC integration", () => {
         role: executable ? "helper-executable" : "shared-object",
       });
     }
+    const graphicsFiles = [
+      "opt/nebular-private/lib/libEGL.so.1.1.0",
+      "opt/nebular-private/lib/libEGL_mesa.so.0.0.0",
+      "opt/nebular-private/lib/libGLX.so.0.0.0",
+      "opt/nebular-private/lib/libGLX_mesa.so.0.0.0",
+      "opt/nebular-private/lib/libGLdispatch.so.0.0.0",
+      "opt/nebular-private/lib/libgbm.so.1.0.0",
+      "opt/nebular-private/lib/dri/crocus_dri.so",
+    ];
+    for (const path of graphicsFiles) {
+      const content = Buffer.from(elf);
+      write(join(root, path), content, 0o644);
+      regulars.push({ path, bytes: content.length, sha256: sha256(content), mode: 0o644, role: "shared-object" });
+    }
+    const vendorJson = Buffer.from(`{
+    "file_format_version" : "1.0.0",
+    "ICD" : {
+        "library_path" : "libEGL_mesa.so.0"
+    }
+}
+`);
+    write(join(root, PRIVATE_GRAPHICS_VENDOR_JSON), vendorJson, 0o644);
+    regulars.push({ path: PRIVATE_GRAPHICS_VENDOR_JSON, bytes: vendorJson.length, sha256: sha256(vendorJson), mode: 0o644 });
     regulars.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
     const aliases = [
+      {
+        path: "opt/nebular-private/lib/libEGL.so.1",
+        target: "libEGL.so.1.1.0",
+        canonical: "opt/nebular-private/lib/libEGL.so.1.1.0",
+      },
+      {
+        path: "opt/nebular-private/lib/libEGL_mesa.so.0",
+        target: "libEGL_mesa.so.0.0.0",
+        canonical: "opt/nebular-private/lib/libEGL_mesa.so.0.0.0",
+      },
+      {
+        path: "opt/nebular-private/lib/libGLX.so.0",
+        target: "libGLX.so.0.0.0",
+        canonical: "opt/nebular-private/lib/libGLX.so.0.0.0",
+      },
+      {
+        path: "opt/nebular-private/lib/libGLX_mesa.so.0",
+        target: "libGLX_mesa.so.0.0.0",
+        canonical: "opt/nebular-private/lib/libGLX_mesa.so.0.0.0",
+      },
+      {
+        path: "opt/nebular-private/lib/libGLdispatch.so.0",
+        target: "libGLdispatch.so.0.0.0",
+        canonical: "opt/nebular-private/lib/libGLdispatch.so.0.0.0",
+      },
+      {
+        path: "opt/nebular-private/lib/libgbm.so.1",
+        target: "libgbm.so.1.0.0",
+        canonical: "opt/nebular-private/lib/libgbm.so.1.0.0",
+      },
       {
         path: "opt/nebular-private/lib/libjavascriptcoregtk-4.1.so.0",
         target: "libjavascriptcoregtk-4.1.so.0.9.11",
@@ -1295,7 +1354,13 @@ describe("linux private-runtime RC integration", () => {
         target: "libwebkit2gtk-4.1.so.0.19.9",
         canonical: "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0.19.9",
       },
+      {
+        path: "opt/nebular-private/lib/dri/swrast_dri.so",
+        target: "crocus_dri.so",
+        canonical: "opt/nebular-private/lib/dri/crocus_dri.so",
+      },
     ];
+    aliases.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
     for (const alias of aliases) {
       symlinkSync(alias.target, join(root, alias.path));
     }
@@ -1350,6 +1415,122 @@ describe("linux private-runtime RC integration", () => {
       expectedTarget: "x86_64-unknown-linux-gnu",
     });
   }
+
+  it("authenticates private EGL provider material, routing, and hostile-environment replacement", async () => {
+    const fixture = populatePrivateLinuxPayload(scratch("graphics-valid"));
+    await expect(validatePrivateGraphicsPayload(fixture.root, fixture.material)).resolves.toMatchObject({
+      vendorLibraryPath: "libEGL_mesa.so.0",
+      driPath: "lib/dri/crocus_dri.so",
+      endpointCount: 7,
+    });
+    const env = await createPrivateRuntimeEnvironment(fixture.root, {
+      PATH: "/usr/bin",
+      LD_LIBRARY_PATH: "/host/lib",
+      __EGL_VENDOR_LIBRARY_FILENAMES: "/host/vendor.json",
+      __EGL_VENDOR_LIBRARY_DIRS: "/host/vendor.d",
+      LIBGL_DRIVERS_PATH: "/host/dri",
+      GLIBC_TUNABLES: "glibc.malloc.check=3",
+    }, fixture.material);
+    expect(env.LD_LIBRARY_PATH).toBe(join(fixture.root, "opt/nebular-private/lib"));
+    expect(env.__EGL_VENDOR_LIBRARY_FILENAMES).toBe(join(fixture.root, PRIVATE_GRAPHICS_VENDOR_JSON));
+    expect(env.LIBGL_DRIVERS_PATH).toBe(join(fixture.root, "opt/nebular-private/lib/dri"));
+    expect(env.__EGL_VENDOR_LIBRARY_DIRS).toBeUndefined();
+    expect(env.GLIBC_TUNABLES).toBeUndefined();
+    expect(() => parsePrivateGraphicsVendorJson("{\"file_format_version\":\"1.0.0\",\"ICD\":{\"library_path\":\"/host/libEGL.so\"}}"))
+      .toThrow(/bare libEGL_mesa\.so\.0/);
+
+    const malformed = populatePrivateLinuxPayload(scratch("graphics-malformed-source"));
+    const malformedPath = join(malformed.root, PRIVATE_GRAPHICS_VENDOR_JSON);
+    const malformedBytes = Buffer.from("{\"file_format_version\":\"0.9.0\"}\n");
+    write(malformedPath, malformedBytes, 0o644);
+    const malformedEntry = malformed.material.regulars.find((entry) => entry.path === PRIVATE_GRAPHICS_VENDOR_JSON);
+    malformedEntry.bytes = malformedBytes.length;
+    malformedEntry.sha256 = sha256(malformedBytes);
+    malformed.material.materialDigest = computeMaterialDigest(malformed.material);
+    await expect(authenticateInput(nativeRuntimeInput(malformed.root, malformed.material)))
+      .rejects.toThrow(/private graphics vendor JSON is missing required key ICD/);
+
+    const escaped = populatePrivateLinuxPayload(scratch("graphics-escaped"));
+    const escapedEndpoint = join(escaped.root, "opt/nebular-private/lib/dri/swrast_dri.so");
+    rmSync(escapedEndpoint);
+    symlinkSync("/tmp/nebular-provider-outside", escapedEndpoint);
+    await expect(validatePrivateGraphicsPayload(escaped.root)).rejects.toThrow(/invalid symlink target|escapes/);
+
+    const cycle = populatePrivateLinuxPayload(scratch("graphics-cycle"));
+    const cycleEndpoint = join(cycle.root, "opt/nebular-private/lib/dri/swrast_dri.so");
+    rmSync(cycleEndpoint);
+    symlinkSync("swrast_dri.so", cycleEndpoint);
+    await expect(validatePrivateGraphicsPayload(cycle.root)).rejects.toThrow(/symlink cycle/);
+  });
+
+  it("authenticates every resolved graphics endpoint against its declared material", async () => {
+    const tampered = populatePrivateLinuxPayload(scratch("graphics-endpoint-tampered"));
+    const tamperedEndpoint = join(tampered.root, "opt/nebular-private/lib/libGLX.so.0.0.0");
+    write(tamperedEndpoint, Buffer.from("tampered endpoint\n"), 0o644);
+    await expect(validatePrivateGraphicsPayload(tampered.root, tampered.material))
+      .rejects.toThrow(/endpoint bytes do not match authenticated canonical/);
+
+    const wrongCanonical = populatePrivateLinuxPayload(scratch("graphics-canonical-mismatch"));
+    const driAlias = wrongCanonical.material.aliases.find(
+      (entry) => entry.path === "opt/nebular-private/lib/dri/swrast_dri.so",
+    );
+    driAlias.canonical = "opt/nebular-private/lib/libGLX.so.0.0.0";
+    await expect(validatePrivateGraphicsPayload(wrongCanonical.root, wrongCanonical.material))
+      .rejects.toThrow(/resolved to .*not authenticated canonical/);
+
+    const projected = populatePrivateLinuxPayload(scratch("graphics-projected-alias"));
+    const projectedAlias = projected.material.aliases.find(
+      (entry) => entry.path === "opt/nebular-private/lib/libEGL.so.1",
+    );
+    const projectedPath = join(projected.root, projectedAlias.path);
+    const canonicalPath = join(projected.root, projectedAlias.canonical);
+    rmSync(projectedPath);
+    write(projectedPath, readFileSync(canonicalPath), 0o644);
+    await expect(validatePrivateGraphicsPayload(projected.root, projected.material)).resolves.toMatchObject({
+      vendorLibraryPath: "libEGL_mesa.so.0",
+      endpointCount: 7,
+    });
+  });
+
+  it("runs the POSIX shell launcher with private provider routing and rejects provider escape", () => {
+    const guiStub = "#!/bin/sh\nprintf '%s\\n' \"__EGL_VENDOR_LIBRARY_FILENAMES=${__EGL_VENDOR_LIBRARY_FILENAMES-}\" \"__EGL_VENDOR_LIBRARY_DIRS=${__EGL_VENDOR_LIBRARY_DIRS-}\" \"LIBGL_DRIVERS_PATH=${LIBGL_DRIVERS_PATH-}\" \"LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}\"\n";
+
+    const fixture = populatePrivateLinuxPayload(physicalScratch("graphics-shell"));
+    const gui = join(fixture.root, "bin/theme-forge-nebular-fusion");
+    const launcher = join(fixture.root, "bin/tfnf");
+    // The owned synthetic GUI prints only these four non-secret routing keys.
+    write(gui, guiStub, 0o755);
+    const inherited = {
+      PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C",
+      LD_LIBRARY_PATH: join(fixture.root, "unselected-host-lib"),
+      __EGL_VENDOR_LIBRARY_FILENAMES: join(fixture.root, "unselected-host-vendor.json"),
+      __EGL_VENDOR_LIBRARY_DIRS: join(fixture.root, "unselected-host-vendor.d"),
+      LIBGL_DRIVERS_PATH: join(fixture.root, "unselected-host-dri"),
+    };
+    const positive = spawnSync(launcher, [], { env: inherited, encoding: "utf8" });
+    expect(positive.status).toBe(0);
+    expect(positive.stdout).toContain("__EGL_VENDOR_LIBRARY_FILENAMES=" + join(fixture.root, PRIVATE_GRAPHICS_VENDOR_JSON));
+    expect(positive.stdout).toContain("LIBGL_DRIVERS_PATH=" + join(fixture.root, "opt/nebular-private/lib/dri"));
+    expect(positive.stdout).toContain("LD_LIBRARY_PATH=" + join(fixture.root, "opt/nebular-private/lib"));
+    expect(positive.stdout).toContain("__EGL_VENDOR_LIBRARY_DIRS=\n");
+    expect(positive.stdout).not.toContain("unselected-host-");
+    rmSync(join(fixture.root, PRIVATE_GRAPHICS_VENDOR_JSON));
+    const missing = spawnSync(launcher, ["--path"], { env: inherited, encoding: "utf8" });
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toMatch(/vendor JSON unavailable/);
+    const escaped = populatePrivateLinuxPayload(scratch("graphics-shell-escape"));
+    const escapedLauncher = join(escaped.root, "bin/tfnf");
+    write(join(escaped.root, "bin/theme-forge-nebular-fusion"), guiStub, 0o755);
+    const outside = join(scratch("graphics-owned-outside"), "provider.so");
+    write(outside, "owned out-of-runtime provider\n", 0o644);
+    const escapedEndpoint = join(escaped.root, "opt/nebular-private/lib/dri/swrast_dri.so");
+    rmSync(escapedEndpoint);symlinkSync(outside, escapedEndpoint);
+    const escapedResult = spawnSync(escapedLauncher, ["--path"], { env: inherited, encoding: "utf8" });
+    expect(escapedResult.status).toBe(1);
+    expect(escapedResult.stderr).toMatch(/private graphics provider escapes runtime/);
+    expect(nativeLauncher({ os: "darwin" })).not.toMatch(/EGL_VENDOR|LIBGL_DRIVERS_PATH/);
+    expect(nativeLauncher(PLATFORMS["linux-x64"].target)).not.toMatch(/EGL_VENDOR|LIBGL_DRIVERS_PATH/);
+  });
 
   it("uses descriptor-first bounded admission for regular, symlink, nonregular, and oversize inputs", async () => {
     const validPayload = populatePrivateLinuxPayload(scratch("descriptor-regular"));
@@ -1441,7 +1622,7 @@ describe("linux private-runtime RC integration", () => {
     const checkout = scratch("checkout-projection");
     write(join(checkout, "LICENSE"), "license\n");
     write(join(checkout, "NOTICE"), "notice\n");
-    const { root: payload } = populatePrivateLinuxPayload(scratch("payload-projection"));
+    const { root: payload, material: projectionMaterial } = populatePrivateLinuxPayload(scratch("payload-projection"));
     const assembled = assemblePlatformPackage({
       platform: "linux-x64",
       payload,
@@ -1450,7 +1631,7 @@ describe("linux private-runtime RC integration", () => {
       glibcMinimum: "2.34",
     });
     expect(assembled.manifest.schema).toBe(PACKAGE_MANIFEST_PROJECTION_SCHEMA);
-    expect(assembled.manifest.runtimeAliasProjection.aliases).toHaveLength(2);
+    expect(assembled.manifest.runtimeAliasProjection.aliases).toHaveLength(projectionMaterial.aliases.length);
     for (const alias of assembled.manifest.runtimeAliasProjection.aliases) {
       const copied = join(assembled.packageDir, "payload", alias.path);
       const copiedSnapshot = readRegularFile(copied, { label: `projected alias ${alias.path}` });
@@ -1587,7 +1768,10 @@ describe("linux private-runtime RC integration", () => {
     const { root: payload } = populatePrivateLinuxPayload(scratch("payload-evidence"));
     const inv = await inventoryNativePayload(payload);
     expect(inv.schema).toBe("nebular-native-payload-inventory-v1");
-    expect(inv.aliases.length).toBe(2);
+    const material = JSON.parse(readFileSync(join(payload, PRIVATE_RUNTIME_MARKER), "utf8"));
+    const expectedAliases = material.aliases.map(({ path, target, canonical }) => ({ path, target, canonical }));
+    expect(inv.aliases.length).toBe(expectedAliases.length);
+    expect(inv.aliases).toEqual(expect.arrayContaining(expectedAliases));
     const projection = createNativeRuntimeAliasProjection(JSON.parse(readFileSync(join(payload, PRIVATE_RUNTIME_MARKER), "utf8")));
     const projected = await inventoryNativePayload(payload, { expectedTarget: "x86_64-unknown-linux-gnu", aliasProjection: projection });
     expect(projected.identity).toBe(inv.identity);

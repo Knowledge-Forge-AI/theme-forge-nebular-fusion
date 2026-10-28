@@ -46,6 +46,28 @@ export const REQUIRED_RUNTIME_DIRECTORIES = Object.freeze([
   "opt/nebular-private/libexec/webkit2gtk-4.1",
 ]);
 
+export const REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES = Object.freeze([
+  "opt/nebular-private/lib/dri",
+  "opt/nebular-private/share",
+  "opt/nebular-private/share/glvnd",
+  "opt/nebular-private/share/glvnd/egl_vendor.d",
+]);
+
+export const REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS = Object.freeze([
+  "opt/nebular-private/lib/libEGL.so.1",
+  "opt/nebular-private/lib/libEGL_mesa.so.0",
+  "opt/nebular-private/lib/libGLX.so.0",
+  "opt/nebular-private/lib/libGLX_mesa.so.0",
+  "opt/nebular-private/lib/libGLdispatch.so.0",
+  "opt/nebular-private/lib/libgbm.so.1",
+  "opt/nebular-private/lib/dri/swrast_dri.so",
+]);
+
+export const PRIVATE_GRAPHICS_VENDOR_JSON = "opt/nebular-private/share/glvnd/egl_vendor.d/50_mesa.json";
+export const PRIVATE_GRAPHICS_VENDOR_LIBRARY = "libEGL_mesa.so.0";
+export const PRIVATE_GRAPHICS_VENDOR_JSON_VERSION = "1.0.0";
+export const MAX_PRIVATE_GRAPHICS_VENDOR_JSON_BYTES = 64 * 1024;
+
 export const REQUIRED_EXECUTABLE_RUNTIME_ROLES = Object.freeze([
   "opt/nebular-private/libexec/sandbox/bwrap",
   "opt/nebular-private/libexec/sandbox/xdg-dbus-proxy",
@@ -363,6 +385,61 @@ function resolveRuntimeAliasChain(aliasPath, rawTarget, aliasMap, regularSet, di
 }
 
 /**
+ * Validate the graphics-specific members layered over the unchanged v1
+ * material schema. The provider files remain ordinary regular/alias entries;
+ * this does not expand the fixed eight-role contract.
+ * @param {Set<string>} directorySet
+ * @param {Map<string, any>} regularMap
+ * @param {Map<string, string>} aliasMap
+ */
+function validatePrivateGraphicsMaterialEntries(directorySet, regularMap, aliasMap) {
+  for (const directory of REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES) {
+    if (!directorySet.has(directory)) {
+      throw new Error(`Runtime material is missing required graphics directory ${directory}`);
+    }
+  }
+  for (const endpoint of REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS) {
+    if (!regularMap.has(endpoint) && !aliasMap.has(endpoint)) {
+      throw new Error(`Runtime material is missing required graphics endpoint ${endpoint}`);
+    }
+  }
+  const vendor = regularMap.get(PRIVATE_GRAPHICS_VENDOR_JSON);
+  if (!vendor) {
+    throw new Error(`Runtime material requires regular vendor JSON ${PRIVATE_GRAPHICS_VENDOR_JSON}`);
+  }
+  if (vendor.mode !== 0o644) {
+    throw new Error(`Runtime vendor JSON ${PRIVATE_GRAPHICS_VENDOR_JSON} must declare mode 0644`);
+  }
+}
+
+/**
+ * Parse the exact Mesa GLVND vendor descriptor admitted by the private runtime.
+ * @param {Buffer|string} value
+ * @returns {{ fileFormatVersion: string, libraryPath: string }}
+ */
+export function parsePrivateGraphicsVendorJson(value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  if (bytes.length === 0 || bytes.length > MAX_PRIVATE_GRAPHICS_VENDOR_JSON_BYTES) {
+    throw new Error(`Private graphics vendor JSON exceeds ${MAX_PRIVATE_GRAPHICS_VENDOR_JSON_BYTES} bytes`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`Malformed private graphics vendor JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  assertClosedObject(parsed, "private graphics vendor JSON", ["ICD", "file_format_version"]);
+  if (parsed.file_format_version !== PRIVATE_GRAPHICS_VENDOR_JSON_VERSION) {
+    throw new Error(`Private graphics vendor JSON file_format_version must be ${PRIVATE_GRAPHICS_VENDOR_JSON_VERSION}`);
+  }
+  assertClosedObject(parsed.ICD, "private graphics vendor JSON ICD", ["library_path"]);
+  if (parsed.ICD.library_path !== PRIVATE_GRAPHICS_VENDOR_LIBRARY) {
+    throw new Error(`Private graphics vendor JSON library_path must be the bare ${PRIVATE_GRAPHICS_VENDOR_LIBRARY}`);
+  }
+  return { fileFormatVersion: parsed.file_format_version, libraryPath: parsed.ICD.library_path };
+}
+
+/**
  * Computes the canonical materialDigest of a portable runtime material manifest.
  * @param {Record<string, any>} material
  * @returns {string}
@@ -644,6 +721,7 @@ export function validateRuntimeMaterial(material, expectedTarget = null) {
       throw new Error(`Runtime material is missing required primary library entry ${sonameEntry}`);
     }
   }
+  validatePrivateGraphicsMaterialEntries(directorySet, regularMap, aliasMap);
 
   for (const floorEntry of material.externalFloor) {
     assertClosedObject(
@@ -1133,6 +1211,144 @@ export async function readRegularDescriptorChecked(filePath, maxBytes) {
 }
 
 /**
+ * Resolve one private graphics endpoint without permitting a symlinked parent
+ * or terminal to escape the authenticated private root.
+ * @param {string} privateRoot
+ * @param {string} relativePath
+ * @returns {Promise<{ absolutePath: string, relativePath: string }>}
+ */
+async function resolveContainedPrivateGraphicsEndpoint(privateRoot, relativePath) {
+  const resolvedRoot = resolve(privateRoot);
+  let current = join(resolvedRoot, relativePath);
+  const visited = new Set();
+  for (let hop = 0; hop <= MAX_RUNTIME_ALIAS_DEPTH; hop += 1) {
+    const rel = relative(resolvedRoot, current);
+    if (rel.startsWith("..") || rel.startsWith(sep) || rel === "") {
+      throw new Error(`Private graphics endpoint escapes private root: ${relativePath}`);
+    }
+    const parts = rel.split(sep);
+    let parent = resolvedRoot;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      parent = join(parent, parts[index]);
+      const parentStat = await lstat(parent, { bigint: true });
+      if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+        throw new Error(`Private graphics endpoint has an aliased or invalid parent: ${relativePath}`);
+      }
+    }
+    const stat = await lstat(current, { bigint: true });
+    if (!stat.isSymbolicLink()) {
+      if (!stat.isFile() || (Number(stat.mode) & 0o7000) !== 0) {
+        throw new Error(`Private graphics endpoint is not an unprivileged regular file: ${relativePath}`);
+      }
+      return { absolutePath: current, relativePath: rel.split(sep).join("/") };
+    }
+    if (visited.has(current)) {
+      throw new Error(`Private graphics endpoint symlink cycle: ${relativePath}`);
+    }
+    visited.add(current);
+    const target = await readlink(current);
+    if (!target || target.startsWith("/") || target.includes("\0")) {
+      throw new Error(`Private graphics endpoint has an invalid symlink target: ${relativePath}`);
+    }
+    current = resolve(dirname(current), target);
+  }
+  throw new Error(`Private graphics endpoint symlink depth exceeded: ${relativePath}`);
+}
+
+/**
+ * Validate the source-root vendor descriptor against the authenticated regular
+ * entry. This is intentionally separate from the closed material schema so
+ * the v1 descriptor stays unchanged while its source bytes are checked.
+ * @param {string} sourceRoot
+ * @param {Record<string, any>} material
+ * @returns {Promise<{ vendorJsonSha256: string, vendorLibraryPath: string }>}
+ */
+export async function validatePrivateGraphicsSource(sourceRoot, material) {
+  const vendorEntry = material.regulars.find((entry) => entry.path === PRIVATE_GRAPHICS_VENDOR_JSON);
+  if (!vendorEntry) throw new Error(`Authenticated material is missing ${PRIVATE_GRAPHICS_VENDOR_JSON}`);
+  const observed = await readRegularDescriptorChecked(
+    join(resolve(sourceRoot), PRIVATE_GRAPHICS_VENDOR_JSON),
+    MAX_PRIVATE_GRAPHICS_VENDOR_JSON_BYTES,
+  );
+  if (observed.bytes !== vendorEntry.bytes || observed.mode !== vendorEntry.mode || observed.sha256 !== vendorEntry.sha256) {
+    throw new Error(`Private graphics vendor JSON does not match authenticated source material at ${PRIVATE_GRAPHICS_VENDOR_JSON}`);
+  }
+  const parsed = parsePrivateGraphicsVendorJson(observed.buffer);
+  return { vendorJsonSha256: observed.sha256, vendorLibraryPath: parsed.libraryPath };
+}
+
+/**
+ * Validate the materialized private provider roots and return only relative
+ * routing facts suitable for a qualification receipt.
+ * @param {string} payloadRoot
+ * @param {Record<string, any> | null} [material]
+ * @returns {Promise<{ vendorJsonSha256: string, vendorLibraryPath: string, driPath: string, endpointCount: number }>}
+ */
+export async function validatePrivateGraphicsPayload(payloadRoot, material = null) {
+  const privateRoot = join(resolve(payloadRoot), PRIVATE_RUNTIME_PREFIX);
+  for (const relativeDirectory of ["lib/dri", "share", "share/glvnd", "share/glvnd/egl_vendor.d"]) {
+    const directory = join(privateRoot, relativeDirectory);
+    const stat = await lstat(directory, { bigint: true });
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`Private graphics directory is missing or aliased: ${relativeDirectory}`);
+    }
+  }
+  const vendorPath = join(resolve(payloadRoot), PRIVATE_GRAPHICS_VENDOR_JSON);
+  const vendor = await readRegularDescriptorChecked(vendorPath, MAX_PRIVATE_GRAPHICS_VENDOR_JSON_BYTES);
+  if (vendor.mode !== 0o644) throw new Error(`Private graphics vendor JSON must have mode 0644: ${PRIVATE_GRAPHICS_VENDOR_JSON}`);
+  const parsed = parsePrivateGraphicsVendorJson(vendor.buffer);
+  const regularMap = material
+    ? new Map(material.regulars.map((entry) => [entry.path, entry]))
+    : null;
+  const aliasMap = material
+    ? new Map(material.aliases.map((entry) => [entry.path, entry]))
+    : null;
+  if (material) {
+    const vendorEntry = material.regulars.find((entry) => entry.path === PRIVATE_GRAPHICS_VENDOR_JSON);
+    if (!vendorEntry || vendorEntry.bytes !== vendor.bytes || vendorEntry.mode !== vendor.mode || vendorEntry.sha256 !== vendor.sha256) {
+      throw new Error(`Private graphics vendor JSON does not match material at ${PRIVATE_GRAPHICS_VENDOR_JSON}`);
+    }
+  }
+  const endpointRelativePaths = [...REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS];
+  endpointRelativePaths.push(`${PRIVATE_RUNTIME_PREFIX}/lib/${parsed.libraryPath}`);
+  const resolvedEndpoints = new Map();
+  for (const endpoint of endpointRelativePaths) {
+    const relativeEndpoint = endpoint.slice(`${PRIVATE_RUNTIME_PREFIX}/`.length);
+    resolvedEndpoints.set(endpoint, await resolveContainedPrivateGraphicsEndpoint(privateRoot, relativeEndpoint));
+  }
+  if (material) {
+    for (const [endpoint, resolution] of resolvedEndpoints) {
+      const endpointEntry = regularMap.get(endpoint) ?? aliasMap.get(endpoint);
+      if (!endpointEntry) {
+        throw new Error(`Private graphics endpoint is missing from authenticated material: ${endpoint}`);
+      }
+      const canonicalPath = endpointEntry.canonical ?? endpoint;
+      const canonicalEntry = regularMap.get(canonicalPath);
+      if (!canonicalEntry) {
+        throw new Error(`Private graphics endpoint canonical regular is missing from authenticated material: ${canonicalPath}`);
+      }
+      const resolvedPath = `${PRIVATE_RUNTIME_PREFIX}/${resolution.relativePath}`;
+      const projectedAlias = endpointEntry.canonical && resolvedPath === endpoint && endpoint !== canonicalPath;
+      if (resolvedPath !== canonicalPath && !projectedAlias) {
+        throw new Error(`Private graphics endpoint resolved to ${resolvedPath}, not authenticated canonical ${canonicalPath}`);
+      }
+      const observed = await readRegularDescriptorChecked(resolution.absolutePath, MAX_RUNTIME_FILE_BYTES);
+      if (observed.bytes !== canonicalEntry.bytes || observed.mode !== canonicalEntry.mode || observed.sha256 !== canonicalEntry.sha256) {
+        throw new Error(`Private graphics endpoint bytes do not match authenticated canonical ${canonicalPath}: ${endpoint}`);
+      }
+    }
+  }
+  const dri = resolvedEndpoints.get(`${PRIVATE_RUNTIME_PREFIX}/lib/dri/swrast_dri.so`);
+  if (!dri) throw new Error("Private graphics swrast DRI endpoint was not resolved");
+  return {
+    vendorJsonSha256: vendor.sha256,
+    vendorLibraryPath: parsed.libraryPath,
+    driPath: dri.relativePath,
+    endpointCount: resolvedEndpoints.size,
+  };
+}
+
+/**
  * Checks whether two absolute paths overlap (equal or ancestor/descendant).
  * @param {string} a
  * @param {string} b
@@ -1310,6 +1526,7 @@ export async function authenticateNativeRuntimeInput(inputPath, expectedSha256, 
   }
 
   const sourceSnapshot = await captureRuntimeSourceSnapshot(resolvedSourceRoot, material);
+  await validatePrivateGraphicsSource(resolvedSourceRoot, material);
   return {
     inputPath: resolvedInputPath,
     inputSha256: inputFile.sha256,
@@ -1914,6 +2131,7 @@ export async function selectPayloadNativeRuntime(payloadRoot, expectedTarget = n
   const aliasProjection = options?.aliasProjection ?? null;
   const rootEnvelope = options?.rootEnvelope ?? null;
   const inventory = await inventoryNativePayload(resolvedRoot, { expectedTarget, aliasProjection, rootEnvelope });
+  await validatePrivateGraphicsPayload(resolvedRoot, material);
   return {
     nativeRuntime: true,
     material,
@@ -1923,12 +2141,14 @@ export async function selectPayloadNativeRuntime(payloadRoot, expectedTarget = n
 
 /**
  * Constructs a sanitized environment for private runtime child execution or ldd inspection.
- * Strips all inherited LD_* variables and GLIBC_TUNABLES, and sets LD_LIBRARY_PATH to <payloadRoot>/opt/nebular-private/lib.
+ * Strips inherited loader/provider overrides and sets the authenticated private
+ * library, GLVND vendor JSON, and Mesa DRI roots.
  * @param {string} payloadRoot
  * @param {NodeJS.ProcessEnv} [baseEnv]
+ * @param {Record<string, any> | null} [material]
  * @returns {Promise<Record<string, string>>}
  */
-export async function createPrivateRuntimeEnvironment(payloadRoot, baseEnv = process.env) {
+export async function createPrivateRuntimeEnvironment(payloadRoot, baseEnv = process.env, material = null) {
   const resolvedRoot = resolve(payloadRoot);
   for (const rel of ["", "opt", ...REQUIRED_RUNTIME_DIRECTORIES]) {
     const checkDir = rel ? join(resolvedRoot, rel) : resolvedRoot;
@@ -1937,14 +2157,21 @@ export async function createPrivateRuntimeEnvironment(payloadRoot, baseEnv = pro
       throw new Error(`Private runtime required directory is missing or aliased: ${rel || "."}`);
     }
   }
+  const graphics = await validatePrivateGraphicsPayload(resolvedRoot, material);
   /** @type {Record<string, string>} */
   const env = {};
   for (const [key, value] of Object.entries(baseEnv)) {
     if (typeof value !== "string") continue;
-    if (key === "GLIBC_TUNABLES" || key.startsWith("LD_")) continue;
+    if (key === "GLIBC_TUNABLES" || key.startsWith("LD_") || key === "__EGL_VENDOR_LIBRARY_FILENAMES"
+        || key === "__EGL_VENDOR_LIBRARY_DIRS" || key === "LIBGL_DRIVERS_PATH") continue;
     env[key] = value;
   }
   env.LD_LIBRARY_PATH = join(resolvedRoot, PRIVATE_RUNTIME_PREFIX, "lib");
+  env.__EGL_VENDOR_LIBRARY_FILENAMES = join(resolvedRoot, PRIVATE_GRAPHICS_VENDOR_JSON);
+  env.LIBGL_DRIVERS_PATH = join(resolvedRoot, PRIVATE_RUNTIME_PREFIX, "lib/dri");
+  if (graphics.vendorLibraryPath !== PRIVATE_GRAPHICS_VENDOR_LIBRARY) {
+    throw new Error(`Private graphics vendor library route is not ${PRIVATE_GRAPHICS_VENDOR_LIBRARY}`);
+  }
   return env;
 }
 
