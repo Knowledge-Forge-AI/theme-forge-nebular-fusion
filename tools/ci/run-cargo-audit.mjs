@@ -69,7 +69,8 @@ export async function runCargoAudit(options = {}) {
   try {
     await mkdir(dirname(outputPath), { recursive: true });
   } catch (err) {
-    if (err && (err.code === "EROFS" || err.code === "EACCES")) {
+    if (err && typeof err === "object" && "code" in err
+        && (err.code === "EROFS" || err.code === "EACCES")) {
       const secureTemp = await mkdtemp(join(tmpdir(), "tfsb-cargo-audit-"));
       outputPath = join(secureTemp, "cargo-audit.json");
     } else {
@@ -168,7 +169,13 @@ export async function main(args = process.argv.slice(2)) {
     else if (args[i] === "--receipt" && args[i + 1]) receipt = args[++i];
   }
 
-  const result = await runCargoAudit({ toolsDir, lockfile, output, receipt });
+  /** @type {Parameters<typeof runCargoAudit>[0]} */
+  const options = {};
+  if (toolsDir !== undefined) options.toolsDir = toolsDir;
+  if (lockfile !== undefined) options.lockfile = lockfile;
+  if (output !== undefined) options.output = output;
+  if (receipt !== undefined) options.receipt = receipt;
+  const result = await runCargoAudit(options);
   console.log(`[CARGO_AUDIT] Status: ${result.passed ? "PASS" : "FAIL"}`);
   console.log(`  Output:  ${result.outputPath}`);
   console.log(`  Receipt: ${result.receiptPath}`);

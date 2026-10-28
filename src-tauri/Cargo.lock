@@ -3357,9 +3357,10 @@ dependencies = [
 
 [[package]]
 name = "theme-forge-nebular-fusion"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

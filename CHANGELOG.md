@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- Select Stellar Burst 0.7.0, Stellar Loom 0.5.0 and Solar Sail 0.3.0 as the component version targets.
+
 ## 0.3.0 — Unreleased candidate
 
 - Provide Brand/System, Vector/Graphics and Starlight Theme work areas.

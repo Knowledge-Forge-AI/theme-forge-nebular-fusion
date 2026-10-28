@@ -9,6 +9,18 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
 
+/** @typedef {{dev: number, ino: number, size: number, mode: number, mtimeMs: number}} DescriptorIdentity */
+/** @typedef {{version: string, darwinArm64TarballSha256: string, nodeExecutableSha256: string, nodeExecutableSize: number, v8: string, undici: string, target: string, tarballName: string, archiveUrl: string, shasumsSha256: string, signingKeyFingerprint: string, signingKeyReleaser: string, targets: Record<string, NodeTargetIdentity>}} NodeReleaseIdentity */
+/** @typedef {{archive: string, archiveSha256: string, executableSha256: string, executableSize: number, platform: string, arch: "arm64" | "x64"}} NodeTargetIdentity */
+/** @typedef {{node: string, v8: string, undici: string | undefined, arch: string, platform: string}} NodeProbeData */
+/** @typedef {{bytes: Buffer, identity: DescriptorIdentity}} RegularFile */
+/** @typedef {{staged: string, final: string, label: string, sha256: string, executable?: boolean}} AdoptionEntry */
+/** @typedef {AdoptionEntry & {bytes: Buffer, identity: DescriptorIdentity}} PreparedAdoptionEntry */
+/** @typedef {{version?: string, shasumsPath?: string, tarballPath?: string, executablePath?: string, outputNodePath?: string, downloadDir?: string, keyringPath?: string, fetchImpl?: typeof fetch}} NodeVerifyOptions */
+/** @typedef {{signature: {fingerprint: string}, shasums: {tarballEntrySha256: string}, tarball: {sha256: string} | null}} VerifiedNodeReceipt */
+/** @typedef {{verifyNodeAuthenticity: (options: NodeVerifyOptions) => Promise<VerifiedNodeReceipt>}} NodeVerifierModule */
+/** @typedef {{validateLinkage?: boolean}} DarwinValidationOptions */
+
 // The shared tools/ci/ci-contract.mjs NODE_RELEASE_IDENTITY is also a member of the published standalone
 // Stellar Burst, Loom, Solar Sail and Terminal Nova trees and keeps describing their CI runtime. The
 // Nebular embedded sidecar runtime is owned here so that it can move independently of those trees.
@@ -17,6 +29,7 @@ import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
 // range of GHSA-3wwx-pv8p-q78v (>=6.25.0 <6.28.1). SHASUMS256.txt, .asc and .sig were verified against the
 // release-key list in nodejs/node README.md at v22.23.3 with key material from nodejs/release-keys; every
 // archive digest matched the signed manifest and each executable was measured (docs ADR 0030 amendment).
+/** @type {Readonly<NodeReleaseIdentity>} */
 export const NODE_RELEASE_IDENTITY = Object.freeze({
   version: "22.23.3",
   darwinArm64TarballSha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
@@ -93,25 +106,30 @@ const SHASUMS_FILENAME = "SHASUMS256.txt.asc";
 const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const CREATE_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
 
+/** @param {Buffer | Uint8Array | string} bytes @returns {string} */
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** @param {import("node:fs").Stats} stat @returns {DescriptorIdentity} */
 function descriptorIdentity(stat) {
   return { dev: stat.dev, ino: stat.ino, size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs };
 }
 
+/** @param {DescriptorIdentity} left @param {DescriptorIdentity} right @returns {boolean} */
 function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
     && left.mode === right.mode && left.mtimeMs === right.mtimeMs;
 }
 
+/** @param {string} path @param {string} label @returns {{fd: number, stat: import("node:fs").Stats}} */
 function openRegular(path, label) {
   let fd;
   try {
     fd = openSync(path, READ_FLAGS);
   } catch (error) {
-    if (error?.code === "ELOOP" || error?.code === "EMLINK") throw new Error(`${label} must be a regular file, not a symbolic link: ${path}`);
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "ELOOP" || fsError.code === "EMLINK") throw new Error(`${label} must be a regular file, not a symbolic link: ${path}`);
     throw error;
   }
   const stat = fstatSync(fd);
@@ -122,6 +140,7 @@ function openRegular(path, label) {
   return { fd, stat };
 }
 
+/** @param {number} fd @param {import("node:fs").Stats} stat @param {string} path @param {string} label @returns {Buffer} */
 function readDescriptor(fd, stat, path, label) {
   const bytes = Buffer.allocUnsafe(stat.size);
   let offset = 0;
@@ -151,15 +170,18 @@ export function readRegularFile(path, options = {}) {
   }
 }
 
+/** @param {string} path @param {string} label @returns {RegularFile | null} */
 function readOptionalRegular(path, label) {
   try {
     return readRegularFile(path, { label });
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "ENOENT") return null;
     throw error;
   }
 }
 
+/** @param {string} path @param {Buffer} bytes @param {number} mode */
 function writeNewFile(path, bytes, mode) {
   const fd = openSync(path, CREATE_FLAGS, mode);
   try {
@@ -172,6 +194,7 @@ function writeNewFile(path, bytes, mode) {
 
 // After a runtime has been executed or inspected by pathname, the descriptor must still describe the
 // same bytes and the pathname must still name the inode that was measured.
+/** @param {number} fd @param {import("node:fs").Stats} stat @param {string} path @param {string} label */
 function requireUnchangedAfterUse(fd, stat, path, label) {
   const opened = descriptorIdentity(stat);
   const named = lstatSync(path);
@@ -180,6 +203,7 @@ function requireUnchangedAfterUse(fd, stat, path, label) {
   }
 }
 
+/** @param {string} command @param {string} displayPath @returns {{data: NodeProbeData, stdout: string}} */
 function probeNode(command, displayPath) {
   const probe = spawnSync(command, ["-p", PROBE_SCRIPT], {
     encoding: "utf8",
@@ -187,10 +211,13 @@ function probeNode(command, displayPath) {
     timeout: 10_000,
   });
   if (probe.status !== 0 || probe.error) {
-    throw new Error(`Failed to probe portable Node runtime at ${displayPath}: ${probe.error?.message || probe.stderr}`);
+    const message = probe.error instanceof Error ? probe.error.message : String(probe.stderr);
+    throw new Error(`Failed to probe portable Node runtime at ${displayPath}: ${message}`);
   }
   try {
-    return { data: JSON.parse(probe.stdout.trim()), stdout: probe.stdout };
+    /** @type {NodeProbeData} */
+    const data = JSON.parse(probe.stdout.trim());
+    return { data, stdout: probe.stdout };
   } catch {
     throw new Error(`Portable Node runtime probe emitted invalid JSON: ${probe.stdout}`);
   }
@@ -199,8 +226,7 @@ function probeNode(command, displayPath) {
 /**
  * Validates that an executable is the exact official portable Node 22.23.3 Darwin ARM64 runtime.
  * @param {string} executablePath
- * @param {object} [options]
- * @param {boolean} [options.validateLinkage=true]
+ * @param {DarwinValidationOptions} [options]
  * @returns {{ valid: boolean, version: string, v8: string, sha256: string, size: number, target: string }}
  */
 export function validateDarwinPortableNode(executablePath, options = {}) {
@@ -261,6 +287,7 @@ export function validateDarwinPortableNode(executablePath, options = {}) {
   };
 }
 
+/** @type {Readonly<Record<"arm64" | "x64", number>>} */
 const ELF_MACHINE = Object.freeze({ arm64: 183, x64: 62 });
 
 /**
@@ -333,20 +360,23 @@ export function validateDarwinNodeArchive(archivePath) {
   };
 }
 
+/** @param {PreparedAdoptionEntry} entry @returns {"link" | "copy" | null} */
 function placeNoClobber(entry) {
   try {
     linkSync(entry.staged, entry.final);
     return "link";
   } catch (error) {
-    if (error?.code === "EXDEV") {
+    const fsError = /** @type {NodeJS.ErrnoException} */ (error);
+    if (fsError.code === "EXDEV") {
       writeNewFile(entry.final, entry.bytes, entry.identity.mode & 0o777);
       return "copy";
     }
-    if (error?.code === "EEXIST") return null;
+    if (fsError.code === "EEXIST") return null;
     throw error;
   }
 }
 
+/** @param {PreparedAdoptionEntry} entry @param {"link" | "copy" | null} created */
 function requireAdopted(entry, created) {
   const adopted = readRegularFile(entry.final, { label: entry.label });
   if (sha256(adopted.bytes) !== entry.sha256) {
@@ -369,9 +399,10 @@ function requireAdopted(entry, created) {
  * filesystems) and its final pathname is re-measured. An existing final file is accepted only when it
  * is a regular file with exactly the authenticated bytes; otherwise it is left untouched. On any
  * failure every final name created by this call is removed again, so the final paths are unchanged.
- * @param {Array<{ staged: string, final: string, label: string, sha256: string, executable?: boolean }>} entries
+ * @param {AdoptionEntry[]} entries
  */
 function adoptNoClobber(entries) {
+  /** @type {PreparedAdoptionEntry[]} */
   const prepared = entries.map((entry) => {
     const staged = readRegularFile(entry.staged, { label: `Staged ${entry.label}` });
     if (sha256(staged.bytes) !== entry.sha256) {
@@ -379,6 +410,7 @@ function adoptNoClobber(entries) {
     }
     return { ...entry, bytes: staged.bytes, identity: staged.identity };
   });
+  /** @type {string[]} */
   const created = [];
   try {
     for (const entry of prepared) {
@@ -433,17 +465,17 @@ export function verifyAndExtractDarwinNodeArchive(archivePath, outputExecutableP
 
 /**
  * Locates an authenticated portable Node executable from known cache/outbox paths or options.
- * @param {object} [options]
- * @param {string[]} [options.searchPaths]
+ * @param {{searchPaths?: string[]}} [options]
  * @returns {string | null}
  */
 export function locateCachedPortableNode(options = {}) {
+  /** @type {string[]} */
   const candidates = [
     ...(options.searchPaths || []),
     process.env.NEBULAR_PORTABLE_NODE,
     resolve(".outbox/authenticated-inputs/node"),
     resolve("authenticated-inputs/node"),
-  ].filter(Boolean);
+  ].filter((candidate) => typeof candidate === "string");
 
   for (const candidate of candidates) {
     try {
@@ -457,6 +489,7 @@ export function locateCachedPortableNode(options = {}) {
   return null;
 }
 
+/** @returns {Promise<NodeVerifierModule>} */
 async function importSharedVerifier() {
   const verifierUrls = [
     new URL("./ci/verify-node-authenticity.mjs", import.meta.url),              // Composed repo (tools -> tools/ci)
@@ -464,9 +497,12 @@ async function importSharedVerifier() {
   ];
   for (const url of verifierUrls) {
     try {
-      return await import(url.href);
+      /** @type {NodeVerifierModule} */
+      const verifier = await import(url.href);
+      return verifier;
     } catch (error) {
-      if (error?.code !== "ERR_MODULE_NOT_FOUND" || !String(error.message).includes(fileURLToPath(url))) throw error;
+      const moduleError = /** @type {NodeJS.ErrnoException} */ (error);
+      if (moduleError.code !== "ERR_MODULE_NOT_FOUND" || !String(moduleError.message).includes(fileURLToPath(url))) throw error;
     }
   }
   throw new Error("[NODE_AUTH_FAIL] Shared Node authenticity verifier is unavailable.");
@@ -477,6 +513,7 @@ async function importSharedVerifier() {
  * Signature and SHASUMS parsing use the shared locked verifier (openpgp 6.3.1, active release keyring);
  * this module then requires the embedded identity's signer, archive digest and executable identity.
  * @param {{ shasumsPath?: string, tarballPath?: string, outputNodePath: string, downloadDir?: string, fetchImpl?: typeof fetch }} options
+ * @returns {Promise<VerifiedNodeReceipt & {embeddedRuntime: object}>}
  */
 export async function authenticateEmbeddedDarwinNode(options) {
   const { verifyNodeAuthenticity } = await importSharedVerifier();
@@ -504,13 +541,7 @@ export async function authenticateEmbeddedDarwinNode(options) {
  *
  * The threat model is untrusted network content and pre-existing or concurrently replaced final
  * paths; a same-user process that can write the owner-only staging directory is out of scope.
- * @param {object} options
- * @param {string} options.downloadDir
- * @param {string} options.outputNodePath
- * @param {typeof fetch} [options.fetchImpl] test transport; production uses the shared verifier's fetch
- * @param {(options: object) => Promise<any>} [options.verify] test seam; defaults to authenticateEmbeddedDarwinNode
- * @param {{ tarballSha256: string, executableSha256: string }} [options.expected] test seam; defaults to the embedded identity
- * @param {(context: { staging: string, staged: Record<string, string> }) => (void | Promise<void>)} [options.beforeAdoption] test seam
+ * @param {{downloadDir: string, outputNodePath: string, fetchImpl?: typeof fetch, verify?: (options: NodeVerifyOptions) => Promise<Record<string, unknown>>, expected?: {tarballSha256: string, executableSha256: string}, beforeAdoption?: (context: {staging: string, staged: Record<string, string>}) => void | Promise<void>}} options
  */
 export async function authenticateDarwinNodeDownload(options) {
   const { downloadDir, outputNodePath, fetchImpl, beforeAdoption } = options ?? {};
@@ -580,7 +611,7 @@ export function signedShasumsBody(bytes) {
  * from exactly those verified bytes and must equal both the embedded identity and the captured archive.
  * The executable is extracted from the captured archive bytes (never the pathname again), adopted
  * without replacing an existing different file, and validated -- and probed on a matching host.
- * @param {{ shasumsPath: string, tarballPath: string, targetTriple: string, outputNodePath: string, verify?: Function }} options
+ * @param {{ shasumsPath: string, tarballPath: string, targetTriple: string, outputNodePath: string, verify?: (options: NodeVerifyOptions) => Promise<VerifiedNodeReceipt> }} options
  */
 export async function authenticateLinuxNodeArchive(options) {
   const { shasumsPath, tarballPath, targetTriple, outputNodePath } = options ?? {};
@@ -605,7 +636,10 @@ export async function authenticateLinuxNodeArchive(options) {
       .map((line) => line.trim().split(/\s+/u))
       .find((fields) => fields.length === 2 && (fields[1] === identity.archive || fields[1] === `*${identity.archive}`));
     if (!entry) throw new Error(`[NODE_AUTH_FAIL] ${identity.archive} is not listed in the verified SHASUMS256.`);
-    if (entry[0] !== identity.archiveSha256) throw new Error(`[NODE_AUTH_FAIL] Verified SHASUMS digest for ${identity.archive} does not match the embedded runtime authority.`);
+    const entrySha256 = entry[0];
+    const entryName = entry[1];
+    if (!entrySha256 || !entryName) throw new Error(`[NODE_AUTH_FAIL] ${identity.archive} has a malformed verified SHASUMS entry.`);
+    if (entrySha256 !== identity.archiveSha256) throw new Error(`[NODE_AUTH_FAIL] Verified SHASUMS digest for ${identity.archive} does not match the embedded runtime authority.`);
     if (archiveSha256 !== identity.archiveSha256) throw new Error(`[NODE_AUTH_FAIL] ${identity.archive} SHA-256 ${archiveSha256} does not match the verified checksum.`);
     const member = `${identity.archive.replace(/\.tar\.xz$/u, "")}/bin/node`;
     const extracted = spawnSync("tar", ["-xJf", "-", "-C", staging, member], {
@@ -620,7 +654,7 @@ export async function authenticateLinuxNodeArchive(options) {
       nodeVersion: EXPECTED_NODE_VERSION,
       undici: NODE_RELEASE_IDENTITY.undici,
       signature: receipt.signature,
-      shasums: { sha256: sha256(shasums.bytes), entry: entry[0] },
+      shasums: { sha256: sha256(shasums.bytes), entry: entrySha256 },
       archive: { name: identity.archive, sha256: archiveSha256, size: archive.bytes.length },
       executable: { sha256: runtime.sha256, size: runtime.size, probed: runtime.probed },
     };
@@ -631,6 +665,7 @@ export async function authenticateLinuxNodeArchive(options) {
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const args = process.argv.slice(2);
+  /** @param {string} flag @returns {string | undefined} */
   const value = (flag) => { const i = args.indexOf(flag); return i === -1 ? undefined : args[i + 1]; };
   const downloadDir = value("--authenticate-download");
   const linuxDir = value("--authenticate-linux");
@@ -640,13 +675,16 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     if ((!downloadDir && !linuxDir) || !outputNodePath) {
       throw new Error("Usage: node-runtime-authority.mjs (--authenticate-download <dir> | --authenticate-linux <dir> --target <triple>) --output-node <path> [--output <receipt.json>]");
     }
+    if (typeof outputNodePath !== "string") throw new Error("Output executable path is required.");
     let receipt;
     if (linuxDir) {
       const targetTriple = value("--target");
+      if (typeof targetTriple !== "string") throw new Error("Linux runtime target is required.");
       const identity = NODE_RELEASE_IDENTITY.targets?.[targetTriple];
       if (!identity) throw new Error(`Unknown Linux runtime target ${targetTriple}`);
       receipt = await authenticateLinuxNodeArchive({ shasumsPath: join(resolve(linuxDir), SHASUMS_FILENAME), tarballPath: join(resolve(linuxDir), identity.archive), targetTriple, outputNodePath });
     } else {
+      if (typeof downloadDir !== "string") throw new Error("Download directory is required.");
       receipt = await authenticateDarwinNodeDownload({ downloadDir, outputNodePath });
     }
     const text = `${JSON.stringify(receipt, null, 2)}\n`;

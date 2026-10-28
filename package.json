@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-forge-ai/theme-forge-nebular-fusion",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Theme Forge Nebular Fusion application",
   "license": "AGPL-3.0-or-later",
@@ -42,7 +42,7 @@
     "@types/react-dom": "19.2.5",
     "jsdom": "30.0.1",
     "typescript": "7.0.2",
-    "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "vite": "8.2.4",
+    "vitest": "4.1.12"
   }
 }

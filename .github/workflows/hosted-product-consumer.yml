@@ -1,0 +1,384 @@
+name: Hosted product consumer qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact public source commit already admitted by source-first v6
+        required: true
+        type: string
+      source_tree:
+        description: Exact public source tree for source_commit
+        required: true
+        type: string
+      input_descriptor_json:
+        description: Late-bound public consumer input descriptor JSON materialized outside the checkout
+        required: true
+        type: string
+      source_readback_manifest_json:
+        description: Late-bound manifest of the exact corresponding-source, Darwin-source, Linux-source, and Darwin receipt readbacks
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  source-readback-fetch:
+    name: Fetch exact source-first readbacks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      artifact_id: ${{ steps.upload-source-readbacks.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload-source-readbacks.outputs.artifact-digest }}
+    steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - name: Materialize the late-bound source descriptors
+        env:
+          INPUT_DESCRIPTOR_JSON: ${{ inputs.input_descriptor_json }}
+          SOURCE_READBACK_MANIFEST_JSON: ${{ inputs.source_readback_manifest_json }}
+        run: |
+          printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
+          printf '%s\n' "$SOURCE_READBACK_MANIFEST_JSON" > "$RUNNER_TEMP/source-readback-manifest.json"
+      - name: Fetch only the four declared source readbacks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEBULAR_EXACT_SOURCE_READBACK_FETCH: "1"
+        run: |
+          node tools/nebular-exact-source-readback-fetch.mjs \
+            --helper "$GITHUB_WORKSPACE/tools/nebular-hosted-product-consumer.mjs" \
+            --input "$RUNNER_TEMP/consumer-input.json" \
+            --manifest "$RUNNER_TEMP/source-readback-manifest.json" \
+            --output "$RUNNER_TEMP/nebular-source-readbacks"
+      - id: upload-source-readbacks
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-source-readbacks-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nebular-source-readbacks/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+
+  source-admission:
+    name: Admit exact public source before product bytes
+    runs-on: ubuntu-24.04
+    needs: source-readback-fetch
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      readback_artifact_id: ${{ needs['source-readback-fetch'].outputs.artifact_id }}
+      readback_artifact_digest: ${{ needs['source-readback-fetch'].outputs.artifact_digest }}
+    steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
+      - name: Check out the exact public source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['source-readback-fetch'].outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-source-readbacks/
+      - name: Resolve source payload, corresponding-source offer, and tree identity
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          SOURCE_TREE: ${{ inputs.source_tree }}
+          INPUT_DESCRIPTOR_JSON: ${{ inputs.input_descriptor_json }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
+          node tools/nebular-hosted-product-consumer.mjs admit-source --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output "$RUNNER_TEMP/source-admission.json"
+
+  fetch-release-assets:
+    name: Fetch exact public release assets
+    needs: source-admission
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['source-admission'].outputs.readback_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-source-readbacks/
+      - name: Reconfirm source admission before any product GET
+        env:
+          INPUT_DESCRIPTOR_JSON: ${{ inputs.input_descriptor_json }}
+        run: |
+          printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
+          node tools/nebular-hosted-product-consumer.mjs admit-source --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output "$RUNNER_TEMP/source-admission.json"
+      - name: Fetch only the six declared product assets
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEBULAR_EXACT_RELEASE_ASSET_FETCH: "1"
+        run: |
+          node tools/nebular-exact-release-asset-fetch.mjs \
+            --helper "$GITHUB_WORKSPACE/tools/nebular-hosted-product-consumer.mjs" \
+            --input "$RUNNER_TEMP/consumer-input.json" \
+            --admission "$RUNNER_TEMP/source-admission.json" \
+            --checkout "$GITHUB_WORKSPACE" \
+            --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" \
+            --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" \
+            --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" \
+            --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" \
+            --output "$RUNNER_TEMP/nebular-product-assets"
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-product-assets-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nebular-product-assets/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+
+  hosted-consumer:
+    name: Consumer qualification (${{ matrix.platform }})
+    needs: [source-admission, fetch-release-assets]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: linux-x64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['fetch-release-assets'].outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-product-assets/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['source-admission'].outputs.readback_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-source-readbacks/
+      - name: Verify Linux display and WebKit runtime prerequisites
+        if: runner.os == 'Linux'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          for command in readelf ldd Xvfb xvfb-run xauth dbus-run-session dbus-daemon dpkg-query; do
+            command -v "$command" >/dev/null || { echo "missing required runtime command: $command" >&2; exit 1; }
+          done
+          mkdir -p .test-reports/nebular/consumer
+          dpkg-query -W > ".test-reports/nebular/consumer/$PLATFORM.dpkg-packages.txt"
+      - name: Verify and consume prebuilt candidate only
+        env:
+          INPUT_DESCRIPTOR_JSON: ${{ inputs.input_descriptor_json }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
+          node tools/nebular-hosted-product-consumer.mjs admit-source --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output "$RUNNER_TEMP/source-admission.json"
+          node tools/nebular-hosted-product-consumer.mjs qualify --input "$RUNNER_TEMP/consumer-input.json" --assets "$RUNNER_TEMP/nebular-product-assets" --platform "$PLATFORM" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output .test-reports/nebular/consumer
+      - name: Retain consumer receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-consumer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: .test-reports/nebular/consumer/
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+      - name: Check out the pinned RS9 host observation source
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: Knowledge-Forge-AI/release-starport-9
+          ref: 194022d040f52f31f9faa2aed79fd651b5ca7436
+          path: .rs9-host-observation
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Capture actual Linux host-newer observation
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          test -f "$GITHUB_WORKSPACE/.rs9-host-observation/src/rs9/nebular070_host_observation.py"
+          command -v readelf >/dev/null
+          command -v ldd >/dev/null
+          mkdir -p "$RUNNER_TEMP/nebular-host-observation"
+          PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$GITHUB_WORKSPACE/.rs9-host-observation/src" /usr/bin/python3 -m rs9.nebular070_host_observation \
+            --role newer \
+            --output "$RUNNER_TEMP/nebular-host-observation/$PLATFORM.host-newer.json" \
+            --extras "$RUNNER_TEMP/nebular-host-observation/$PLATFORM.host-newer.extras.json"
+      - name: Retain Linux host-newer observation
+        if: ${{ always() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-host-newer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nebular-host-observation/
+          if-no-files-found: warn
+          compression-level: 0
+          overwrite: false
+
+  consumer-receipt:
+    name: Aggregate hosted consumer receipt
+    needs: [source-admission, fetch-release-assets, hosted-consumer]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Bind the trusted workflow execution revision
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if ! printf '%s\n' "$SOURCE_COMMIT" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "source_commit must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$WORKFLOW_SHA" | LC_ALL=C grep -Eq '^[0-9a-f]{40}$'; then
+            echo "github.sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          if [ "$SOURCE_COMMIT" != "$WORKFLOW_SHA" ]; then
+            echo "workflow dispatch ref must resolve to source_commit" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.3
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: nebular-0.7.0-consumer-*-${{ github.run_id }}-a${{ github.run_attempt }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-consumer-platforms/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs['source-admission'].outputs.readback_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/nebular-source-readbacks/
+      - name: Assemble aggregate consumer receipt
+        env:
+          INPUT_DESCRIPTOR_JSON: ${{ inputs.input_descriptor_json }}
+        run: |
+          printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
+          node tools/nebular-hosted-product-consumer.mjs admit-source --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output "$RUNNER_TEMP/source-admission.json"
+          node tools/nebular-hosted-product-consumer.mjs receipt --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --platform-receipts "$RUNNER_TEMP/nebular-consumer-platforms" --output .test-reports/nebular/consumer/consumer-receipt.json
+      - name: Retain aggregate consumer receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-consumer-receipt-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: .test-reports/nebular/consumer/consumer-receipt.json
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false

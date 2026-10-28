@@ -171,6 +171,14 @@ impl SidecarSupervisor {
                 self.publish(HostLifecycleState::Failed, Some("sidecar-shutdown-failed"));
             }
         }
+        self.status_snapshot()
+    }
+
+    /// Build the last-completed public status without inspecting or reaping the
+    /// sidecar process.  Host status fallback uses this while a mutating
+    /// operation owns the supervisor mutex, so it must remain a pure snapshot
+    /// of fields already published by the supervisor.
+    pub(crate) fn status_snapshot(&self) -> StudioHostStatus {
         let (server_version, methods, raster, capabilities) =
             if matches!(self.state, HostLifecycleState::Ready) {
                 self.process.as_ref().map_or(
@@ -218,6 +226,16 @@ impl SidecarSupervisor {
             source_open_count: self.source_open_count,
             last_reason_code: self.last_reason_code,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_set_status_fixture(
+        &mut self,
+        state: HostLifecycleState,
+        project_open_count: u32,
+    ) {
+        self.state = state;
+        self.project_open_count = project_open_count;
     }
 
     pub(crate) fn plan_session_context(&self) -> StudioResult<PlanSessionContext> {

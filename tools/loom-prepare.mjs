@@ -6,10 +6,87 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
 import { reindexPagefindSite } from "./pagefind-index.mjs";
+import { inventoryTree } from "./candidate-provenance.mjs";
+
+/** @typedef {string | number | boolean | null | JsonValue[] | JsonObject} JsonValue */
+/** @typedef {{[key: string]: JsonValue}} JsonObject */
+/** @typedef {{path: string, bytes: number, sha256: string}} CatalogMember */
+/** @typedef {{schema: string, members: CatalogMember[], sources?: JsonValue[]}} CatalogEvidence */
+/** @typedef {{sha256?: string, executableIdentityDigest?: string}} CatalogEvidenceBinding */
+/** @typedef {{name: string, version: string, type?: string, exports?: JsonValue, bin?: JsonValue}} LoomPackageManifest */
+/** @typedef {{schema?: string, name?: string, packageName?: string, filename?: string, tarballName?: string, version?: string, packageVersion?: string, sha256?: string, catalogBuildEvidence?: CatalogEvidenceBinding}} LoomAuthBinding */
+/** @typedef {{tarball?: string | undefined, sha256?: string | undefined, packageRoot?: string | undefined, "package-root"?: string | undefined, release?: boolean | undefined, dev?: boolean | undefined, instrumented?: boolean | undefined, previewDist?: string | undefined, previewModules?: string | undefined, previewModulesIdentity?: string | undefined, studioRoot?: string | undefined, npmPath?: string | undefined, nodePath?: string | undefined}} LoomPrepareOptions */
+
+/**
+ * Stages the authenticated, dereferenced preview dependency inventory in the
+ * owned preview source. The portable inventory deliberately has no .bin; use
+ * Astro's declared Node entry point instead of relying on an ambient command.
+ * This implements the exact neutral fixture recipe, not arbitrary npm scripts.
+ * @param {{previewRoot: string, previewModules: string, expectedIdentity: string, nodePath: string}} options
+ */
+export async function preparePreviewBuild({ previewRoot, previewModules, expectedIdentity, nodePath }) {
+  const recipe = "ASTRO_BASE=/preview TFSL_THEME_CSS=./src/styles/neutral.css ASTRO_OUT_DIR=./dist/neutral astro build";
+  const fixture = JSON.parse(await readFile(resolve(previewRoot, "package.json"), "utf8"));
+  if (fixture.scripts?.["build:neutral"] !== recipe
+      || fixture.scripts?.["prebuild:neutral"] || fixture.scripts?.["postbuild:neutral"]) {
+    throw new Error("[LOOM_PREPARE_FAIL] Unsupported neutral preview recipe");
+  }
+  const modules = await lstat(previewModules);
+  if (!modules.isDirectory() || modules.isSymbolicLink()) {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview dependency root must be a directory");
+  }
+  const before = await inventoryTree(previewModules);
+  if (!/^[a-f0-9]{64}$/.test(expectedIdentity) || before.identity !== expectedIdentity) {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview dependency inventory mismatch");
+  }
+  if (before.files.some(member => member.path.split("/").some(part => part === ".bin" || part === ".cache"))) {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview dependency inventory must be bin-free and cache-free");
+  }
+  const astro = JSON.parse(await readFile(resolve(previewModules, "astro/package.json"), "utf8"));
+  if (astro.name !== "astro" || typeof astro.version !== "string"
+      || fixture.dependencies?.astro !== astro.version || astro.bin?.astro !== "./bin/astro.mjs") {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview Astro dependency does not match the fixture");
+  }
+  const cli = await lstat(resolve(previewModules, "astro/bin/astro.mjs"));
+  if (!cli.isFile() || cli.isSymbolicLink()) {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview Astro entry must be a regular file");
+  }
+  const destination = resolve(previewRoot, "node_modules");
+  // An existing dependency tree is not silently adopted or replaced.
+  try {
+    await lstat(destination);
+    throw new Error("[LOOM_PREPARE_FAIL] Preview dependency destination already exists");
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+  }
+  // Reuse the portable staging exclusions; these inputs are already dereferenced.
+  // Do not follow a newly substituted alias during the copy.
+  await cp(previewModules, destination, {
+    recursive: true, dereference: false, force: false, errorOnExist: true,
+    filter: async source => {
+      const entry = await lstat(source);
+      if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+        throw new Error("[LOOM_PREPARE_FAIL] Nonregular preview dependency member");
+      }
+      const relative = source.slice(previewModules.length).split(/[\\/]/);
+      return !relative.some(part => part === ".bin" || part === ".cache");
+    },
+  });
+  const after = await inventoryTree(previewModules);
+  const copied = await inventoryTree(destination);
+  if (after.identity !== expectedIdentity || copied.identity !== expectedIdentity) {
+    throw new Error("[LOOM_PREPARE_FAIL] Preview dependencies changed during staging");
+  }
+  return {
+    command: nodePath,
+    args: [resolve(destination, "astro/bin/astro.mjs"), "build"],
+    env: { ASTRO_BASE: "/preview", TFSL_THEME_CSS: "./src/styles/neutral.css", ASTRO_OUT_DIR: "./dist/neutral" },
+  };
+}
 
 export const EXPECTED_LOOM_NAME = "@knowledge-forge-ai/theme-forge-stellar-loom";
-export const EXPECTED_LOOM_VERSION = "0.4.0";
-export const SUPPORTED_LOOM_VERSIONS = ["0.4.0", "0.3.0", "0.2.0", "0.1.1", "0.1.0"];
+export const EXPECTED_LOOM_VERSION = "0.5.0";
+export const SUPPORTED_LOOM_VERSIONS = ["0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.1", "0.1.0"];
 const MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 
 export const FIXED_97_INVENTORY = Object.freeze([
@@ -112,6 +189,7 @@ export const FIXED_97_INVENTORY = Object.freeze([
   "dist/v2/validator.js",
 ]);
 
+/** @param {string} a @param {string} b @returns {number} */
 const order = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
 export const FIXED_101_INVENTORY = Object.freeze([
@@ -122,12 +200,22 @@ export const FIXED_101_INVENTORY = Object.freeze([
   "dist/syntax/types.js",
 ].sort(order));
 
+/** @param {unknown} value @returns {string} */
 function canonical(value) {
-  const sort = (v) => Array.isArray(v) ? v.map(sort) : v && typeof v === "object"
-    ? Object.fromEntries(Object.keys(v).sort(order).map(k => [k, sort(v[k])])) : v;
+  /** @param {unknown} candidate @returns {JsonValue} */
+  const sort = (candidate) => {
+    if (Array.isArray(candidate)) return candidate.map(sort);
+    if (candidate && typeof candidate === "object") {
+      const object = /** @type {JsonObject} */ (candidate);
+      return Object.fromEntries(Object.keys(object).sort(order).map((key) => [key, sort(object[key])]));
+    }
+    if (candidate === null || typeof candidate === "string" || typeof candidate === "number" || typeof candidate === "boolean") return candidate;
+    throw new Error("Cannot canonicalize unsupported value");
+  };
   return JSON.stringify(sort(value));
 }
 
+/** @param {string} root @param {string} relPath @param {number} [maxBytes] @returns {Buffer} */
 export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   if (typeof relPath !== "string" || !/^(?:dist|bin)\/[A-Za-z0-9_./-]+$/u.test(relPath)) {
     throw new Error(`Invalid member path format: '${relPath}'`);
@@ -149,12 +237,15 @@ export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   // Walk and validate ancestor directories only; do not stat or existence-check the leaf file
   let ancestorPath = rootResolved;
   for (let i = 0; i < parts.length - 1; i++) {
-    ancestorPath = join(ancestorPath, parts[i]);
+    const part = parts[i];
+    if (!part) throw new Error(`Invalid empty member path: '${relPath}'`);
+    ancestorPath = join(ancestorPath, part);
     let st;
     try {
       st = lstatSync(ancestorPath);
     } catch (err) {
-      if (err && typeof err === "object" && err.code === "ENOENT") {
+      const fsError = /** @type {NodeJS.ErrnoException} */ (err);
+      if (fsError.code === "ENOENT") {
         throw new Error(`Loom package missing required path component: '${ancestorPath}'`);
       }
       throw err;
@@ -165,17 +256,22 @@ export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   }
 
   // Directly open leaf file with O_NOFOLLOW; check-then-open TOCTOU pattern eliminated
-  const targetFilePath = join(ancestorPath, parts[parts.length - 1]);
+  const leafName = parts[parts.length - 1];
+  if (!leafName) throw new Error(`Invalid empty member path: '${relPath}'`);
+  const targetFilePath = join(ancestorPath, leafName);
   let fd;
   try {
     fd = openSync(targetFilePath, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (err) {
-    if (err && typeof err === "object" && err.code === "ENOENT") {
+    const fsError = /** @type {NodeJS.ErrnoException} */ (err);
+    if (fsError.code === "ENOENT") {
       throw new Error(`Loom package missing required member file: '${relPath}'`);
     }
     throw new Error(`Non-regular file or symlink in member path: '${relPath}'`);
   }
+  /** @type {import("node:fs").Stats} */
   let leafStat;
+  /** @type {Buffer} */
   let bytes;
   try {
     leafStat = fstatSync(fd);
@@ -195,7 +291,9 @@ export function readMemberSafe(root, relPath, maxBytes = 64 * 1024 * 1024) {
   return bytes;
 }
 
+/** @param {string} root @param {string} directory @returns {string[]} */
 function jsInventory(root, directory) {
+  /** @type {string[]} */
   const paths = [];
   const dirPath = join(root, directory);
   if (!existsSync(dirPath)) return paths;
@@ -217,20 +315,24 @@ function jsInventory(root, directory) {
   return paths.sort(order);
 }
 
+/** @param {Buffer | Uint8Array | string} bytes @returns {string} */
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** @param {string} packageRoot @param {CatalogEvidenceBinding | null} [expectedCatalogEvidence] @returns {Promise<{schema: string, sha256: string, memberCount: number, executableIdentityDigest: string}>} */
 export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEvidence = null) {
   let evidenceBytes;
   try {
     evidenceBytes = readMemberSafe(packageRoot, "dist/catalog-build-evidence.json", 1024 * 1024);
   } catch (err) {
-    if (err && typeof err === "object" && String(err.message).includes("missing required member file")) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("missing required member file")) {
       throw new Error("Loom package is missing required catalog build evidence: dist/catalog-build-evidence.json");
     }
     throw err;
   }
+  /** @type {CatalogEvidence} */
   let evidence;
   try {
     evidence = JSON.parse(evidenceBytes.toString("utf8"));
@@ -254,6 +356,7 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
   // Exact fixed inventory verification (97 for 0.2.0/0.1.1, 101 for 0.3.0)
   let pkgVersion;
   try {
+    /** @type {LoomPackageManifest} */
     const pkg = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
     pkgVersion = pkg.version;
   } catch (err) {
@@ -262,13 +365,14 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
   if (!pkgVersion) {
     throw new Error(`package.json in ${packageRoot} lacks a valid version`);
   }
-  const expectedInventory = (pkgVersion === "0.4.0" || pkgVersion === "0.3.0") ? FIXED_101_INVENTORY : FIXED_97_INVENTORY;
+  const expectedInventory = (pkgVersion === "0.5.0" || pkgVersion === "0.4.0" || pkgVersion === "0.3.0") ? FIXED_101_INVENTORY : FIXED_97_INVENTORY;
   const expectedSorted = [...expectedInventory].sort(order);
   if (evidence.members.length !== expectedSorted.length) {
     throw new Error(`Loom package catalog build evidence member count mismatch: expected ${expectedSorted.length}, got ${evidence.members.length}`);
   }
 
   const seenPaths = new Set();
+  /** @type {Map<string, string>} */
   const memberHashMap = new Map();
   for (const member of evidence.members) {
     if (!member || typeof member.path !== "string" || typeof member.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(member.sha256)) {
@@ -293,7 +397,7 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
     }
   }
 
-  const manifestPathsSorted = evidence.members.map((m) => m.path).sort(order);
+  const manifestPathsSorted = evidence.members.map((/** @type {CatalogMember} */ m) => m.path).sort(order);
   if (canonical(manifestPathsSorted) !== canonical(expectedSorted)) {
     throw new Error("Loom package catalog build evidence members mismatch fixed 97 inventory");
   }
@@ -306,6 +410,7 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
 
   // Recompute official executable identity digest matching Loom source
   const pkgPath = resolve(packageRoot, "package.json");
+  /** @type {LoomPackageManifest} */
   let pkg;
   try {
     pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
@@ -339,6 +444,7 @@ export async function authenticateCatalogEvidence(packageRoot, expectedCatalogEv
   };
 }
 
+/** @param {string} command @param {string[]} args @param {string} cwd @param {NodeJS.ProcessEnv} [env] @returns {string} */
 function runLocalCommand(command, args, cwd, env) {
   const result = spawnSync(command, args, {
     cwd,
@@ -354,6 +460,7 @@ function runLocalCommand(command, args, cwd, env) {
   return result.stdout;
 }
 
+/** @param {string} filePath @param {number} [maximum] @returns {Promise<import("node:fs").Stats>} */
 async function requireRegular(filePath, maximum = MAX_ARCHIVE_BYTES) {
   let handle;
   try {
@@ -375,6 +482,7 @@ async function requireRegular(filePath, maximum = MAX_ARCHIVE_BYTES) {
   }
 }
 
+/** @param {string} archivePath @param {string} destination @returns {Promise<string>} */
 async function extractTarballSafely(archivePath, destination) {
   await requireRegular(archivePath, MAX_ARCHIVE_BYTES);
   const listing = runLocalCommand("tar", ["-tzf", archivePath], process.cwd());
@@ -402,7 +510,9 @@ async function extractTarballSafely(archivePath, destination) {
   return packageRoot;
 }
 
+/** @param {string[]} argv @returns {LoomPrepareOptions} */
 export function parseLoomPrepareArgs(argv) {
+  /** @type {LoomPrepareOptions} */
   const options = {
     tarball: undefined,
     sha256: undefined,
@@ -435,8 +545,10 @@ export function parseLoomPrepareArgs(argv) {
   return options;
 }
 
+/** @param {LoomPrepareOptions} [customOptions] @returns {Promise<Record<string, unknown> | undefined>} */
 export async function prepareLoom(customOptions = {}) {
   const cliOptions = parseLoomPrepareArgs(process.argv.slice(2));
+  /** @type {LoomPrepareOptions} */
   const options = { ...cliOptions, ...customOptions };
 
   const studioRoot = options.studioRoot ? resolve(options.studioRoot) : resolve(import.meta.dirname, "..");
@@ -457,6 +569,7 @@ export async function prepareLoom(customOptions = {}) {
     if (!existsSync(pkgPath)) {
       throw new Error(`[LOOM_PREPARE_FAIL] Missing package.json in Loom package root: ${packageRoot}`);
     }
+    /** @type {LoomPackageManifest} */
     let pkg;
     try {
       pkg = JSON.parse(await readFile(pkgPath, "utf8"));
@@ -527,8 +640,15 @@ export async function prepareLoom(customOptions = {}) {
         ...process.env,
         ...(isInstrumented ? { TFSL_INSTRUMENTED_PREVIEW: "1" } : { TFSL_INSTRUMENTED_PREVIEW: "0" }),
       };
-      if (!options.npmPath) throw new Error("Source-built preview requires explicit npm CLI");
-      const buildResult = spawnSync(options.nodePath, [options.npmPath, "run", "build:neutral"], { cwd: loomPreviewSource, env: fixtureEnv, stdio: "inherit", timeout: 300_000 });
+      const npmPath = options.npmPath;
+      const nodePath = options.nodePath;
+      if (!npmPath || !nodePath) throw new Error("Source-built preview requires explicit node and npm CLIs");
+      const previewBuild = options.previewModules
+        ? await preparePreviewBuild({ previewRoot: loomPreviewSource, previewModules: options.previewModules, expectedIdentity: options.previewModulesIdentity ?? "", nodePath })
+        : { command: nodePath, args: [npmPath, "run", "build:neutral"], env: {} };
+      const buildResult = spawnSync(previewBuild.command, previewBuild.args, {
+        cwd: loomPreviewSource, env: { ...fixtureEnv, ...previewBuild.env }, stdio: "inherit", timeout: 300_000,
+      });
       if (buildResult.status !== 0 || !existsSync(resolve(neutralDist, "index.html"))) {
         throw new Error(`Failed to build preview from loom-preview-source (exit code: ${buildResult.status})`);
       }
@@ -558,6 +678,7 @@ export async function prepareLoom(customOptions = {}) {
   console.log(`Preparing Theme Forge Stellar Loom payload and preview (release: ${isRelease}, dev: ${isDev}, instrumented: ${isInstrumented})...`);
 
   // Check authenticated-inputs/loom-binding.json if present
+  /** @type {LoomAuthBinding | null} */
   let authBinding = null;
   const authBindingPath = resolve(repoRoot, "authenticated-inputs/loom-binding.json");
   try {
@@ -578,9 +699,9 @@ export async function prepareLoom(customOptions = {}) {
     const bindingName = authBinding.name || authBinding.packageName;
     const bindingFilename = authBinding.filename || authBinding.tarballName;
     const bindingVersion = authBinding.version || authBinding.packageVersion;
-    const isSupportedVersion = SUPPORTED_LOOM_VERSIONS.includes(bindingVersion);
+    const isSupportedVersion = typeof bindingVersion === "string" && SUPPORTED_LOOM_VERSIONS.includes(bindingVersion);
     if (bindingName !== EXPECTED_LOOM_NAME || !isSupportedVersion
-        || !bindingFilename || basename(bindingFilename) !== bindingFilename || !/^[a-f0-9]{64}$/.test(authBinding.sha256)) {
+        || !bindingFilename || basename(bindingFilename) !== bindingFilename || typeof authBinding.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(authBinding.sha256)) {
       throw new Error("Loom authenticated binding is invalid");
     }
     const authTarball = resolve(repoRoot, "authenticated-inputs/loom-tarball", bindingFilename);
@@ -595,7 +716,8 @@ export async function prepareLoom(customOptions = {}) {
     if (existsSync(authTarballDir)) {
       const tgts = readdirSync(authTarballDir).filter((f) => f.endsWith(".tgz"));
       if (tgts.length === 1) {
-        tarballPath = resolve(authTarballDir, tgts[0]);
+        const [onlyTarget] = tgts;
+        if (onlyTarget) tarballPath = resolve(authTarballDir, onlyTarget);
       }
     }
   }
@@ -627,6 +749,7 @@ export async function prepareLoom(customOptions = {}) {
       if (!existsSync(pkgPath)) {
         throw new Error("Extracted Loom package is missing package.json");
       }
+      /** @type {LoomPackageManifest} */
       const pkg = JSON.parse(await readFile(pkgPath, "utf8"));
       if (pkg.name !== EXPECTED_LOOM_NAME) {
         throw new Error(`Extracted Loom package has invalid name: '${pkg.name}', expected '${EXPECTED_LOOM_NAME}'`);

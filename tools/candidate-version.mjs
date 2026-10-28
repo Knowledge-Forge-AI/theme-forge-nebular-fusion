@@ -8,6 +8,22 @@ import { CANDIDATE_VERSION, APPLICATION_NAME } from "./platform-targets.mjs";
 const SKIP_DIRECTORIES = new Set([".git", ".outbox", ".test-reports", "node_modules", "target", "dist", ".cache", ".vite", ".vitest", "coverage", "authenticated-inputs"]);
 const GENERATED = /^(?:apps\/studio\/(?:public\/preview|src-tauri\/(?:binaries|sidecar-payload|loom-payload|solar-sail-payload|scene-payload|release-notices)))(?:\/|$)/;
 const VERSION = /(?<![\w.])\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?(?![\w.])/g;
+const HISTORICAL_METADATA_FILES = new Set([
+  ".rs9/intent.json",
+  ".rs9/evidence/public-metadata-evidence.json",
+  ".rs9/evidence/public-nebular-checksums-evidence.json",
+  "snapshot-manifest.json",
+  "tools/distribution/docs/DIST1-VALIDATION-WORKFLOW-CONTRACT.json",
+]);
+const INDEPENDENT_NIX_COMPONENT_FILES = new Set([
+  "tools/distribution/templates/nix/packages/solar-sail.nix",
+  "tools/distribution/templates/nix/packages/stellar-loom.nix",
+  "tools/distribution/theme-forge-packages/packages/solar-sail.nix",
+  "tools/distribution/theme-forge-packages/packages/stellar-loom.nix",
+]);
+const HISTORICAL_TEST_FIXTURE_FILES = new Set([
+  "tools/distribution/test-fixtures/signing/generate-multi-subkey-fixture.mjs",
+]);
 
 // Independently versioned components and their consumer fixtures are not
 // Nebular packages. New package paths must receive an explicit owner.
@@ -38,6 +54,35 @@ export const LIVE_PATH_ROOTS = Object.freeze([
   "tools/",
 ]);
 
+/** @typedef {string | number | boolean | null | JsonObject | JsonValue[]} JsonValue */
+/** @typedef {{ [key: string]: JsonValue }} JsonObject */
+/** @typedef {{ path: string, line: number, column?: number, version: string | null, classification: string | null, reason: string | null }} VersionHit */
+/** @typedef {{ pathStack: string[], key: string | null, value: JsonValue, offset: number, isString: boolean }} JsonEntry */
+/** @typedef {{ version: string, offset: number }} VersionTarget */
+/** @typedef {{ classification: string | null, reason: string | null }} ClassificationResult */
+/** @typedef {{ index?: number, 0?: string }} VersionMatch */
+/** @typedef {{ field: string, value: string }} VersionAssignment */
+/** @typedef {{ id: string, kind: string, path: string, version: JsonValue | undefined, expected: string }} Surface */
+/** @typedef {{ id: string, path: string, version: string, expectedCandidateVersion: string, alignedWithCandidate: boolean, status: string, owner: string, binding?: string }} UnresolvedSurface */
+
+/** @param {unknown} value @returns {value is JsonObject} */
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** @param {JsonObject} object @param {string} key @returns {string | undefined} */
+function stringProperty(object, key) {
+  const value = object[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** @param {JsonObject} object @param {string} key @returns {JsonObject | undefined} */
+function objectProperty(object, key) {
+  const value = object[key];
+  return isJsonObject(value) ? value : undefined;
+}
+
+/** @param {string} filePath @returns {boolean} */
 export function isLivePath(filePath) {
   if (/^tools\/(?:release-operations|tfsb48-r1|tfsb48-r2)\//.test(filePath)) {
     return false;
@@ -58,6 +103,7 @@ export function isLivePath(filePath) {
  * 3. Enforces strict path- and field-ownership for live JSON surfaces.
  * 4. Fails closed on malformed live JSON.
  */
+/** @param {string} filePath @param {string} content @returns {VersionHit[] | null} */
 function scanJsonVersions(filePath, content) {
   if (/(?:^|\/)(?:test|tests|spec|specs|fixtures?|gallery\/fixtures|examples?|test-matrix|spikes|scratch)\//.test(filePath)
       || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(filePath)
@@ -69,6 +115,7 @@ function scanJsonVersions(filePath, content) {
     return null;
   }
 
+  /** @type {JsonValue} */
   let parsed;
   try {
     parsed = JSON.parse(content);
@@ -80,7 +127,7 @@ function scanJsonVersions(filePath, content) {
       column: 1,
       version: null,
       classification: null,
-      reason: `malformed JSON syntax in live surface fails closed: ${err.message}`,
+      reason: `malformed JSON syntax in live surface fails closed: ${err instanceof Error ? err.message : String(err)}`,
     }];
   }
 
@@ -89,13 +136,16 @@ function scanJsonVersions(filePath, content) {
   for (let idx = 0; idx < content.length; idx++) {
     if (content[idx] === "\n") lineStarts.push(idx + 1);
   }
+  /** @param {number} offset @returns {{ line: number, column: number }} */
   function getLineCol(offset) {
     let low = 0, high = lineStarts.length - 1;
     while (low <= high) {
       const mid = (low + high) >> 1;
-      if (lineStarts[mid] <= offset) {
-        if (mid === lineStarts.length - 1 || lineStarts[mid + 1] > offset) {
-          return { line: mid + 1, column: offset - lineStarts[mid] + 1 };
+      const start = lineStarts[mid];
+      const next = lineStarts[mid + 1];
+      if (start !== undefined && start <= offset) {
+        if (mid === lineStarts.length - 1 || (next !== undefined && next > offset)) {
+          return { line: mid + 1, column: offset - start + 1 };
         }
         low = mid + 1;
       } else {
@@ -109,12 +159,15 @@ function scanJsonVersions(filePath, content) {
   let i = 0;
   const n = content.length;
   function skipWs() {
-    while (i < n && /\s/.test(content[i])) i++;
+    while (i < n && /\s/.test(content[i] ?? "")) i++;
   }
 
+  /** @type {JsonEntry[]} */
   const entries = [];
+  /** @type {string[]} */
   const stack = [];
 
+  /** @returns {string} */
   function parseString() {
     i++; // skip opening quote
     let str = "";
@@ -144,6 +197,7 @@ function scanJsonVersions(filePath, content) {
     return str;
   }
 
+  /** @returns {void} */
   function parseValue() {
     skipWs();
     if (i >= n) return;
@@ -207,7 +261,7 @@ function scanJsonVersions(filePath, content) {
       }
     } else if (ch === "\"") {
       const str = parseString();
-      const parentKey = stack.length > 0 ? stack[stack.length - 1] : null;
+      const parentKey = stack.length > 0 ? (stack[stack.length - 1] ?? null) : null;
       entries.push({
         pathStack: [...stack],
         key: parentKey,
@@ -217,15 +271,16 @@ function scanJsonVersions(filePath, content) {
       });
     } else {
       let raw = "";
-      while (i < n && !/[\s,\}\]]/.test(content[i])) {
+      while (i < n && !/[\s,\}\]]/.test(content[i] ?? "")) {
         raw += content[i++];
       }
+      /** @type {JsonValue} */
       let val = raw;
       if (raw === "true") val = true;
       else if (raw === "false") val = false;
       else if (raw === "null") val = null;
       else if (!isNaN(Number(raw))) val = Number(raw);
-      const parentKey = stack.length > 0 ? stack[stack.length - 1] : null;
+      const parentKey = stack.length > 0 ? (stack[stack.length - 1] ?? null) : null;
       entries.push({
         pathStack: [...stack],
         key: parentKey,
@@ -238,11 +293,14 @@ function scanJsonVersions(filePath, content) {
 
   parseValue();
 
+  /** @param {string | null} k @returns {boolean} */
   const isVersionKey = (k) => typeof k === "string" && (/version$/i.test(k) || /^(?:release|appVersion|candidateVersion)$/i.test(k));
 
+  /** @type {VersionHit[]} */
   const hits = [];
   for (const entry of entries) {
     const isVerKey = isVersionKey(entry.key);
+    /** @type {RegExpMatchArray[]} */
     let semverMatches = [];
     if (typeof entry.value === "string") {
       semverMatches = [...entry.value.matchAll(VERSION)];
@@ -253,10 +311,13 @@ function scanJsonVersions(filePath, content) {
     }
 
     // Determine target versions to emit
+    /** @type {VersionTarget[]} */
     const targets = [];
     if (semverMatches.length > 0) {
       for (const m of semverMatches) {
-        targets.push({ version: m[0], offset: entry.offset + m.index });
+        const versionMatch = m[0];
+        if (versionMatch === undefined) continue;
+        targets.push({ version: versionMatch, offset: entry.offset + (m.index ?? 0) });
       }
     } else {
       // Non-semver value in version-named field (e.g. "latest", 17, "broken")
@@ -266,15 +327,17 @@ function scanJsonVersions(filePath, content) {
     for (const target of targets) {
       const { line, column } = getLineCol(target.offset);
       const version = target.version;
+      /** @type {string | null} */
       let classification = null;
+      /** @type {string | null} */
       let reason = null;
 
       // 1. Authoritative application package (apps/studio/package.json)
-      if (filePath === "apps/studio/package.json" || (filePath.endsWith("package.json") && !filePath.endsWith("package-lock.json") && typeof parsed === "object" && parsed !== null && parsed.name === "theme-forge-nebular-fusion-studio")) {
+      if (filePath === "apps/studio/package.json" || (filePath.endsWith("package.json") && !filePath.endsWith("package-lock.json") && isJsonObject(parsed) && stringProperty(parsed, "name") === "theme-forge-nebular-fusion-studio")) {
         if (entry.pathStack.length === 1 && entry.pathStack[0] === "version") {
           classification = "candidate-authoritative";
           reason = "maintained application package version";
-        } else if (entry.pathStack.length === 2 && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[0])) {
+        } else if (entry.pathStack.length === 2 && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[0] ?? "")) {
           classification = "unrelated/non-version semantic text";
           reason = "application dependency version; not product candidate version";
         } else {
@@ -293,7 +356,7 @@ function scanJsonVersions(filePath, content) {
         } else if (entry.pathStack.length === 1 && entry.pathStack[0] === "lockfileVersion") {
           classification = "unrelated/non-version semantic text";
           reason = "npm lockfile format version";
-        } else if (entry.pathStack[0] === "packages" && entry.pathStack[1] === "" && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[2])) {
+        } else if (entry.pathStack[0] === "packages" && entry.pathStack[1] === "" && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[2] ?? "")) {
           classification = "unrelated/non-version semantic text";
           reason = "dependency lockfile entry; independent identity";
         } else if (entry.pathStack[0] === "packages" && entry.pathStack[1] !== "") {
@@ -341,15 +404,15 @@ function scanJsonVersions(filePath, content) {
         }
       }
       // 6. Dynamic candidate packages across repo (npm wrapper & platform packages)
-      else if (filePath.endsWith("package.json") && typeof parsed === "object" && parsed !== null
-          && (parsed.name === "@knowledge-forge-ai/theme-forge-nebular-fusion" || (typeof parsed.name === "string" && parsed.name.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-")))) {
+      else if (filePath.endsWith("package.json") && isJsonObject(parsed)
+          && (stringProperty(parsed, "name") === "@knowledge-forge-ai/theme-forge-nebular-fusion" || (stringProperty(parsed, "name")?.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-") ?? false))) {
         if (entry.pathStack.length === 1 && entry.pathStack[0] === "version") {
           classification = "derived/checked candidate surface";
           reason = "live product version reference";
         } else if (entry.pathStack[0] === "optionalDependencies" && typeof entry.key === "string" && entry.key.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-")) {
           classification = "derived/checked candidate surface";
           reason = "live product version reference";
-        } else if (entry.pathStack.length === 2 && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[0])) {
+        } else if (entry.pathStack.length === 2 && ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies", "engines"].includes(entry.pathStack[0] ?? "")) {
           classification = "unrelated/non-version semantic text";
           reason = "npm wrapper dependency";
         } else {
@@ -381,7 +444,28 @@ function scanJsonVersions(filePath, content) {
  * Classifies a version reference hit using exact semantic path- and field-ownership.
  * Replaces heuristic line-text classification with explicit maintained ownership.
  */
+/** @param {string} path @param {string} line @param {number} lineIndex @param {string[]} lines @param {VersionMatch} match @returns {ClassificationResult} */
 function classifyHit(path, line, lineIndex, lines, match) {
+  if (HISTORICAL_METADATA_FILES.has(path)) {
+    return { classification: "historical immutable evidence", reason: "retained generated or publication metadata; not a next-candidate build input" };
+  }
+  if (HISTORICAL_TEST_FIXTURE_FILES.has(path)) {
+    return { classification: "unrelated/non-version semantic text", reason: "retained signing test fixture version; not a candidate build input" };
+  }
+  if (INDEPENDENT_NIX_COMPONENT_FILES.has(path)
+      && /^\s*version\s*=\s*"\d+\.\d+\.\d+"\s*;\s*$/.test(line)) {
+    return { classification: "unrelated/non-version semantic text", reason: "independently versioned component Nix projection; separate release cadence" };
+  }
+  if (path === "apps/studio/src-tauri/build.rs"
+      && /^\s*(?:const|static)\s+ADMITTED_SOLAR_SAIL_VERSION\s*:\s*&(?:'static\s+)?str\s*=\s*"\d+\.\d+\.\d+"\s*;\s*$/.test(line)) {
+    return { classification: "unrelated/non-version semantic text", reason: "admitted Solar Sail component provenance version" };
+  }
+  if (path === "tools/distribution/qualify-distribution.mjs"
+      && !/^\s*(?:\/\/|\/\*|\*)/.test(line)
+      && (/^\s*(?:export\s+)?const\s+(?:AUTHORITATIVE_ACTIONLINT_VERSION|actionlintVersion)\s*=\s*["']\d+\.\d+\.\d+["']\s*;?\s*$/.test(line)
+        || line.slice(0, match.index ?? 0).endsWith("workflow-actionlint-"))) {
+    return { classification: "unrelated/non-version semantic text", reason: "pinned actionlint workflow syntax tool" };
+  }
   if (path.startsWith("apps/studio/src-tauri/gen/schemas/")) {
     return { classification: "unrelated/non-version semantic text", reason: "generated Tauri permission/schema field definitions; not live candidate metadata" };
   }
@@ -512,21 +596,21 @@ function classifyHit(path, line, lineIndex, lines, match) {
   if (path === "apps/studio/src-tauri/Cargo.lock") {
     let blockStart = -1;
     for (let i = lineIndex; i >= 0; i--) {
-      if (/^\s*\[\[package\]\]\s*$/.test(lines[i])) {
+      if (/^\s*\[\[package\]\]\s*$/.test(lines[i] ?? "")) {
         blockStart = i;
         break;
       }
     }
     let blockEnd = lines.length;
     for (let i = lineIndex + 1; i < lines.length; i++) {
-      if (/^\s*\[\[package\]\]\s*$/.test(lines[i])) {
+      if (/^\s*\[\[package\]\]\s*$/.test(lines[i] ?? "")) {
         blockEnd = i;
         break;
       }
     }
     if (blockStart !== -1) {
       const block = lines.slice(blockStart, blockEnd);
-      const isNebular = block.some(l => /^\s*name\s*=\s*"theme-forge-nebular-fusion"\s*$/.test(l));
+      const isNebular = block.some((l) => /^\s*name\s*=\s*"theme-forge-nebular-fusion"\s*$/.test(l));
       if (isNebular && /^\s*version\s*=\s*"[^"]+"/.test(line)) {
         return { classification: "derived/checked candidate surface", reason: "live product version reference" };
       }
@@ -538,9 +622,9 @@ function classifyHit(path, line, lineIndex, lines, match) {
   let cargoSection = null;
   if (path.endsWith("Cargo.toml")) {
     for (let i = lineIndex; i >= 0; i--) {
-      const secMatch = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+      const secMatch = (lines[i] ?? "").match(/^\s*\[([^\]]+)\]\s*$/);
       if (secMatch) {
-        cargoSection = secMatch[1].trim();
+        cargoSection = (secMatch[1] ?? "").trim();
         break;
       }
     }
@@ -548,7 +632,7 @@ function classifyHit(path, line, lineIndex, lines, match) {
       if (cargoSection === "package" && /^\s*version\s*=/.test(codeLine)) {
         return { classification: "derived/checked candidate surface", reason: "live product version reference" };
       }
-      if (/^\s*rust-version\s*=/.test(codeLine) || ["dependencies", "build-dependencies", "dev-dependencies"].includes(cargoSection)) {
+      if (/^\s*rust-version\s*=/.test(codeLine) || (cargoSection !== null && ["dependencies", "build-dependencies", "dev-dependencies"].includes(cargoSection))) {
         return { classification: "unrelated/non-version semantic text", reason: "rust toolchain or dependency specification" };
       }
       return { classification: null, reason: "unknown live version field requires maintained owner classification" };
@@ -610,7 +694,8 @@ function classifyHit(path, line, lineIndex, lines, match) {
     const inlinePropMatch = beforeMatch.match(/([A-Za-z0-9_$.-]+)['"]?\s*[:=]\s*['"]?$/);
     const varMatch = codeLine.match(/(?:^|\s)(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=/);
     const propMatch = codeLine.match(/^\s*["']?([A-Za-z0-9_$.-]+)["']?\s*[:=]/);
-    const declaredField = inlinePropMatch ? inlinePropMatch[1] : (varMatch ? varMatch[1] : (propMatch ? propMatch[1] : null));
+    /** @type {string | null} */
+    const declaredField = (inlinePropMatch ? inlinePropMatch[1] : (varMatch ? varMatch[1] : (propMatch ? propMatch[1] : null))) ?? null;
 
     // Injected unowned release or version declaration in tools MUST fail:
     if (declaredField && /^(?:release|releaseVersion|appVersion|unknownVersion)$/i.test(declaredField)) {
@@ -622,12 +707,12 @@ function classifyHit(path, line, lineIndex, lines, match) {
       };
     }
     if (path === "tools/nebular-release-layout.mjs") {
-      if (declaredField === "version" || /^(?:candidate_?version|nebular_?version)$/i.test(declaredField)) {
+      if (declaredField === "version" || (declaredField !== null && /^(?:candidate_?version|nebular_?version)$/i.test(declaredField))) {
         return { classification: "derived/checked candidate surface", reason: "live product version reference" };
       }
       return { classification: null, reason: "literal release declaration requires maintained field ownership" };
     }
-    if (/^(?:candidate_?version|nebular_?version)$/i.test(declaredField)) {
+    if (declaredField !== null && /^(?:candidate_?version|nebular_?version)$/i.test(declaredField)) {
       return { classification: "derived/checked candidate surface", reason: "live product version reference" };
     }
     if (/\.(?:toml|nix)$/.test(path) && declaredField === "version") {
@@ -635,6 +720,7 @@ function classifyHit(path, line, lineIndex, lines, match) {
     }
 
     // Specific tool implementations:
+    const context = lines.slice(Math.max(0, lineIndex - 6), Math.min(lines.length, lineIndex + 7)).join("\n");
     if (path === "tools/ci/ci-contract.mjs") {
       const surrounding = lines.slice(Math.max(0, lineIndex - 10), lineIndex + 1).join("\n");
       if (/NODE_RELEASE_IDENTITY|CARGO_AUDIT_IDENTITY|WASM_RENDERER_IDENTITY/.test(surrounding) && declaredField === "version") {
@@ -655,6 +741,12 @@ function classifyHit(path, line, lineIndex, lines, match) {
       if (declaredField === "version" && (lineIndex > 300 && lineIndex < 500)) {
         return { classification: "unrelated/non-version semantic text", reason: "gallery preview fixture package version" };
       }
+      const metadataOpener = lines.slice(Math.max(0, lineIndex - 6), lineIndex)
+        .concat(line.slice(0, match.index ?? 0))
+        .join("\n");
+      if (declaredField === "version" && /metadata:\s*\{[^}]*$/.test(metadataOpener)) {
+        return { classification: "unrelated/non-version semantic text", reason: "generated Starlight gallery preview metadata version" };
+      }
       if (/fixturePackages|starlight|astro/.test(line)) {
         return { classification: "unrelated/non-version semantic text", reason: "gallery preview fixture package version" };
       }
@@ -666,8 +758,6 @@ function classifyHit(path, line, lineIndex, lines, match) {
       }
       return { classification: null, reason: "unknown live version field requires maintained owner classification" };
     }
-    const context = lines.slice(Math.max(0, lineIndex - 6), Math.min(lines.length, lineIndex + 7)).join("\n");
-
     if (path === "apps/studio/tools/packaged-sidecar-smoke.mjs" || path === "apps/studio/tools/sidecar-transcript.mjs") {
       if (/protocol|runSidecarSession|sidecar/i.test(context)) {
         return { classification: "unrelated/non-version semantic text", reason: "frozen sidecar IPC protocol version; independent of application candidate" };
@@ -706,10 +796,15 @@ function classifyHit(path, line, lineIndex, lines, match) {
   return { classification: null, reason: "requires maintained owner classification" };
 }
 
+/** @param {string} [repoRoot] @returns {{ candidateVersion: string, visited: number, hits: VersionHit[], unclassified: VersionHit[], drift: VersionHit[], passed: boolean }} */
 export function discoverVersionReferences(repoRoot = resolve(".")) {
-  const hits = [], unclassified = [];
+  /** @type {VersionHit[]} */
+  const hits = [];
+  /** @type {VersionHit[]} */
+  const unclassified = [];
   let visited = 0;
 
+  /** @param {string} line @returns {VersionAssignment | null} */
   function extractVersionAssignment(line) {
     if (/^\s*(?:\/\/|\/\*|\*|#)/.test(line)) return null;
     const declMatch = line.match(/(?:^|\s)(?:export\s+)?(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*([^;,\n]+)/)
@@ -717,7 +812,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
       ?? line.match(/^\s*([A-Za-z0-9_$]+)\s+["']([^"']+)["']/);
 
     if (!declMatch) return null;
-    const field = declMatch[1];
+    const field = declMatch[1] ?? "";
     let rawVal = declMatch[2]?.trim() ?? "";
 
     // Must be a literal string or literal number, not an expression or function call
@@ -725,7 +820,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
     const numMatch = rawVal.match(/^(\d+)$/);
     if (!strMatch && !numMatch) return null;
 
-    const val = strMatch ? (strMatch[1] ?? strMatch[2] ?? strMatch[3]) : numMatch[1];
+    const val = strMatch ? (strMatch[1] ?? strMatch[2] ?? strMatch[3] ?? "") : (numMatch?.[1] ?? "");
 
     if (/version$/i.test(field) || /^(?:release|candidate_?version|nebular_?version|releaseVersion|appVersion|unknownVersion)$/i.test(field)) {
       return { field, value: val };
@@ -733,6 +828,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
     return null;
   }
 
+  /** @param {string} directory @param {string} [prefix] @returns {void} */
   function visit(directory, prefix = "") {
     for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
       const path = prefix + entry.name;
@@ -757,7 +853,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
             if (!hit.classification && !hit.reason) {
               const lineIndex = Math.max(0, hit.line - 1);
               const line = lines[lineIndex] ?? "";
-              const matchObj = { index: hit.column - 1, 0: hit.version };
+              const matchObj = { index: (hit.column ?? 1) - 1, 0: hit.version ?? "" };
               const resolved = classifyHit(path, line, lineIndex, lines, matchObj);
               hit.classification = resolved.classification;
               hit.reason = resolved.reason;
@@ -772,14 +868,14 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
       // Line-by-line scanning with semantic contextual classification
       const lines = content.split(/\r?\n/);
       for (let index = 0; index < lines.length; index++) {
-        const line = lines[index];
+        const line = lines[index] ?? "";
         const semverMatches = [...line.matchAll(VERSION)];
 
         if (semverMatches.length > 0) {
           for (const match of semverMatches) {
             const version = match[0];
             const { classification, reason } = classifyHit(path, line, index, lines, match);
-            const hit = { path, line: index + 1, column: match.index + 1, version, classification: classification ?? null, reason: reason ?? "requires maintained owner classification" };
+            const hit = { path, line: index + 1, column: (match.index ?? 0) + 1, version, classification: classification ?? null, reason: reason ?? "requires maintained owner classification" };
             hits.push(hit);
             if (!classification) unclassified.push(hit);
           }
@@ -787,7 +883,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
           // Check for non-semver version assignment (e.g. unknownVersion = "broken", version = "latest", version = 17)
           const decl = extractVersionAssignment(line);
           if (decl && isLivePath(path)) {
-            const { classification, reason } = classifyHit(path, line, index, lines, { index: 0, 0: decl.value });
+    const { classification, reason } = classifyHit(path, line, index, lines, { index: 0, 0: decl.value });
             const hit = { path, line: index + 1, column: 1, version: decl.value, classification: classification ?? null, reason: reason ?? "unknown live version field requires maintained owner classification" };
             hits.push(hit);
             if (!classification) unclassified.push(hit);
@@ -797,7 +893,7 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
     }
   }
   visit(repoRoot);
-  const drift = hits.filter(h => ["candidate-authoritative", "derived/checked candidate surface"].includes(h.classification)
+  const drift = hits.filter(h => h.classification !== null && ["candidate-authoritative", "derived/checked candidate surface"].includes(h.classification)
     && (h.reason === "live product version reference" || h.reason === "maintained application package version")
     && h.version !== CANDIDATE_VERSION);
   return { candidateVersion: CANDIDATE_VERSION, visited, hits, unclassified, drift,
@@ -808,14 +904,19 @@ export function discoverVersionReferences(repoRoot = resolve(".")) {
  * Discovers supported application candidate surfaces within apps/studio.
  * Uses semantic section and block parsing for Cargo.toml and Cargo.lock.
  */
+/** @param {string} studioRoot @returns {Surface[]} */
 export function discoverApplicationSurfaces(studioRoot) {
+    /** @param {string} rel @returns {string | null} */
   const readSafe = rel => {
     const p = join(studioRoot, rel);
     return existsSync(p) ? readFileSync(p, "utf8") : null;
   };
+  /** @param {string} rel @returns {JsonObject} */
   const json = rel => {
     const content = readSafe(rel);
-    return content ? JSON.parse(content) : {};
+    if (!content) return {};
+    const parsed = JSON.parse(content);
+    return isJsonObject(parsed) ? parsed : {};
   };
   const cargo = readSafe("src-tauri/Cargo.toml");
   const lock = readSafe("src-tauri/Cargo.lock");
@@ -841,7 +942,7 @@ export function discoverApplicationSurfaces(studioRoot) {
   return [
     { id: "studio-package.json", kind: "application", path: join(studioRoot, "package.json"), version: pkgJson.version, expected: CANDIDATE_VERSION },
     { id: "studio-package-lock.json", kind: "application", path: join(studioRoot, "package-lock.json"), version: pkgLock.version, expected: CANDIDATE_VERSION },
-    { id: "studio-package-lock.json#root-package", kind: "application", path: join(studioRoot, "package-lock.json"), version: pkgLock.packages?.[""]?.version, expected: CANDIDATE_VERSION },
+    { id: "studio-package-lock.json#root-package", kind: "application", path: join(studioRoot, "package-lock.json"), version: objectProperty(objectProperty(pkgLock, "packages") ?? {}, "")?.version, expected: CANDIDATE_VERSION },
     { id: "studio-tauri.conf.json", kind: "application", path: join(studioRoot, "src-tauri/tauri.conf.json"), version: tauriConf.version, expected: CANDIDATE_VERSION },
     { id: "studio-Cargo.toml", kind: "application", path: join(studioRoot, "src-tauri/Cargo.toml"), version: cargoVersion, expected: CANDIDATE_VERSION },
     { id: "studio-Cargo.lock", kind: "application", path: join(studioRoot, "src-tauri/Cargo.lock"), version: lockVersion, expected: CANDIDATE_VERSION },
@@ -853,7 +954,9 @@ export function discoverApplicationSurfaces(studioRoot) {
  * including npm wrapper, payload bindings, and all per-platform packages and manifests.
  * Dynamically discovers candidate package surfaces across the repo by package name.
  */
+/** @param {string} repoRoot @returns {Surface[]} */
 export function discoverPackageSurfaces(repoRoot) {
+  /** @type {Surface[]} */
   const surfaces = [];
   const skipDirs = new Set([
     ...SKIP_DIRECTORIES,
@@ -869,6 +972,7 @@ export function discoverPackageSurfaces(repoRoot) {
     "test-matrix",
   ]);
 
+  /** @param {string} currentDir @returns {void} */
   function walk(currentDir) {
     for (const entry of readdirSync(currentDir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
       if (entry.isDirectory()) {
@@ -878,8 +982,11 @@ export function discoverPackageSurfaces(repoRoot) {
       } else if (entry.name === "package.json") {
         const pkgPath = join(currentDir, entry.name);
         try {
-          const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-          if (pkg.name === "@knowledge-forge-ai/theme-forge-nebular-fusion") {
+          const parsed = JSON.parse(readFileSync(pkgPath, "utf8"));
+          /** @type {JsonObject} */
+          const pkg = isJsonObject(parsed) ? parsed : {};
+          const packageName = stringProperty(pkg, "name");
+          if (packageName === "@knowledge-forge-ai/theme-forge-nebular-fusion") {
             surfaces.push({
               id: "npm-wrapper-package.json",
               kind: "package",
@@ -894,12 +1001,13 @@ export function discoverPackageSurfaces(repoRoot) {
                 id: "npm-wrapper-payload-bindings.json",
                 kind: "package",
                 path: bindingsPath,
-                version: bindings.version,
+                version: isJsonObject(bindings) ? bindings.version : undefined,
                 expected: CANDIDATE_VERSION,
               });
             }
-            if (pkg.optionalDependencies) {
-              for (const [depName, depVer] of Object.entries(pkg.optionalDependencies)) {
+            const optionalDependencies = objectProperty(pkg, "optionalDependencies");
+            if (optionalDependencies) {
+              for (const [depName, depVer] of Object.entries(optionalDependencies)) {
                 if (depName.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-")) {
                   surfaces.push({
                     id: `npm-wrapper-optionalDependency:${depName}`,
@@ -911,7 +1019,7 @@ export function discoverPackageSurfaces(repoRoot) {
                 }
               }
             }
-          } else if ((typeof pkg.name === "string" && pkg.name.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-"))
+          } else if ((packageName?.startsWith("@knowledge-forge-ai/theme-forge-nebular-fusion-") ?? false)
             || (isLivePath(relative(repoRoot, pkgPath)) && !INDEPENDENT_PACKAGES.has(relative(repoRoot, pkgPath)))) {
             const dirName = basename(currentDir);
             surfaces.push({
@@ -937,7 +1045,7 @@ export function discoverPackageSurfaces(repoRoot) {
                 id: manifestId,
                 kind: "platform-manifest",
                 path: manifestPath,
-                version: manifest.version,
+                version: isJsonObject(manifest) ? manifest.version : undefined,
                 expected: CANDIDATE_VERSION,
               });
             } catch {
@@ -956,6 +1064,7 @@ export function discoverPackageSurfaces(repoRoot) {
  * Validates application projections in apps/studio.
  * Preserves compatibility with build-app.mjs while using maintained surface discovery.
  */
+/** @param {string} studioRoot @returns {string} */
 export function verifyApplicationVersion(studioRoot) {
   const surfaces = discoverApplicationSurfaces(studioRoot);
   const drift = surfaces.filter(s => s.version !== CANDIDATE_VERSION);
@@ -968,8 +1077,9 @@ export function verifyApplicationVersion(studioRoot) {
 /**
  * Checks a generated release/channel manifest against expected candidate version.
  */
+/** @param {unknown} manifest @param {string} [expectedVersion] @returns {boolean} */
 export function verifyChannelManifest(manifest, expectedVersion = CANDIDATE_VERSION) {
-  if (!manifest || typeof manifest !== "object") {
+  if (!isJsonObject(manifest)) {
     throw new Error("Invalid channel manifest: object expected");
   }
   if (manifest.version !== expectedVersion) {
@@ -977,6 +1087,7 @@ export function verifyChannelManifest(manifest, expectedVersion = CANDIDATE_VERS
   }
   if (Array.isArray(manifest.artifacts)) {
     for (const artifact of manifest.artifacts) {
+      if (!isJsonObject(artifact)) throw new Error("Invalid channel manifest artifact: object expected");
       if (typeof artifact.filename === "string" && !artifact.filename.includes(expectedVersion)) {
         throw new Error(`Channel manifest artifact filename '${artifact.filename}' does not contain expected version ${expectedVersion}`);
       }
@@ -988,6 +1099,7 @@ export function verifyChannelManifest(manifest, expectedVersion = CANDIDATE_VERS
 /**
  * Checks generated native launcher content against expected candidate version.
  */
+/** @param {unknown} launcherText @param {string} [expectedVersion] @returns {boolean} */
 export function verifyNativeLauncher(launcherText, expectedVersion = CANDIDATE_VERSION) {
   if (typeof launcherText !== "string") {
     throw new Error("Invalid launcher text: string expected");
@@ -1002,6 +1114,7 @@ export function verifyNativeLauncher(launcherText, expectedVersion = CANDIDATE_V
 /**
  * Checks generated Homebrew Cask content against expected candidate version.
  */
+/** @param {unknown} caskText @param {string} [expectedVersion] @returns {boolean} */
 export function verifyCaskManifest(caskText, expectedVersion = CANDIDATE_VERSION) {
   if (typeof caskText !== "string") {
     throw new Error("Invalid Cask manifest text: string expected");
@@ -1020,6 +1133,7 @@ export function verifyCaskManifest(caskText, expectedVersion = CANDIDATE_VERSION
  * Explicitly distinguishes candidate surfaces (which pass at 0.5.0) from unresolved production
  * surfaces, ensuring wholeCrossSurfaceInvariantPassed is NOT falsely asserted while Nix remains 0.4.0.
  */
+/** @param {string} repoRoot @returns {{ candidateVersion: string, discovery: ReturnType<typeof discoverVersionReferences>, candidateSurfaces: Surface[], candidateDrift: Surface[], candidatePassed: boolean, unresolvedSurfaces: UnresolvedSurface[], unalignedProductionSurfaces: UnresolvedSurface[], wholeCrossSurfaceInvariantPassed: boolean, summary: string }} */
 export function auditCrossSurfaceInvariants(repoRoot) {
   const discovery = discoverVersionReferences(repoRoot);
   const studioRoot = join(repoRoot, "apps/studio");
@@ -1029,6 +1143,7 @@ export function auditCrossSurfaceInvariants(repoRoot) {
 
   const candidateDrift = candidateSurfaces.filter(s => s.version !== CANDIDATE_VERSION);
 
+  /** @type {UnresolvedSurface[]} */
   const unresolvedSurfaces = [];
 
   // First-party Nix surface; the historical nixpkgs submission is outside this candidate.

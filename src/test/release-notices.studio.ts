@@ -192,6 +192,13 @@ describe("release-notices standalone legal notices generator", () => {
       expect(names).not.toContain("theme-forge-nebular-fusion");
     });
 
+    it("continues the license closure after a malformed dependency entry", () => {
+      const malformed = JSON.parse(JSON.stringify(mockMetadata));
+      malformed.resolve.nodes[0].deps.unshift({ name: "missing-package-id", dep_kinds: [{ kind: null }] });
+      const crates = resolveReachableCrates(malformed) as ResolvedCrate[];
+      expect(crates.map((crate) => crate.name)).toContain("transitive-normal");
+    });
+
     it("identifies proc macro crates correctly", () => {
       const resolved = resolveReachableCrates(mockMetadata) as ResolvedCrate[];
       const procMacro = resolved.find((c: ResolvedCrate) => c.name === "crate-proc-macro");
@@ -327,6 +334,11 @@ describe("release-notices standalone legal notices generator", () => {
         ],
       },
     };
+
+    it("rejects object entries in root notice paths", () => {
+      const malformed = { ...sampleManifest, root: { ...sampleManifest.root, files: [{ relativePath: "root/LICENSE" }] } };
+      expect(() => renderThirdPartyNoticesJson(malformed)).toThrow(/relative path/i);
+    });
 
     it("renders bit-identical JSON across multiple calls", () => {
       const json1 = renderThirdPartyNoticesJson(sampleManifest);

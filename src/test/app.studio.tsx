@@ -1,11 +1,35 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { App } from "../app/App";
 import { FixtureStudioHostBridge } from "../host/studio-host-bridge";
 import { MockThemeLabBridge } from "../features/theme-lab/test/mock-bridge";
 import { MockAppThemeBridge } from "../features/application-theme/app-theme-bridge";
-import type { StudioHostBridge } from "../protocol/contracts";
+import type { StudioHostBridge, StudioHostStatus } from "../protocol/contracts";
 
 const fixtureHostBridge = new FixtureStudioHostBridge();
+
+function statusWithState(base: StudioHostStatus, state: StudioHostStatus["state"]): StudioHostStatus {
+  return {
+    ...base,
+    state,
+    selectedProtocolVersion: state === "ready" ? "1.2" : null,
+    serverVersion: state === "ready" ? "0.1.0" : null,
+  };
+}
+
+function lifecycleBridge(
+  getStatus: StudioHostBridge["getStatus"],
+  startHost: StudioHostBridge["startHost"],
+): StudioHostBridge {
+  return {
+    source: "fixture-test",
+    getStatus,
+    startHost,
+    async selectProject() { return { cancelled: true }; },
+    async selectSource() { return { cancelled: true }; },
+    async shutdownHost() { return undefined; },
+    close() { return undefined; },
+  };
+}
 
 describe("TFSB47I sidecar host workbench", () => {
   it("renders bounded diagnostics and the closed design exchange", async () => {
@@ -44,6 +68,64 @@ describe("TFSB47I sidecar host workbench", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("Studio host unavailable");
     expect(screen.queryByText(/raw host detail/)).toBeNull();
     expect(screen.queryAllByRole("article")).toHaveLength(0);
+  });
+
+  it("ignores a mismatched deferred lifecycle status after the start result and keeps polling", async () => {
+    const base = await new FixtureStudioHostBridge().getStatus();
+    const stopped = statusWithState(base, "stopped");
+    const ready = statusWithState(base, "ready");
+    let statusCalls = 0;
+    let releaseLifecycleStatus!: (status: StudioHostStatus) => void;
+    const lifecycleStatus = new Promise<StudioHostStatus>((resolve) => { releaseLifecycleStatus = resolve; });
+    const bridge = lifecycleBridge(
+      async () => {
+        statusCalls += 1;
+        if (statusCalls === 1) return stopped;
+        if (statusCalls === 2) return lifecycleStatus;
+        return ready;
+      },
+      async (onEvent) => {
+        onEvent({ schemaVersion: 1, sequence: 1, state: "starting" });
+        return ready;
+      },
+    );
+
+    render(<App hostBridge={bridge} />);
+    expect(await screen.findByText("stopped")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start sidecar" }));
+
+    await waitFor(() => expect(screen.getByText("ready")).toBeTruthy());
+    await act(async () => { releaseLifecycleStatus(stopped); });
+    expect(screen.getByRole("button", { name: "Restart sidecar" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Stop sidecar" }) as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(3), { timeout: 2_500 });
+    expect(screen.getByText("ready")).toBeTruthy();
+  });
+
+  it("applies a matching lifecycle crash status while the start command is unresolved", async () => {
+    const base = await new FixtureStudioHostBridge().getStatus();
+    const stopped = statusWithState(base, "stopped");
+    const crashed = { ...statusWithState(base, "crashed"), lastReasonCode: "sidecar-crashed" };
+    let statusCalls = 0;
+    let releaseStart!: (status: StudioHostStatus) => void;
+    const startResult = new Promise<StudioHostStatus>((resolve) => { releaseStart = resolve; });
+    const bridge = lifecycleBridge(
+      async () => {
+        statusCalls += 1;
+        return statusCalls === 1 ? stopped : crashed;
+      },
+      async (onEvent) => {
+        onEvent({ schemaVersion: 1, sequence: 2, state: "crashed", reasonCode: "sidecar-crashed" });
+        return startResult;
+      },
+    );
+
+    render(<App hostBridge={bridge} />);
+    expect(await screen.findByText("stopped")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Start sidecar" }));
+    await waitFor(() => expect(screen.getByText("crashed")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Start sidecar" })).toBeTruthy();
+    await act(async () => { releaseStart(crashed); });
   });
 
   it("switches destination view among Brand / System, Vector / Graphics, Starlight Theme, and Application Theme", async () => {

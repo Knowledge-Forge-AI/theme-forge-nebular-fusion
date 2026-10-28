@@ -1,7 +1,6 @@
 // @ts-check
 import assert from "node:assert/strict";
 import { test, describe, beforeEach, afterEach } from "node:test";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -18,12 +17,16 @@ import {
 
 import {
   prepareSolarSail,
+  verifyPreparedSolarSailPayload,
   EXPECTED_SOLAR_SAIL_NAME,
   EXPECTED_SOLAR_SAIL_VERSION,
   EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST,
+  SOLAR_SAIL_BUILD_PIN_SCHEMA,
   SOLAR_SAIL_RUNTIME_MEMBERS,
   SOLAR_SAIL_DECLARATION_MEMBERS,
 } from "./solar-sail-prepare.mjs";
+
+import { inventoryTree } from "./candidate-provenance.mjs";
 
 import {
   prepareSceneFromSource,
@@ -32,15 +35,29 @@ import {
   sceneBinding,
 } from "./scene-prepare.mjs";
 
+import { assembleSourceBuildPins } from "./prepare-app-resources.mjs";
+
 import { SCENE_MEMBERS } from "./scene-input-build.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const STUDIO_ROOT = resolve(__dirname, "..");
 const AUTH_NODE_PATH = resolve(STUDIO_ROOT, "src-tauri/binaries/tfsb-studio-service-aarch64-apple-darwin");
-const SCENE_PAYLOAD_SRC = resolve(STUDIO_ROOT, "src-tauri/scene-payload");
+const RETAINED_SCENE_ARCHIVE_PATH = process.env.TFSB_RETAINED_SCENE_ARCHIVE;
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+function rebuildSceneBinding(binding, files) {
+  const inventory = files.map((file) => ({ ...file }));
+  return {
+    ...binding,
+    files: files.map((file) => ({ ...file })),
+    inventory,
+    fileCount: files.length,
+    bytes: files.reduce((total, file) => total + file.bytes, 0),
+    sha256: digest(files.map((file) => `${file.path}:${file.sha256}`).join("\n")),
+  };
+}
 
 /**
  * Creates a valid source-built Loom package tree in a directory.
@@ -126,13 +143,33 @@ async function createMockSourceSolarSailPackage(targetDir) {
   for (const member of SOLAR_SAIL_RUNTIME_MEMBERS) {
     const full = join(targetDir, member);
     await mkdir(dirname(full), { recursive: true });
-    await writeFile(full, `export const name = "${member}";\n`);
+    if (member === "dist/index.js") {
+      await writeFile(
+        full,
+        `export const name = "${member}";\nexport * from "./input.js";\nexport * from "./compiler.js";\nexport * from "./paired-v2/bound.js";\n`
+      );
+    } else {
+      await writeFile(full, `export const name = "${member}";\n`);
+    }
   }
 
   for (const decl of SOLAR_SAIL_DECLARATION_MEMBERS) {
     const full = join(targetDir, decl);
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, `export declare const name: string;\n`);
+  }
+
+  for (const extra of [
+    ["dist/input.js", "export const input = true;\n"],
+    ["dist/input.d.ts", "export declare const input: boolean;\n"],
+    ["dist/input.d.ts.map", '{"version":3,"file":"input.d.ts","sources":["../src/input.ts"],"names":[],"mappings":""}\n'],
+    ["dist/paired-v2/bound.js", "export const bound = true;\n"],
+    ["dist/paired-v2/bound.d.ts", "export declare const bound: boolean;\n"],
+    ["dist/paired-v2/bound.d.ts.map", '{"version":3,"file":"bound.d.ts","sources":["../../src/paired-v2/bound.ts"],"names":[],"mappings":""}\n'],
+  ]) {
+    const full = join(targetDir, extra[0]);
+    await mkdir(dirname(full), { recursive: true });
+    await writeFile(full, extra[1]);
   }
 
   for (const legal of ["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md", "README.md"]) {
@@ -181,7 +218,7 @@ async function createMockBurstAndDependencies(baseDir) {
   // smol-toml dependency
   const tomlDir = join(baseDir, "smol-toml");
   await mkdir(join(tomlDir, "dist"), { recursive: true });
-  await writeFile(join(tomlDir, "package.json"), JSON.stringify({ name: "smol-toml", version: "1.8.0", type: "module" }) + "\n");
+  await writeFile(join(tomlDir, "package.json"), JSON.stringify({ name: "smol-toml", version: "1.9.1", type: "module" }) + "\n");
   await writeFile(join(tomlDir, "dist/index.js"), "export default {};\n");
   await writeFile(join(tomlDir, "LICENSE"), "MIT\n");
 
@@ -317,33 +354,66 @@ describe("Source-built resource preparation for Solar Sail", () => {
     }
   });
 
-  test("prepareSolarSail consumes explicit source-built root without historical compiled digest expectation", async () => {
+  async function makeSolarSourceAuthority(rootDir) {
+    const tree = await inventoryTree(rootDir);
+    return {
+      sourceModel: "source-candidate-v2",
+      sourceCandidate: "a".repeat(64),
+      target: "aarch64-apple-darwin",
+      component: {
+        name: "solar",
+        source: "b".repeat(64),
+        output: tree.identity,
+        producer: "c".repeat(64),
+        version: EXPECTED_SOLAR_SAIL_VERSION,
+      },
+    };
+  }
+
+  test("prepareSolarSail consumes explicit source-built root with structured sourceAuthority and indexes full dist closure", async () => {
     const studioDir = join(testScratch, "studio");
     await mkdir(studioDir, { recursive: true });
 
     const solarPackageRoot = join(testScratch, "source-solar");
     await createMockSourceSolarSailPackage(solarPackageRoot);
+    const sourceAuthority = await makeSolarSourceAuthority(solarPackageRoot);
 
-    const binding = await prepareSolarSail({
+    const res = await prepareSolarSail({
       studioRoot: studioDir,
       packageRoot: solarPackageRoot,
       release: true,
+      sourceAuthority,
     });
 
-    assert.equal(binding.schema, "tfsb.solar-sail-binding-v1");
-    assert.equal(binding.name, EXPECTED_SOLAR_SAIL_NAME);
-    assert.equal(binding.version, EXPECTED_SOLAR_SAIL_VERSION);
-    assert.equal(binding.runtimeMemberCount, 8);
+    assert.equal(res.route, "structured-source");
+    assert.equal(res.binding.schema, "tfsb.solar-sail-binding-v1");
+    assert.equal(res.binding.name, EXPECTED_SOLAR_SAIL_NAME);
+    assert.equal(res.binding.version, EXPECTED_SOLAR_SAIL_VERSION);
+    assert.equal(res.binding.runtimeMemberCount, 22);
+    assert.equal(res.buildPin.schema, SOLAR_SAIL_BUILD_PIN_SCHEMA);
+    assert.equal(res.buildPin.package.name, EXPECTED_SOLAR_SAIL_NAME);
+    assert.equal(res.buildPin.package.version, EXPECTED_SOLAR_SAIL_VERSION);
+    assert.equal(res.buildPin.binding.memberCount, 22);
+    assert.equal(res.buildPin.binding.inventoryDigest, res.binding.inventoryDigest);
+    assert.equal(res.buildPin.provenance.structuredSource.sourceCandidate, sourceAuthority.sourceCandidate);
+    assert.equal(res.buildPin.provenance.structuredSource.componentSource, sourceAuthority.component.source);
+    assert.equal(res.buildPin.provenance.structuredSource.output, sourceAuthority.component.output);
+    assert.equal(res.buildPin.provenance.structuredSource.producer, sourceAuthority.component.producer);
+    assert.equal(res.buildPin.provenance.structuredSource.version, sourceAuthority.component.version);
 
-    // Verify it did NOT require historical EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST
-    assert.notEqual(binding.inventoryDigest, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
+    assert.notEqual(res.binding.inventoryDigest, EXPECTED_SOLAR_SAIL_INVENTORY_DIGEST);
 
-    // Payload verification
     const payloadDir = join(studioDir, "src-tauri/solar-sail-payload");
     assert.ok(existsSync(join(payloadDir, "dist/index.js")));
     assert.ok(existsSync(join(payloadDir, "dist/compiler.js")));
+    assert.ok(existsSync(join(payloadDir, "dist/input.d.ts.map")));
+    assert.ok(existsSync(join(payloadDir, "dist/paired-v2/bound.js")));
     assert.ok(existsSync(join(payloadDir, "package.json")));
     assert.ok(existsSync(join(payloadDir, "solar-sail-binding.json")));
+    assert.equal(existsSync(join(studioDir, "src-tauri/solar-sail-build-pin.json")), false);
+
+    const verified = await verifyPreparedSolarSailPayload(payloadDir, res.buildPin);
+    assert.equal(verified.inventoryDigest, res.binding.inventoryDigest);
   });
 
   test("prepareSolarSail consumes explicit source-built root in nested Nix layout", async () => {
@@ -353,14 +423,65 @@ describe("Source-built resource preparation for Solar Sail", () => {
     const nixRoot = join(testScratch, "nix-solar");
     const nested = join(nixRoot, "lib/node_modules/@knowledge-forge-ai/theme-forge-solar-sail");
     await createMockSourceSolarSailPackage(nested);
+    const sourceAuthority = await makeSolarSourceAuthority(nixRoot);
 
-    const binding = await prepareSolarSail({
+    const res = await prepareSolarSail({
       studioRoot: studioDir,
       packageRoot: nixRoot,
       release: true,
+      sourceAuthority,
     });
 
-    assert.equal(binding.name, EXPECTED_SOLAR_SAIL_NAME);
+    assert.equal(res.route, "structured-source");
+    assert.equal(res.binding.name, EXPECTED_SOLAR_SAIL_NAME);
+    assert.equal(res.buildPin.provenance.structuredSource.output, sourceAuthority.component.output);
+  });
+
+  test("prepareSolarSail rejects direct packageRoot without structured sourceAuthority", async () => {
+    const studioDir = join(testScratch, "studio");
+    await mkdir(studioDir, { recursive: true });
+    const solarPackageRoot = join(testScratch, "unanchored-solar");
+    await createMockSourceSolarSailPackage(solarPackageRoot);
+
+    await assert.rejects(
+      () => prepareSolarSail({
+        studioRoot: studioDir,
+        packageRoot: solarPackageRoot,
+        release: true,
+      }),
+      /\[SOLAR_SAIL_PREPARE_UNSUPPORTED\]/
+    );
+  });
+
+  test("prepareSolarSail rejects packageRoot when sourceAuthority output digest or producer is invalid", async () => {
+    const studioDir = join(testScratch, "studio");
+    await mkdir(studioDir, { recursive: true });
+    const solarPackageRoot = join(testScratch, "tampered-authority-solar");
+    await createMockSourceSolarSailPackage(solarPackageRoot);
+    const sourceAuthority = await makeSolarSourceAuthority(solarPackageRoot);
+    sourceAuthority.component.output = "f".repeat(64);
+
+    await assert.rejects(
+      () => prepareSolarSail({
+        studioRoot: studioDir,
+        packageRoot: solarPackageRoot,
+        release: true,
+        sourceAuthority,
+      }),
+      /\[SOLAR_SAIL_PREPARE_FAIL\] Solar Sail source tree digest mismatch/
+    );
+
+    const missingProducerAuthority = await makeSolarSourceAuthority(solarPackageRoot);
+    missingProducerAuthority.component.producer = "invalid";
+    await assert.rejects(
+      () => prepareSolarSail({
+        studioRoot: studioDir,
+        packageRoot: solarPackageRoot,
+        release: true,
+        sourceAuthority: missingProducerAuthority,
+      }),
+      /\[SOLAR_SAIL_PREPARE_FAIL\] Invalid structured sourceAuthority for Solar Sail preparation/
+    );
   });
 
   test("prepareSolarSail rejects missing packageRoot", async () => {
@@ -407,7 +528,7 @@ describe("Source-built resource preparation for Solar Sail", () => {
     );
   });
 
-  test("prepareSolarSail legacy path still enforces historical inventory digest", async () => {
+  test("prepareSolarSail legacy path rejects unauthenticated archive identity before extraction", async () => {
     const studioDir = join(testScratch, "studio");
     await mkdir(studioDir, { recursive: true });
 
@@ -419,7 +540,7 @@ describe("Source-built resource preparation for Solar Sail", () => {
         studioRoot: studioDir,
         tarball: fakeTarball,
       }),
-      /\[SOLAR_SAIL_PREPARE_FAIL\] Failed to inspect tarball/
+      /\[SOLAR_SAIL_PREPARE_FAIL\] Solar Sail archive identity mismatch/
     );
   });
 });
@@ -455,9 +576,27 @@ describe("Source-built resource preparation for Scene", () => {
     assert.equal(binding.engineSchema, "tfsb.vector-scene-v1");
     assert.equal(binding.capability, "0.5-development");
     assert.equal(binding.sourceIdentity, "a".repeat(64));
+    assert.equal(binding.sourceTreeDigest, binding.sourceIdentity);
+    assert.equal(binding.node.version, "22.23.3");
+    assert.equal(binding.node.target, "aarch64-apple-darwin");
+    assert.deepEqual(binding.runtime, binding.node);
+    assert.equal(binding.fileCount, binding.files.length);
+    assert.deepEqual(binding.inventory, binding.files);
     assert.ok(binding.runtime.sha256);
     assert.ok(binding.runtime.bytes > 0);
     assert.ok(Array.isArray(binding.inventory));
+    const paths = binding.files.map((file) => file.path);
+    assert.deepEqual(paths, [...paths].sort(), "Scene inventory must use code-unit order");
+    const adapterBytes = await readFile(join(destination, "bin/scene-batch.js"));
+    assert.equal(digest(adapterBytes), binding.adapterSha256);
+    assert.equal(digest(await readFile(join(STUDIO_ROOT, "tools/scene-batch.js"))), binding.adapterSha256);
+    assert.equal((await readFile(join(destination, "package.json"), "utf8")), '{"private":true,"type":"module"}\n');
+    const provenance = JSON.parse(await readFile(join(destination, "scene-input.json"), "utf8"));
+    assert.equal(provenance.schema, "tfsb.scene-input-v1");
+    assert.equal(provenance.sourceIdentity, binding.sourceIdentity);
+    assert.equal(provenance.sourceTreeDigest, binding.sourceTreeDigest);
+    assert.equal(provenance.developmentCapability, binding.capability);
+    assert.equal(provenance.metadataVersion, binding.metadataVersion);
 
     // Destination contents verification
     assert.ok(existsSync(join(destination, "bin/scene-batch.js")));
@@ -480,6 +619,7 @@ describe("Source-built resource preparation for Scene", () => {
     const receipt = await verifyScenePayload(destination, AUTH_NODE_PATH, binding);
     assert.equal(receipt.schema, "tfsb.scene-payload-receipt-v1");
     assert.equal(receipt.files, binding.files.length);
+    assert.equal(receipt.inputSha256, binding.sha256);
     const relocated = join(testScratch, "relocated-burst");
     await cp(burstDir, relocated, { recursive: true });
     const relocatedBinding = await prepareSceneFromSource({
@@ -489,6 +629,177 @@ describe("Source-built resource preparation for Scene", () => {
     });
     assert.deepEqual(relocatedBinding, binding, "Scene identity must exclude execution paths and timestamps");
     assert.ok(!JSON.stringify(binding).includes(testScratch));
+  });
+
+  test("assembleSourceBuildPins projects a closed structured Scene receipt", async () => {
+    const { burstDir, xmldomDir, tomlDir } = await createMockBurstAndDependencies(testScratch);
+    const destination = join(testScratch, "aggregate-scene-payload");
+    const binding = await prepareSceneFromSource({
+      sourceIdentity: "a".repeat(64), studioRoot: STUDIO_ROOT, burstRoot: burstDir,
+      node: AUTH_NODE_PATH, destination, xmldomRoot: xmldomDir, tomlRoot: tomlDir,
+    });
+    const loomPayloadDir = join(testScratch, "loom-payload");
+    await mkdir(loomPayloadDir, { recursive: true });
+    await writeFile(join(loomPayloadDir, "index.js"), "export {}\n");
+    const runtimeBytes = await readFile(AUTH_NODE_PATH);
+    const runtime = { sha256: digest(runtimeBytes), size: runtimeBytes.length };
+    const pins = await assembleSourceBuildPins({
+      sourceCandidate: "a".repeat(64),
+      targetTriple: "aarch64-apple-darwin",
+      sidecarManifest: { runtime },
+      sceneReceipt: binding,
+      packagedRuntimeNodePath: AUTH_NODE_PATH,
+      loomPayloadDir,
+    });
+
+    assert.deepEqual(pins.scene.runtime, {
+      version: binding.runtime.version,
+      target: binding.runtime.target,
+      sha256: binding.runtime.sha256,
+      bytes: binding.runtime.bytes,
+    });
+    assert.deepEqual(pins.scene.node, pins.scene.runtime);
+    assert.notStrictEqual(pins.scene.runtime, binding.runtime);
+    assert.notStrictEqual(pins.scene.files, binding.files);
+    assert.notStrictEqual(pins.scene.inventory, binding.inventory);
+    binding.runtime.sha256 = "f".repeat(64);
+    binding.files[0].sha256 = "f".repeat(64);
+    assert.equal(pins.scene.runtime.sha256, runtime.sha256);
+    assert.notEqual(pins.scene.files[0].sha256, "f".repeat(64));
+
+    await assert.rejects(
+      () => assembleSourceBuildPins({
+        sourceCandidate: "a".repeat(64),
+        targetTriple: "aarch64-apple-darwin",
+        sidecarManifest: { runtime },
+        sceneReceipt: { node: binding.node, files: binding.files },
+        packagedRuntimeNodePath: AUTH_NODE_PATH,
+        loomPayloadDir,
+      }),
+      /Scene structured-source binding/,
+    );
+  });
+
+  test("verifyScenePayload rejects forged structured members and runtime target fallback", async () => {
+    const { burstDir, xmldomDir, tomlDir } = await createMockBurstAndDependencies(testScratch);
+    const destination = join(testScratch, "scene-payload-forgery-source");
+    const binding = await prepareSceneFromSource({
+      sourceIdentity: "d".repeat(64), studioRoot: STUDIO_ROOT, burstRoot: burstDir,
+      node: AUTH_NODE_PATH, destination, xmldomRoot: xmldomDir, tomlRoot: tomlDir,
+    });
+
+    const forgedInputPayload = join(testScratch, "scene-payload-forgery-input");
+    await cp(destination, forgedInputPayload, { recursive: true });
+    const forgedInput = JSON.parse(await readFile(join(forgedInputPayload, "scene-input.json"), "utf8"));
+    forgedInput.sourceTreeDigest = "e".repeat(64);
+    await writeFile(join(forgedInputPayload, "scene-input.json"), JSON.stringify(forgedInput, null, 2) + "\n");
+    const forgedInputBinding = { ...binding };
+    const inputBytes = await readFile(join(forgedInputPayload, "scene-input.json"));
+    forgedInputBinding.files = binding.files.map((file) => file.path === "scene-input.json"
+      ? { ...file, bytes: inputBytes.length, sha256: digest(inputBytes) } : file);
+    forgedInputBinding.inventory = forgedInputBinding.files;
+    forgedInputBinding.bytes = forgedInputBinding.files.reduce((sum, file) => sum + file.bytes, 0);
+    forgedInputBinding.sha256 = digest(forgedInputBinding.files.map((file) => `${file.path}:${file.sha256}`).join("\n"));
+    await assert.rejects(
+      () => verifyScenePayload(forgedInputPayload, AUTH_NODE_PATH, forgedInputBinding),
+      /scene-input provenance is inconsistent/
+    );
+
+    const forgedPackagePayload = join(testScratch, "scene-payload-forgery-package");
+    await cp(destination, forgedPackagePayload, { recursive: true });
+    const packageBytes = Buffer.from('{"private":false}\n');
+    await writeFile(join(forgedPackagePayload, "package.json"), packageBytes);
+    const forgedPackageBinding = { ...binding };
+    forgedPackageBinding.files = binding.files.map((file) => file.path === "package.json"
+      ? { ...file, bytes: packageBytes.length, sha256: digest(packageBytes) } : file);
+    forgedPackageBinding.inventory = forgedPackageBinding.files;
+    forgedPackageBinding.bytes = forgedPackageBinding.files.reduce((sum, file) => sum + file.bytes, 0);
+    forgedPackageBinding.sha256 = digest(forgedPackageBinding.files.map((file) => `${file.path}:${file.sha256}`).join("\n"));
+    await assert.rejects(
+      () => verifyScenePayload(forgedPackagePayload, AUTH_NODE_PATH, forgedPackageBinding),
+      /generated members are invalid|root package identity mismatch/
+    );
+
+    const malformedIdentity = { ...binding, sourceIdentity: "invalid", sourceTreeDigest: "invalid" };
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, malformedIdentity),
+      /source identity is invalid/,
+    );
+
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, { ...binding, unexpected: true }),
+      /contains unexpected fields/,
+    );
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, { ...binding, node: { ...binding.node, unexpected: true } }),
+      /runtime receipt is inconsistent/,
+    );
+
+    const mandatoryPath = "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/index.js";
+    const missingMandatory = rebuildSceneBinding(binding, binding.files.filter((file) => file.path !== mandatoryPath));
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, missingMandatory),
+      /missing mandatory closure members/,
+    );
+
+    const extraPath = rebuildSceneBinding(binding, [
+      ...binding.files,
+      { path: "unexpected.js", bytes: 1, sha256: digest(Buffer.from("x")) },
+    ]);
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, extraPath),
+      /inventory is inconsistent/,
+    );
+
+    const forgedAdapterPayload = join(testScratch, "scene-payload-forgery-adapter");
+    await cp(destination, forgedAdapterPayload, { recursive: true });
+    const forgedAdapterBytes = Buffer.from("export const forgedAdapter = true;\n");
+    await writeFile(join(forgedAdapterPayload, "bin/scene-batch.js"), forgedAdapterBytes);
+    const forgedAdapterBinding = rebuildSceneBinding(
+      { ...binding, adapterSha256: digest(forgedAdapterBytes) },
+      binding.files.map((file) => file.path === "bin/scene-batch.js"
+        ? { ...file, bytes: forgedAdapterBytes.length, sha256: digest(forgedAdapterBytes) } : file),
+    );
+    await assert.rejects(
+      () => verifyScenePayload(forgedAdapterPayload, AUTH_NODE_PATH, forgedAdapterBinding),
+      /adapter authority is invalid/,
+    );
+
+    const forbiddenPayload = join(testScratch, "scene-payload-forgery-facility");
+    await cp(destination, forbiddenPayload, { recursive: true });
+    const forbiddenPath = "node_modules/@knowledge-forge-ai/theme-forge-stellar-burst/dist/scene/index.js";
+    const forbiddenBytes = Buffer.from('import("node:fs");\n');
+    await writeFile(join(forbiddenPayload, forbiddenPath), forbiddenBytes);
+    const forbiddenBinding = rebuildSceneBinding(binding, binding.files.map((file) => file.path === forbiddenPath
+      ? { ...file, bytes: forbiddenBytes.length, sha256: digest(forbiddenBytes) } : file));
+    await assert.rejects(
+      () => verifyScenePayload(forbiddenPayload, AUTH_NODE_PATH, forbiddenBinding),
+      /unsupported execution facility/,
+    );
+
+    const targetMismatch = {
+      ...binding,
+      runtime: { ...binding.runtime, target: "x86_64-unknown-linux-gnu" },
+      node: { ...binding.node, target: "x86_64-unknown-linux-gnu" },
+    };
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, targetMismatch),
+      /structured-source runtime target does not match|runtime receipt does not match the maintained Node authority/
+    );
+  });
+
+  test("verifyScenePayload rejects an inconsistent structured-source receipt", async () => {
+    const { burstDir, xmldomDir, tomlDir } = await createMockBurstAndDependencies(testScratch);
+    const destination = join(testScratch, "inconsistent-scene-payload");
+    const binding = await prepareSceneFromSource({
+      sourceIdentity: "b".repeat(64), studioRoot: STUDIO_ROOT, burstRoot: burstDir,
+      node: AUTH_NODE_PATH, destination, xmldomRoot: xmldomDir, tomlRoot: tomlDir,
+    });
+    const inconsistent = { ...binding, sourceTreeDigest: "c".repeat(64) };
+    await assert.rejects(
+      () => verifyScenePayload(destination, AUTH_NODE_PATH, inconsistent),
+      /Scene structured-source binding source identity is invalid/
+    );
   });
 
   test("prepareSceneFromSource derives payload from nested Nix Burst layout", async () => {
@@ -596,31 +907,13 @@ describe("Source-built resource preparation for Scene", () => {
     );
   });
 
-  test("legacy prepareScenePayload and verifyScenePayload interface is preserved", async () => {
+  test("legacy prepareScenePayload and verifyScenePayload interface is preserved", async (t) => {
+    if (!RETAINED_SCENE_ARCHIVE_PATH || !existsSync(RETAINED_SCENE_ARCHIVE_PATH)) {
+      t.skip("retained published Scene archive input is unavailable");
+      return;
+    }
     const archivePath = join(testScratch, "legacy-scene.tgz");
-    execFileSync("python3", ["-c", String.raw`
-import gzip, pathlib, sys, tarfile, shutil, tempfile
-src = pathlib.Path(sys.argv[1])
-out_path = pathlib.Path(sys.argv[2])
-with tempfile.TemporaryDirectory() as tmp:
-    staging = pathlib.Path(tmp) / "tree"
-    staging.mkdir()
-    for f in sorted(x for x in src.rglob("*") if x.is_file()):
-        rel = f.relative_to(src).as_posix()
-        if rel.startswith("bin/") or rel == "package.json":
-            continue
-        dest = staging / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(f, dest)
-    with open(out_path, "xb") as raw, gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=1704067200) as gz, tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as t:
-        for p in sorted(x for x in staging.rglob("*") if x.is_file()):
-            i = tarfile.TarInfo(p.relative_to(staging).as_posix())
-            i.size = p.stat().st_size
-            i.mode = 0o644
-            i.mtime = 1704067200
-            with p.open("rb") as f:
-                t.addfile(i, f)
-`, SCENE_PAYLOAD_SRC, archivePath], { stdio: "pipe", timeout: 15_000 });
+    await cp(RETAINED_SCENE_ARCHIVE_PATH, archivePath);
 
     const dest = join(testScratch, "legacy-scene-dest");
     const receipt = await prepareScenePayload({

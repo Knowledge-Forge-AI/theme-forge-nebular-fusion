@@ -178,6 +178,9 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 Path::new("src/app_theme/runner.rs"),
                 Path::new("src/commands/design_packet.rs"),
                 Path::new("src/commands/theme_packet.rs"),
+                // Payload closure owner: bounded read-only, no-follow verification of the
+                // compiled Solar Sail package closure; it has no process or write authority.
+                Path::new("src/app_theme/payload_authentication.rs"),
                 Path::new("src/design_evidence/io.rs"),
                 Path::new("src/scene/io.rs"),
                 Path::new("src/sidecar/scene_artifact.rs"),
@@ -231,6 +234,26 @@ fn release_smoke_filesystem_authority_is_confined_to_its_owner() -> io::Result<(
         root.join("src/release_smoke/mod.rs"),
         "fn spawn() { std::process::Command::new(\"sh\"); }\n",
     )?;
+    assert!(scan_production(&root).is_err());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn payload_authentication_filesystem_authority_is_confined_to_its_owner() -> io::Result<()> {
+    let root = fixture_root("payload-auth-owner");
+    write_fixture(&root, None, false)?;
+    let payload = root.join("src/app_theme/payload_authentication.rs");
+    fs::write(&payload, "use std::fs;\n")?;
+    assert!(scan_production(&root).is_ok());
+    fs::write(
+        &payload,
+        "use std::fs;\nfn spawn() { std::process::Command::new(\"sh\"); }\n",
+    )?;
+    assert!(scan_production(&root).is_err());
+    fs::write(&payload, "use std::fs;\n")?;
+    assert!(scan_production(&root).is_ok());
+    fs::write(root.join("src/app_theme/mod.rs"), "use std::fs;\n")?;
     assert!(scan_production(&root).is_err());
     fs::remove_dir_all(root)?;
     Ok(())

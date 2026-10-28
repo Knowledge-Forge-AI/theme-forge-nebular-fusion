@@ -86,7 +86,7 @@ export function validateResourcePatternPath(srcTauriDir, pattern) {
   if (parts.some((p) => p === "..")) {
     throw new Error(`[RESOURCE_CLOSURE_FAIL] Resource pattern escapes src-tauri root (traversal segment '..'): ${pattern}`);
   }
-  const prefix = pattern.split("*")[0].replace(/[/\\]+$/, "");
+  const prefix = (pattern.split("*")[0] ?? "").replace(/[/\\]+$/, "");
   const resolved = resolve(srcTauriDir, prefix);
   const rel = relative(srcTauriDir, resolved);
   if (rel.startsWith("..") || isAbsolute(rel)) {
@@ -177,7 +177,7 @@ export async function resolveResourcePattern(srcTauriDir, pattern) {
       .sort();
   }
 
-  const prefix = pattern.split("*")[0].replace(/[/\\]+$/, "");
+  const prefix = (pattern.split("*")[0] ?? "").replace(/[/\\]+$/, "");
   const fullPrefix = resolve(srcTauriDir, prefix);
   return await collectFilesRecursive(srcTauriDir, fullPrefix);
 }
@@ -475,7 +475,14 @@ if (invokedDirectly) {
     }
   }
 
-  verifyTauriResourceClosure({ appDir, srcTauriDir, target, buildReady, bindingPath })
+  /** @type {VerifyClosureOptions} */
+  const verifyOptions = { buildReady };
+  if (appDir !== undefined) verifyOptions.appDir = appDir;
+  if (srcTauriDir !== undefined) verifyOptions.srcTauriDir = srcTauriDir;
+  if (target !== undefined) verifyOptions.target = target;
+  if (bindingPath !== undefined) verifyOptions.bindingPath = bindingPath;
+
+  verifyTauriResourceClosure(verifyOptions)
     .then((result) => {
       if (jsonOutput) {
         console.log(JSON.stringify(result, null, 2));

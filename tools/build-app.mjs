@@ -4,9 +4,10 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scanShippedPaths } from "./scan-shipped-paths.mjs";
-import { prepareAppResources } from "./prepare-app-resources.mjs";
+import { prepareAppResources, parsePreparedPreviewHandoff, validatePreparedPreviewHandoff } from "./prepare-app-resources.mjs";
 import { verifyApplicationVersion } from "./candidate-version.mjs";
 import { nativeLauncher } from "./native-launcher.mjs";
+import { authenticateNativeRuntimeInput, stageNativeRuntime, verifyRuntimeSourceSnapshot } from "./native-runtime.mjs";
 import { targetForHost, APPLICATION_NAME, resourceDirectories, resourcePreparationPlan, tauriRustTargetPlan } from "./platform-targets.mjs";
 import { loadBuildInputs, sourceBuildPathPolicy, sourcePathRemapFlags } from "./build-inputs.mjs";
 import { finalizeDarwinAppBundle } from "./finalize-darwin-bundle.mjs";
@@ -17,6 +18,12 @@ const productTarget = targetForHost();
 const sourceAuthority = process.env.NEBULAR_BUILD_INPUTS ? await loadBuildInputs(process.env.NEBULAR_BUILD_INPUTS) : null;
 if (process.env.NEBULAR_BUILD_MODE && !sourceAuthority) throw new Error("Source build requires structured build inputs");
 if (sourceAuthority && sourceAuthority.target.triple !== productTarget.triple) throw new Error("Source build target mismatch");
+const preparedPreviewHandoff = parsePreparedPreviewHandoff(process.env.NEBULAR_PREPARED_PREVIEW_HANDOFF);
+if (preparedPreviewHandoff) {
+  if (!sourceAuthority) throw new Error("Prepared preview handoff requires structured build inputs");
+  validatePreparedPreviewHandoff(preparedPreviewHandoff, { studioRoot: root, authority: sourceAuthority });
+  if (productTarget.os !== "darwin") throw new Error("Prepared preview handoff is only admitted for Darwin builds");
+}
 verifyApplicationVersion(root);
 const run = (command, args, env = process.env) => {
   const result = spawnSync(command, args, { cwd: root, env, stdio: "inherit", timeout: 1_800_000 });
@@ -46,6 +53,22 @@ if (process.env.RUSTFLAGS && !process.env.CARGO_ENCODED_RUSTFLAGS) {
   throw new Error("Use CARGO_ENCODED_RUSTFLAGS for additional application build flags");
 }
 const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(root, "src-tauri/target");
+const runtimeInputPath = process.env.NEBULAR_NATIVE_RUNTIME_INPUT;
+const runtimeInputSha256 = process.env.NEBULAR_NATIVE_RUNTIME_INPUT_SHA256;
+if ((runtimeInputPath !== undefined || runtimeInputSha256 !== undefined) && (!runtimeInputPath || !runtimeInputSha256)) {
+  throw new Error("NEBULAR_NATIVE_RUNTIME_INPUT and NEBULAR_NATIVE_RUNTIME_INPUT_SHA256 must be supplied together");
+}
+if (runtimeInputPath && productTarget.os !== "linux") {
+  throw new Error("Private native runtime input is only supported on Linux targets");
+}
+const authenticatedRuntime = runtimeInputPath
+  ? await authenticateNativeRuntimeInput(runtimeInputPath, runtimeInputSha256, {
+      expectedTarget: productTarget.triple,
+      outputRoots: [root, target],
+    })
+  : null;
+let primaryBuildError = null;
+try {
 const flags = (process.env.CARGO_ENCODED_RUSTFLAGS ?? "").split("\u001f").filter(Boolean);
 const defaultRemaps = [
   [homedir(), "/build-user"],
@@ -57,6 +80,8 @@ const pathPolicy = sourceAuthority ? await sourceBuildPathPolicy(sourceAuthority
 if (pathPolicy) flags.push(...sourcePathRemapFlags(pathPolicy,
   defaultRemaps.map(([path, replacement]) => ({ path, replacement }))));
 else for (const [source, replacement] of defaultRemaps) flags.push(`--remap-path-prefix=${source}=${replacement}`);
+// Omit Darwin linker debug-object records that retain absolute archive paths.
+if (productTarget.os === "darwin") flags.push("-Clink-arg=-Wl,-S");
 const forbiddenPaths = [homedir(), root, target, process.env.CARGO_HOME,
   ...(pathPolicy?.forbiddenPrefixes ?? [])].filter(Boolean);
 const tauriCargoTargetDir = rustTargetPlan.nestedCargoTargetDir
@@ -71,7 +96,11 @@ const env = {
 };
 const config = JSON.parse(readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"));
 resourcePreparationPlan(config, productTarget);
-await prepareAppResources({ studioRoot: root, ...(sourceAuthority ? { buildInputs: sourceAuthority.inputs } : {}) });
+await prepareAppResources({
+  studioRoot: root,
+  ...(sourceAuthority ? { buildInputs: sourceAuthority.inputs } : {}),
+  ...(preparedPreviewHandoff ? { preparedPreview: preparedPreviewHandoff } : {}),
+});
 const sidecarManifest = JSON.parse(readFileSync(join(root, "src-tauri/sidecar-payload/manifest.json"), "utf8"));
 if (sidecarManifest.target !== productTarget.triple) {
   throw new Error(`Prepared sidecar target does not match ${productTarget.triple}`);
@@ -120,9 +149,24 @@ if (productTarget.os === "darwin") {
   for (const resource of resourceDirectories(config)) {
     cpSync(join(root, "src-tauri", resource), join(resources, resource), { recursive: true, errorOnExist: true, force: false });
   }
-  writeFileSync(join(output, "bin/tfnf"), nativeLauncher(productTarget));
+  if (authenticatedRuntime) {
+    await stageNativeRuntime(output, authenticatedRuntime);
+  }
+  writeFileSync(join(output, "bin/tfnf"), nativeLauncher(productTarget, { nativeRuntime: Boolean(authenticatedRuntime) }));
   chmodSync(join(output, "bin/tfnf"), 0o755);
 }
 await scanShippedPaths(productTarget.os === "darwin" ? app : join(release, "bundle/raw"), forbiddenPaths,
   { preserveSpellings: Boolean(pathPolicy) });
 console.log(`Default-feature ${productTarget.system} app built; local build-path checks passed`);
+} catch (err) {
+  primaryBuildError = err;
+  throw err;
+} finally {
+  if (authenticatedRuntime) {
+    try {
+      await verifyRuntimeSourceSnapshot(authenticatedRuntime);
+    } catch (postErr) {
+      if (!primaryBuildError) throw postErr;
+    }
+  }
+}

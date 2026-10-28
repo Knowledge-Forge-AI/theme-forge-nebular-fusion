@@ -507,5 +507,261 @@
         }
       ]
     }
+  ],
+  "frontendFixture": {
+    "sourceBindings": {
+      "monorepo": {
+        "packagePath": "packages/stellar-loom/fixture/package.json",
+        "lockPath": "packages/stellar-loom/fixture/package-lock.json"
+      },
+      "publicComposition": {
+        "packagePath": "loom-preview-source/package.json",
+        "lockPath": "loom-preview-source/package-lock.json"
+      }
+    },
+    "packageSize": 1710,
+    "packageSha256": "f9d70bba198317d9f1f8bc8e489708493904ca2bc2f93c43e14fb3d5308d1969",
+    "lockSize": 207196,
+    "lockSha256": "93460393472204ff181f16ac415821a2b9e84f54beb13333895934eba651df15"
+  },
+  "frontendPackages": [
+    {
+      "name": "astro",
+      "version": "7.3.3",
+      "license": "MIT",
+      "role": "distributed-static-runtime",
+      "lockPackagePath": "node_modules/astro",
+      "packageManifest": {
+        "path": "frontend/astro-7.3.3/package.json",
+        "size": 8348,
+        "sha256": "52e1cf1509a5762418fc014c00b1af5120f1d64a2a11a64779304e47f2e7bc30"
+      },
+      "files": [
+        {
+          "path": "frontend/astro-7.3.3/LICENSE",
+          "size": 3628,
+          "sha256": "4aa72be797aad0e5e21827eaae6a1df9e122d7a401f07d2c308a6b9a5f0e1278",
+          "role": "license-text"
+        }
+      ]
+    },
+    {
+      "name": "@astrojs/starlight",
+      "version": "0.42.0",
+      "license": "MIT",
+      "role": "distributed-static-runtime",
+      "lockPackagePath": "node_modules/@astrojs/starlight",
+      "packageManifest": {
+        "path": "frontend/starlight-0.42.0/package.json",
+        "size": 3931,
+        "sha256": "49d9751e4becd027fc36e2e3ee63652769c00449d578080bfe70604cefa49601"
+      },
+      "files": [
+        {
+          "path": "frontend/starlight-0.42.0/LICENSE",
+          "size": 1137,
+          "sha256": "a0ee39c239b80f632b663fc02a44893be6c8489815a776e231a2fff17c12ef42",
+          "role": "license-text"
+        }
+      ]
+    },
+    {
+      "name": "pagefind",
+      "version": "1.5.2",
+      "license": "MIT",
+      "role": "distributed-static-runtime",
+      "lockPackagePath": "node_modules/pagefind",
+      "packageManifest": {
+        "path": "frontend/pagefind-1.5.2/package.json",
+        "size": 1052,
+        "sha256": "d7d3b49b1e21d3d1efa63661f34ad69a8084ac68ff3678288dff925494bc0acd"
+      },
+      "files": [
+        {
+          "path": "frontend/pagefind-1.5.2/LICENSE",
+          "size": 1251,
+          "sha256": "f7499d8f9a345ba2846f39325271de0fdf54c1d2968eadfde7998625cc45add0",
+          "role": "license-text"
+        },
+        {
+          "path": "frontend/pagefind-1.5.2/mark.js-LICENSE.txt",
+          "size": 259,
+          "sha256": "3c2e9072347f0da6a8505b573d528ed7f3353d613ca57581a1828cf924d7749a",
+          "role": "bundled-third-party-license"
+        },
+        {
+          "path": "frontend/pagefind-1.5.2/mark.js-MIT.txt",
+          "size": 1088,
+          "sha256": "402936bcc8f1b6947750eb9193183d7d0c4dbca3c0ba06398571d94ee85c24be",
+          "role": "bundled-third-party-license-full",
+          "upstream": {
+            "package": "mark.js",
+            "version": "8.11.1",
+            "repository": "https://github.com/julmot/mark.js",
+            "revision": "8.11.1",
+            "path": "LICENSE",
+            "url": "https://raw.githubusercontent.com/julmot/mark.js/8.11.1/LICENSE"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@pagefind/default-ui",
+      "version": "1.5.2",
+      "license": "MIT",
+      "role": "distributed-static-runtime",
+      "lockPackagePath": "node_modules/@pagefind/default-ui",
+      "licenseSourcePackage": "pagefind@1.5.2",
+      "embeddedProvenance": {
+        "kind": "svelte-compiled-default-ui",
+        "parentPackage": "@pagefind/default-ui@1.5.2",
+        "parentManifestSha256": "cb46e3fc707aa802c383c8a9fea44c300de5761a414460b8137353e7a6778874",
+        "dependencyLock": {
+          "repository": "https://github.com/Pagefind/pagefind",
+          "revision": "v1.5.2",
+          "path": "pagefind_ui/default/package-lock.json"
+        },
+        "bundledDependencies": [
+          {
+            "package": "svelte",
+            "version": "4.2.20",
+            "license": "MIT",
+            "lockPackagePath": "node_modules/svelte",
+            "source": "https://github.com/sveltejs/svelte",
+            "revision": "svelte@4.2.20",
+            "licensePath": "LICENSE.md",
+            "noticeFile": "svelte-4.2.20-LICENSE.md"
+          },
+          {
+            "package": "bcp-47",
+            "version": "2.1.0",
+            "license": "MIT",
+            "lockPackagePath": "node_modules/bcp-47",
+            "source": "https://github.com/wooorm/bcp-47",
+            "revision": "2.1.0",
+            "licensePath": "license",
+            "noticeFile": "bcp-47-2.1.0-license"
+          },
+          {
+            "package": "is-alphabetical",
+            "version": "2.0.1",
+            "license": "MIT",
+            "lockPackagePath": "node_modules/is-alphabetical",
+            "source": "https://github.com/wooorm/is-alphabetical",
+            "revision": "2.0.1",
+            "licensePath": "license",
+            "noticeFile": "is-alphabetical-2.0.1-license"
+          },
+          {
+            "package": "is-alphanumerical",
+            "version": "2.0.1",
+            "license": "MIT",
+            "lockPackagePath": "node_modules/is-alphanumerical",
+            "source": "https://github.com/wooorm/is-alphanumerical",
+            "revision": "2.0.1",
+            "licensePath": "license",
+            "noticeFile": "is-alphanumerical-2.0.1-license"
+          },
+          {
+            "package": "is-decimal",
+            "version": "2.0.1",
+            "license": "MIT",
+            "lockPackagePath": "node_modules/is-decimal",
+            "source": "https://github.com/wooorm/is-decimal",
+            "revision": "2.0.1",
+            "licensePath": "license",
+            "noticeFile": "is-decimal-2.0.1-license"
+          }
+        ],
+        "sourceFiles": [
+          {
+            "path": "@pagefind/default-ui/svelte/filters.svelte",
+            "size": 6724,
+            "sha256": "883c6767e2ee5869e8718f9160c2a30116a1237ed434f61a8931628eb93e7a12"
+          },
+          {
+            "path": "@pagefind/default-ui/svelte/reset.svelte",
+            "size": 3033,
+            "sha256": "16704600322b7e34e2bc40ebefdaa57d1d0021d8d49c8619d718600dc70f4204"
+          },
+          {
+            "path": "@pagefind/default-ui/svelte/result.svelte",
+            "size": 5897,
+            "sha256": "0870ef32e6b99d50bb3e13046348ff951873b62b41efe9dab0771ef23d879750"
+          },
+          {
+            "path": "@pagefind/default-ui/svelte/result_with_subs.svelte",
+            "size": 6298,
+            "sha256": "6de52ec3561f7aa7159a72a385a122640cedd5329826cdae664f88edbd90db53"
+          },
+          {
+            "path": "@pagefind/default-ui/svelte/ui.svelte",
+            "size": 16473,
+            "sha256": "b8d6222ae2ee28f567541efcb586c65262ebf4eb93155811162e8fe8927e48ca"
+          }
+        ],
+        "emittedMembers": [
+          {
+            "path": "pagefind/pagefind-ui.js",
+            "size": 119987,
+            "sha256": "2efa93f2e80a199ca742a69bd4cfffabc5c591ebe7763f64f7c655fd00d2209f"
+          },
+          {
+            "path": "pagefind/pagefind-ui.css",
+            "size": 14482,
+            "sha256": "e113b816110ed07b017613e901addfe635350f2a5b84990aa76c91a74b158084"
+          },
+          {
+            "path": "_astro/ui-core.CWY5S9Ti.js",
+            "size": 93823,
+            "sha256": "9e2658146ef594311dcebc70267cb69df12960869364d5cad343afab818eba79"
+          }
+        ],
+        "licenseCoverage": "Pagefind's MIT license covers its authored default UI; the emitted Svelte 4.2.20 runtime and BCP 47 parser helpers (bcp-47 2.1.0, is-alphabetical 2.0.1, is-alphanumerical 2.0.1, and is-decimal 2.0.1) are separately retained under their MIT terms."
+      },
+      "packageManifest": {
+        "path": "frontend/pagefind-default-ui-1.5.2/package.json",
+        "size": 709,
+        "sha256": "cb46e3fc707aa802c383c8a9fea44c300de5761a414460b8137353e7a6778874"
+      },
+      "files": [
+        {
+          "path": "frontend/pagefind-1.5.2/LICENSE",
+          "size": 1251,
+          "sha256": "f7499d8f9a345ba2846f39325271de0fdf54c1d2968eadfde7998625cc45add0",
+          "role": "shared-license-text"
+        },
+        {
+          "path": "frontend/pagefind-default-ui-1.5.2/svelte-4.2.20-LICENSE.md",
+          "size": 1117,
+          "sha256": "97a941bae1c510c556c5daf017180e4939ea392357d9a7bae2657e3e20c69c42",
+          "role": "bundled-third-party-license"
+        },
+        {
+          "path": "frontend/pagefind-default-ui-1.5.2/bcp-47-2.1.0-license",
+          "size": 1099,
+          "sha256": "ca4662cb5d1b738fbe5350c0d5485ba11773b4b7208974082ae6e129a52d631d",
+          "role": "bundled-third-party-license"
+        },
+        {
+          "path": "frontend/pagefind-default-ui-1.5.2/is-alphabetical-2.0.1-license",
+          "size": 1099,
+          "sha256": "ca4662cb5d1b738fbe5350c0d5485ba11773b4b7208974082ae6e129a52d631d",
+          "role": "bundled-third-party-license"
+        },
+        {
+          "path": "frontend/pagefind-default-ui-1.5.2/is-alphanumerical-2.0.1-license",
+          "size": 1099,
+          "sha256": "ca4662cb5d1b738fbe5350c0d5485ba11773b4b7208974082ae6e129a52d631d",
+          "role": "bundled-third-party-license"
+        },
+        {
+          "path": "frontend/pagefind-default-ui-1.5.2/is-decimal-2.0.1-license",
+          "size": 1099,
+          "sha256": "ca4662cb5d1b738fbe5350c0d5485ba11773b4b7208974082ae6e129a52d631d",
+          "role": "bundled-third-party-license"
+        }
+      ]
+    }
   ]
 }

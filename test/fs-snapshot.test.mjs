@@ -6,7 +6,7 @@
 // Races are injected through the reader hooks, which run after the descriptor is opened and after its
 // bytes or entries are read -- the exact windows in which a concurrent writer would act.
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -237,7 +237,7 @@ test("flow build-settings inventory: identities are byte-compatible with the pre
 test("flow build-settings inventory: members changed during measurement fail closed", async t => {
   const base = await scratch(t, "inventory-race");
   const { root } = await locatorFixture(base);
-  const target = join(root, "dir/nested.txt");
+  const target = realpathSync(join(root, "dir/nested.txt"));
   const before = openDescriptorCount();
 
   const onNested = fn => ({ path, ...rest }) => { if (path === target) fn({ path, ...rest }); };
@@ -247,7 +247,7 @@ test("flow build-settings inventory: members changed during measurement fail clo
   await writeFile(target, "nested\n");
   await chmod(target, 0o600);
   // A directory that gains a member while it is listed is rejected.
-  const dirPath = join(root, "dir");
+  const dirPath = realpathSync(join(root, "dir"));
   await assert.rejects(inventoryPath(root, { reader: createSnapshotReader({ afterRead: ({ path }) => { if (path === dirPath) sh(`touch ${q(join(dirPath, "late"))}`); } }) }), /changed while it was read/);
   await rm(join(dirPath, "late"), { force: true });
   // A member swapped for a link between name resolution and open is never followed.

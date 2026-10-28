@@ -1,8 +1,13 @@
 // Product targets, deliberately narrower than Burst's historical target set.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL as NodeURL } from "node:url";
 
+/** @typedef {{ system: "aarch64-darwin" | "aarch64-linux" | "x86_64-linux", triple: "aarch64-apple-darwin" | "aarch64-unknown-linux-gnu" | "x86_64-unknown-linux-gnu", os: "darwin" | "linux", cpu: "arm64" | "x64", addon: "darwin-arm64" | "linux-arm64-gnu" | "linux-x64-gnu", format: "app.tar.gz" | "tar.gz" }} PlatformTarget */
+/** @typedef {{ bundle?: { resources?: unknown, externalBin?: string[] } }} TauriConfig */
+/** @typedef {{ sourceMode?: string, productTriple: string, rustcVerbose: string }} RustTargetPlanOptions */
+
+/** @param {unknown} version @returns {string} */
 export function requireCandidateVersion(version) {
   const number = "(?:0|[1-9][0-9]*)";
   const identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
@@ -11,7 +16,8 @@ export function requireCandidateVersion(version) {
   return version;
 }
 
-export function readCandidateVersion(studioRoot = fileURLToPath(new URL("../", import.meta.url))) {
+/** @param {string} [studioRoot] @returns {string} */
+export function readCandidateVersion(studioRoot = fileURLToPath(new NodeURL("../", import.meta.url))) {
   return requireCandidateVersion(JSON.parse(readFileSync(join(studioRoot, "package.json"), "utf8")).version);
 }
 
@@ -20,6 +26,7 @@ export const APPLICATION_NAME = "theme-forge-nebular-fusion";
 
 // Raw Linux staging uses the same declaration as Tauri's macOS bundler.
 // Reject new resource shapes until their raw-layout semantics are implemented.
+/** @param {TauriConfig} config @returns {string[]} */
 export function resourceDirectories(config) {
   const resources = config.bundle?.resources;
   if (!Array.isArray(resources) || !resources.length
@@ -32,6 +39,7 @@ export function resourceDirectories(config) {
 
 // Preparation ownership is keyed by Tauri's resource membership. Every current
 // resource applies to all product targets; an omission is never implicit.
+/** @type {Readonly<Record<string, string>>} */
 export const RESOURCE_PREPARERS = Object.freeze({
   "sidecar-payload": "sidecar",
   "loom-payload": "loom",
@@ -42,36 +50,49 @@ export const RESOURCE_PREPARERS = Object.freeze({
   "release-notices": "notices",
 });
 
+/** @param {TauriConfig} config @param {PlatformTarget} target @returns {Array<{ directory: string, preparer: string, applicable: true, target: string }>} */
 export function resourcePreparationPlan(config, target) {
   if (!TARGETS.includes(target)) throw new Error("Unknown preparation target");
   const directories = resourceDirectories(config);
   if (JSON.stringify([...directories].sort()) !== JSON.stringify(Object.keys(RESOURCE_PREPARERS).sort())) {
     throw new Error("Tauri resource membership and preparation ownership disagree");
   }
-  return directories.map(directory => ({ directory, preparer: RESOURCE_PREPARERS[directory], applicable: true, target: target.triple }));
+  return directories.map(directory => {
+    const preparer = RESOURCE_PREPARERS[directory];
+    if (!preparer) throw new Error("Tauri resource membership and preparation ownership disagree");
+    return { directory, preparer, applicable: true, target: target.triple };
+  });
 }
+/** @type {ReadonlyArray<Readonly<PlatformTarget>>} */
 export const TARGETS = Object.freeze([
   Object.freeze({ system: "aarch64-darwin", triple: "aarch64-apple-darwin", os: "darwin", cpu: "arm64", addon: "darwin-arm64", format: "app.tar.gz" }),
   Object.freeze({ system: "aarch64-linux", triple: "aarch64-unknown-linux-gnu", os: "linux", cpu: "arm64", addon: "linux-arm64-gnu", format: "tar.gz" }),
   Object.freeze({ system: "x86_64-linux", triple: "x86_64-unknown-linux-gnu", os: "linux", cpu: "x64", addon: "linux-x64-gnu", format: "tar.gz" }),
 ]);
 
+/** @param {string} [os] @param {string} [cpu] @returns {PlatformTarget} */
 export function targetForHost(os = process.platform, cpu = process.arch) {
   const target = TARGETS.find(target => target.os === os && target.cpu === cpu);
   if (!target) throw new Error(`Unsupported Nebular target: ${os}/${cpu}`);
-  if (os === "linux" && os === process.platform && cpu === process.arch
-      && !process.report.getReport().header.glibcVersionRuntime) {
-    throw new Error("Nebular requires GNU/glibc Linux");
+  if (os === "linux" && os === process.platform && cpu === process.arch) {
+    const report = process.report.getReport();
+    if (!report || typeof report !== "object" || !("header" in report)
+        || !report.header || typeof report.header !== "object"
+        || !("glibcVersionRuntime" in report.header) || !report.header.glibcVersionRuntime) {
+      throw new Error("Nebular requires GNU/glibc Linux");
+    }
   }
   return target;
 }
 
+/** @param {string} triple @returns {PlatformTarget} */
 export function targetForTriple(triple) {
   const target = TARGETS.find(target => target.triple === triple);
   if (!target) throw new Error("Unsupported Nebular Rust target");
   return target;
 }
 
+/** @param {PlatformTarget} target @returns {{ executable: string, resources: string }} */
 export function payloadLayout(target) {
   if (!TARGETS.includes(target)) throw new Error("Unknown product target");
   return target.os === "darwin"
@@ -80,13 +101,17 @@ export function payloadLayout(target) {
 }
 
 
+/** @param {unknown} verbose @returns {string} */
 export function parseRustcHostTriple(verbose) {
   if (typeof verbose !== "string") throw new Error("rustc -vV output is required");
   const matches = [...verbose.matchAll(/^host:\s*(\S+)\s*$/gm)];
   if (matches.length !== 1) throw new Error("rustc -vV must expose exactly one host triple");
-  return matches[0][1];
+  const hostTriple = matches[0]?.[1];
+  if (!hostTriple) throw new Error("rustc -vV must expose exactly one host triple");
+  return hostTriple;
 }
 
+/** @param {RustTargetPlanOptions} options @returns {{ hostTriple: string | null, tauriArgs: readonly string[], nestedCargoTargetDir: boolean, mode: string }} */
 export function tauriRustTargetPlan({ sourceMode, productTriple, rustcVerbose }) {
   if (typeof productTriple !== "string" || !productTriple) {
     throw new Error("Product Rust target triple is required");

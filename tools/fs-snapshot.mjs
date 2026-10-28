@@ -21,23 +21,48 @@ const CREATE_NEW = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | c
 
 export const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
 
+/** @typedef {import("node:fs").Stats} Stats */
+/** @typedef {{ dev: number, ino: number, size: number, mode: number, mtimeMs: number, ctimeMs: number }} DescriptorIdentity */
+/** @typedef {Record<string, string | (() => string)>} Messages */
+/** @typedef {{ follow?: boolean | undefined, bindPath?: boolean | undefined, missingOk?: boolean | undefined, maxBytes?: number | undefined, label?: string | undefined, messages?: Messages | undefined }} ReaderOptions */
+/** @typedef {{ fd: number, stat: Stats }} Opened */
+/** @typedef {{ bytes: Buffer, sha256: string, size: number, mode: number, executable: boolean, identity: DescriptorIdentity }} Snapshot */
+/** @typedef {{ type: "file" | "directory", size: number, mode: number, identity: DescriptorIdentity }} DescriptorSummary */
+/** @typedef {{ type: "file" } & Snapshot | { type: "directory", entries: string[], mode: number, identity: DescriptorIdentity }} Inspection */
+/** @callback BeforeOpen @param {{ path: string }} payload @returns {void} */
+/** @callback AfterDescriptor @param {{ path: string, fd: number, stat: Stats }} payload @returns {void} */
+/** @typedef {{ beforeOpen?: BeforeOpen, afterOpen?: AfterDescriptor, afterRead?: AfterDescriptor }} SnapshotHooks */
+/** @typedef {{ fd: number, stat: Stats, type: "file" | "directory" | "other", read: () => Snapshot }} BoundMember */
+
+/** @param {unknown} error */
+function errorCode(error) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/** @param {Buffer} bytes */
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+/** @param {Stats} stat @returns {DescriptorIdentity} */
 export function descriptorIdentity(stat) {
   return { dev: stat.dev, ino: stat.ino, size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
 }
 
+/** @param {DescriptorIdentity} left @param {DescriptorIdentity} right */
 export function sameIdentity(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.size === right.size
     && left.mode === right.mode && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
+/** @param {Stats} left @param {Stats} right */
 function sameObject(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/** @param {Messages | undefined} messages @param {string} key @param {string} fallback */
 function message(messages, key, fallback) {
   const value = messages?.[key];
   return typeof value === "function" ? value() : value ?? fallback;
@@ -46,20 +71,23 @@ function message(messages, key, fallback) {
 // Hooks exist only for deterministic race tests: they run just before the open, after the descriptor
 // is opened and after its bytes (or directory entries) are read, which is exactly where a concurrent
 // writer would act. Production callers use the default reader, which has none.
+/** @param {SnapshotHooks} [hooks] */
 export function createSnapshotReader(hooks = {}) {
   const beforeOpen = hooks.beforeOpen ?? (() => {});
   const afterOpen = hooks.afterOpen ?? (() => {});
   const afterRead = hooks.afterRead ?? (() => {});
 
+  /** @param {string} path @param {ReaderOptions} [options] @returns {Opened | null} */
   function open(path, { follow = false, label = "File", messages = {}, missingOk = false } = {}) {
     let fd;
     beforeOpen({ path });
     try {
       fd = openSync(path, follow ? FOLLOW_READ : NOFOLLOW_READ);
     } catch (error) {
-      if (error?.code === "ENOENT" && missingOk) return null;
-      if (error?.code === "ENOENT") throw Object.assign(new Error(message(messages, "missing", `${label} is missing: ${path}`)), { code: "ENOENT" });
-      if (error?.code === "ELOOP" || error?.code === "EMLINK") {
+      const code = errorCode(error);
+      if (code === "ENOENT" && missingOk) return null;
+      if (code === "ENOENT") throw Object.assign(new Error(message(messages, "missing", `${label} is missing: ${path}`)), { code: "ENOENT" });
+      if (code === "ELOOP" || code === "EMLINK") {
         throw Object.assign(new Error(message(messages, "symlink", `${label} must not be a symbolic link: ${path}`)), { code: "ELOOP" });
       }
       throw error;
@@ -74,7 +102,8 @@ export function createSnapshotReader(hooks = {}) {
     }
   }
 
-  function requireUnchanged(fd, stat, path, { follow, bindPath, label, messages }) {
+  /** @param {number} fd @param {Stats} stat @param {string} path @param {ReaderOptions} options */
+  function requireUnchanged(fd, stat, path, { follow, bindPath, label, messages = {} }) {
     if (!sameIdentity(descriptorIdentity(stat), descriptorIdentity(fstatSync(fd)))) {
       throw new Error(message(messages, "changed", `${label} changed while it was read: ${path}`));
     }
@@ -83,7 +112,7 @@ export function createSnapshotReader(hooks = {}) {
       try {
         named = follow ? statSync(path) : lstatSync(path);
       } catch (error) {
-        if (error?.code === "ENOENT") throw new Error(message(messages, "replaced", `${label} was removed while it was read: ${path}`));
+        if (errorCode(error) === "ENOENT") throw new Error(message(messages, "replaced", `${label} was removed while it was read: ${path}`));
         throw error;
       }
       if (named.isSymbolicLink() || !sameObject(named, stat)) {
@@ -92,6 +121,7 @@ export function createSnapshotReader(hooks = {}) {
     }
   }
 
+  /** @param {number} fd @param {Stats} stat @param {string} path @param {ReaderOptions} options @returns {Buffer} */
   function readOpened(fd, stat, path, options) {
     const { label = "File", messages = {}, maxBytes = DEFAULT_MAX_BYTES } = options;
     if (stat.size > maxBytes) throw new Error(message(messages, "tooLarge", `${label} exceeds ${maxBytes} bytes: ${path}`));
@@ -108,6 +138,7 @@ export function createSnapshotReader(hooks = {}) {
     return bytes;
   }
 
+  /** @param {Buffer} bytes @param {Stats} stat @returns {Snapshot} */
   function snapshotOf(bytes, stat) {
     return { bytes, sha256: sha256(bytes), size: stat.size, mode: stat.mode & 0o7777, executable: Boolean(stat.mode & 0o111), identity: descriptorIdentity(stat) };
   }
@@ -115,7 +146,8 @@ export function createSnapshotReader(hooks = {}) {
   /**
    * Read one regular file through a single descriptor.
    * @param {string} path
-   * @param {{ follow?: boolean, bindPath?: boolean, missingOk?: boolean, maxBytes?: number, label?: string, messages?: object }} [options]
+   * @param {ReaderOptions} [options]
+   * @returns {Snapshot | null}
    */
   function readRegular(path, options = {}) {
     const opened = open(path, options);
@@ -129,7 +161,12 @@ export function createSnapshotReader(hooks = {}) {
     }
   }
 
-  /** Type and identity of a member from its own descriptor, without reading its bytes. */
+  /**
+   * Type and identity of a member from its own descriptor, without reading its bytes.
+   * @param {string} path
+   * @param {ReaderOptions} [options]
+   * @returns {DescriptorSummary | null}
+   */
   function describe(path, options = {}) {
     const opened = open(path, options);
     if (!opened) return null;
@@ -148,6 +185,9 @@ export function createSnapshotReader(hooks = {}) {
    * descriptor; a directory is listed and must be unchanged (and still named by path) afterwards.
    * Node cannot list a directory through a descriptor, so the listing is bracketed by descriptor and
    * pathname identity checks instead.
+   * @param {string} path
+   * @param {ReaderOptions} [options]
+   * @returns {Inspection | null}
    */
   function inspect(path, options = {}) {
     const opened = open(path, options);
@@ -170,6 +210,11 @@ export function createSnapshotReader(hooks = {}) {
   /**
    * Hold a descriptor while a caller measures the object by other means, then require that the
    * descriptor and pathname still name the object that was opened.
+   * @template T
+   * @param {string} path
+   * @param {ReaderOptions} options
+   * @param {(member: BoundMember) => T} use
+   * @returns {Promise<Awaited<T>> | null}
    */
   function withBound(path, options, use) {
     const opened = open(path, options);
@@ -199,6 +244,11 @@ export function createSnapshotReader(hooks = {}) {
    * descriptor, set the mode on that descriptor, sync, and rename over dest (a symlink at dest is
    * replaced, never followed). The installed member is then re-read without following links and must
    * be a regular file with exactly these bytes and this mode.
+   * @param {string} dest
+   * @param {Buffer} bytes
+   * @param {number} mode
+   * @param {ReaderOptions} [options]
+   * @returns {Snapshot}
    */
   function writeRegular(dest, bytes, mode, options = {}) {
     const label = options.label ?? "Destination";
@@ -218,10 +268,11 @@ export function createSnapshotReader(hooks = {}) {
       installed = true;
     } finally {
       if (!installed) {
-        try { unlinkSync(temporary); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+        try { unlinkSync(temporary); } catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
       }
     }
     const written = readRegular(dest, { label, messages: options.messages, maxBytes: Math.max(bytes.length, 1) });
+    if (!written) throw new Error(`${label} disappeared after installation: ${dest}`);
     if ((written.mode & 0o777) !== mode) throw new Error(message(options.messages, "mode", `${label} is not a regular file with mode ${mode.toString(8).padStart(4, "0")}: ${dest}`));
     if (!written.bytes.equals(bytes)) throw new Error(message(options.messages, "bytes", `${label} bytes do not match the captured source: ${dest}`));
     return written;

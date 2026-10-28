@@ -36,12 +36,64 @@ const studioRoot = resolve(__dirname, "..");
 import { repositoryRootForStudio } from "./sidecar-common.mjs";
 import { reindexPagefindSite } from "./pagefind-index.mjs";
 
-import {
+/** @typedef {typeof import("../src/features/theme-lab/gallery-contract.js")} GalleryContract */
+/** @typedef {import("../src/features/theme-lab/gallery-contract.js").GalleryScenarioId} GalleryScenarioId */
+/** @typedef {import("../src/features/theme-lab/gallery-contract.js").GalleryAxis} GalleryAxis */
+/** @typedef {import("../src/features/theme-lab/v2-model.js").ThemeSpecificationV2} ThemeSpecificationV2 */
+/** @typedef {{path: string, bytes: number, sha256: string}} GalleryInventoryFile */
+/** @typedef {{totalBytes: number, fileCount: number, files: GalleryInventoryFile[]}} GalleryInventory */
+/** @typedef {{
+ * id: GalleryScenarioId,
+ * packageName: string,
+ * tarballPath: string,
+ * filename: string,
+ * size: number,
+ * sha256: string,
+ * themeInputDigest: string,
+ * outputDigest: string,
+ * descriptor: Record<string, unknown>,
+ * selectedAccent: string,
+ * generatedInventory: GalleryInventoryFile[],
+ * generatedInventoryDigest: string,
+ * }} GeneratedGalleryTarball */
+/** @typedef {{
+ * id: GalleryScenarioId,
+ * consumerDir: string,
+ * distDir: string,
+ * destScenarioDir: string,
+ * buildDurationMs: number,
+ * inventory: GalleryInventory,
+ * }} BuiltGalleryScenario */
+/** @typedef {{
+ * tarball: string,
+ * expectedSha256: string | null,
+ * outputRoot: string,
+ * manifestPath: string,
+ * scratchRoot: string,
+ * skipBrowser: boolean,
+ * scenario: string | null,
+ * }} GalleryPrepareOptions */
+/** @typedef {{
+ * tarball?: string | null,
+ * expectedSha256?: string | null,
+ * outputRoot?: string,
+ * manifestPath?: string,
+ * scratchRoot?: string | null,
+ * skipBrowser?: boolean,
+ * scenario?: string | null,
+ * }} GalleryPrepareInput */
+
+const galleryContractUrl = new URL("../src/features/theme-lab/gallery-contract.ts", import.meta.url).href;
+/** @type {GalleryContract} */
+const galleryContract = await import(galleryContractUrl);
+
+const {
   EXPECTED_ARCHIVE_SHA256,
   EXPECTED_CONSUMER_LOCK_DIGEST,
   EXPECTED_FONT,
   GALLERY_SCENARIO_IDS,
   GALLERY_SCENARIO_PACKAGES,
+  GALLERY_AXES,
   GALLERY_BRIDGE_ALLOWED_KEYS,
   GALLERY_BRIDGE_CSS_BYTE_CEILING,
   CANARY_COMMAND_NAME,
@@ -50,7 +102,7 @@ import {
   validateGalleryAuthority,
   GALLERY_SCENARIOS,
   draftAxisValues,
-} from "../src/features/theme-lab/gallery-contract.ts";
+} = galleryContract;
 
 export {
   EXPECTED_ARCHIVE_SHA256,
@@ -66,20 +118,35 @@ export {
 };
 
 import { createBridgeScript } from "../gallery/bridge-runtime.mjs";
+/** @param {string} value @returns {value is GalleryScenarioId} */
+function isGalleryScenarioId(value) {
+  return GALLERY_SCENARIO_IDS.some((id) => id === value);
+}
+
+/** @param {string} scenarioId @returns {string} */
 export function generateBridgeScript(scenarioId) {
-  if (!GALLERY_SCENARIO_IDS.includes(scenarioId)) throw new Error("Unknown gallery scenario");
+  if (!isGalleryScenarioId(scenarioId)) throw new Error("Unknown gallery scenario");
   return createBridgeScript(BRIDGE_CONTRACT, scenarioId);
 }
 
 export const GALLERY_CSP_POLICY =
   "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';";
 
+/** @param {string | Uint8Array | Buffer} data @returns {string} */
 export function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
 }
 
+/** @param {string | undefined} value @param {string} option @returns {string} */
+function requiredOptionValue(value, option) {
+  if (!value) throw new Error(`Missing value for ${option}`);
+  return value;
+}
+
+/** @returns {GalleryPrepareOptions} */
 function parseCliArgs() {
   const args = process.argv.slice(2);
+  /** @type {GalleryPrepareInput} */
   const options = {
     tarball:
       process.env.TFSL_LOOM_TARBALL ||
@@ -101,39 +168,51 @@ function parseCliArgs() {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "--tarball" && args[i + 1]) {
-      options.tarball = resolve(args[++i]);
-    } else if (arg === "--expected-sha256" && args[i + 1]) {
-      options.expectedSha256 = args[++i];
-    } else if (arg === "--output-root" && args[i + 1]) {
-      options.outputRoot = resolve(args[++i]);
-    } else if (arg === "--manifest-path" && args[i + 1]) {
-      options.manifestPath = resolve(args[++i]);
-    } else if (arg === "--scratch-root" && args[i + 1]) {
-      options.scratchRoot = resolve(args[++i]);
+    if (arg === "--tarball") {
+      options.tarball = resolve(requiredOptionValue(args[++i], "--tarball"));
+    } else if (arg === "--expected-sha256") {
+      options.expectedSha256 = requiredOptionValue(args[++i], "--expected-sha256");
+    } else if (arg === "--output-root") {
+      options.outputRoot = resolve(requiredOptionValue(args[++i], "--output-root"));
+    } else if (arg === "--manifest-path") {
+      options.manifestPath = resolve(requiredOptionValue(args[++i], "--manifest-path"));
+    } else if (arg === "--scratch-root") {
+      options.scratchRoot = resolve(requiredOptionValue(args[++i], "--scratch-root"));
     } else if (arg === "--skip-browser") {
       options.skipBrowser = true;
-    } else if (arg === "--scenario" && args[i + 1]) {
-      options.scenario = args[++i];
+    } else if (arg === "--scenario") {
+      options.scenario = requiredOptionValue(args[++i], "--scenario");
     }
   }
 
-  if (!options.tarball) {
+  const tarball = options.tarball;
+  if (!tarball) {
     throw new Error(
       "Missing required candidate Loom tarball! Specify via --tarball <path> or TFSL_LOOM_TARBALL environment variable (absolute private defaults removed for portability)."
     );
   }
-  if (!options.scratchRoot) {
+  const scratchRoot = options.scratchRoot;
+  if (!scratchRoot) {
     throw new Error(
       "Missing required scratch directory! Specify via --scratch-root <path> or TFSL_GALLERY_SCRATCH_ROOT environment variable (absolute private defaults removed for portability)."
     );
   }
 
-  return options;
+  return {
+    tarball,
+    expectedSha256: options.expectedSha256 ?? null,
+    outputRoot: options.outputRoot ?? resolve(studioRoot, "public/preview/gallery"),
+    manifestPath: options.manifestPath ?? resolve(studioRoot, "gallery/manifest.json"),
+    scratchRoot,
+    skipBrowser: options.skipBrowser ?? false,
+    scenario: options.scenario ?? null,
+  };
 }
 
 
 
+/** @typedef {{port: number, close: () => Promise<void>}} GalleryStaticServer */
+/** @param {string} dir @param {number} [port=0] @returns {Promise<GalleryStaticServer>} */
 function startStaticServer(dir, port = 0) {
   return new Promise((resolvePromise, reject) => {
     const server = createServer(async (req, res) => {
@@ -205,6 +284,7 @@ function startStaticServer(dir, port = 0) {
         }
 
         const ext = extname(filePath);
+        /** @type {Record<string, string>} */
         const mimeTypes = {
           ".html": "text/html; charset=utf-8",
           ".css": "text/css; charset=utf-8",
@@ -237,17 +317,25 @@ function startStaticServer(dir, port = 0) {
       const boundPort = typeof addr === "object" && addr ? addr.port : port;
       resolvePromise({
         port: boundPort,
-        close: () => new Promise((cb) => server.close(cb)),
+        close: () => new Promise((resolveClose, rejectClose) => {
+          server.close((error) => {
+            if (error) rejectClose(error);
+            else resolveClose();
+          });
+        }),
       });
     });
   });
 }
 
+/** @param {string} dir @returns {Promise<GalleryInventory>} */
 async function computeDirectoryInventory(dir) {
   let totalBytes = 0;
   let fileCount = 0;
+  /** @type {GalleryInventoryFile[]} */
   const files = [];
 
+  /** @param {string} current @returns {Promise<void>} */
   async function walk(current) {
     const entries = await readdir(current, { withFileTypes: true });
     for (const ent of entries) {
@@ -272,7 +360,48 @@ async function computeDirectoryInventory(dir) {
   return { totalBytes, fileCount, files };
 }
 
-export async function prepareGallery(options = parseCliArgs()) {
+/** @param {GalleryPrepareInput} input @returns {GalleryPrepareOptions} */
+function normalizeGalleryOptions(input) {
+  const options = {
+    tarball: input.tarball ?? null,
+    expectedSha256: input.expectedSha256 ?? null,
+    outputRoot: input.outputRoot ?? resolve(studioRoot, "public/preview/gallery"),
+    manifestPath: input.manifestPath ?? resolve(studioRoot, "gallery/manifest.json"),
+    scratchRoot: input.scratchRoot ?? null,
+    skipBrowser: input.skipBrowser ?? false,
+    scenario: input.scenario ?? null,
+  };
+  const tarball = options.tarball;
+  if (!tarball) {
+    throw new Error(
+      "Missing required candidate Loom tarball! Specify via --tarball <path> or TFSL_LOOM_TARBALL environment variable (absolute private defaults removed for portability)."
+    );
+  }
+  const scratchRoot = options.scratchRoot;
+  if (!scratchRoot) {
+    throw new Error(
+      "Missing required scratch directory! Specify via --scratch-root <path> or TFSL_GALLERY_SCRATCH_ROOT environment variable (absolute private defaults removed for portability)."
+    );
+  }
+  return { ...options, tarball, scratchRoot };
+}
+
+/** @param {unknown} error @returns {string | undefined} */
+function errorCode(error) {
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") {
+    return error.code;
+  }
+  return undefined;
+}
+
+/** @param {unknown} error @returns {string} */
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** @param {GalleryPrepareInput} [input] @returns {Promise<Record<string, unknown>>} */
+export async function prepareGallery(input = parseCliArgs()) {
+  const options = normalizeGalleryOptions(input);
   validateGalleryAuthority(GALLERY_COVERAGE);
   console.log("=== TFSB63B Starlight Gallery Preparation ===");
   console.log(`Candidate Loom Tarball: ${options.tarball}`);
@@ -388,11 +517,13 @@ export async function prepareGallery(options = parseCliArgs()) {
   if (fontSha !== EXPECTED_FONT.sha256) {
     throw new Error(`Font digest mismatch! Expected ${EXPECTED_FONT.sha256}, got ${fontSha}`);
   }
+  /** @type {Map<string, Uint8Array>} */
   const fontResourcesMap = new Map([[EXPECTED_FONT.id, new Uint8Array(fontBytes)]]);
   console.log(`✓ Loaded and verified Source Code Pro font fixture (${fontBytes.length} bytes, SHA-256: ${fontSha.slice(0, 16)}...)`);
 
   // 5. Generate and pack theme packages
   console.log("\n--- Step 3: Generating and packing theme packages ---");
+  /** @type {Array<{id: GalleryScenarioId, spec: ThemeSpecificationV2, accent: string, packageName: string}>} */
   const themeDefinitions = [
     {
       id: "black-catalog",
@@ -423,16 +554,19 @@ export async function prepareGallery(options = parseCliArgs()) {
   for (const theme of themeDefinitions) {
     const actual = draftAxisValues(theme.spec);
     const declared = GALLERY_SCENARIOS[theme.id];
-    for (const axis of Object.keys(GALLERY_COVERAGE.axes).filter(axis => axis !== "heroLayout")) {
+    const catalog = theme.spec.catalog;
+    if (!catalog) throw new Error(`Gallery input lacks a catalog definition: ${theme.id}`);
+    for (const axis of GALLERY_AXES.filter((axis) => axis !== "heroLayout")) {
       if (actual[axis] !== declared.structuralConfig[axis]) throw new Error(`Coverage declaration disagrees with installed input: ${theme.id}/${axis}`);
     }
     for (const hero of declared.heroRoutes) {
-      const prepared = theme.spec.catalog.hero.routes.find(route => route.route === hero.route);
+      const prepared = catalog.hero.routes.find(route => route.route === hero.route);
       if (!prepared || prepared.layout !== hero.layout || prepared.title !== hero.title) throw new Error(`Hero coverage lacks exact installed input: ${theme.id}/${hero.route}`);
     }
   }
 
-  const generatedTarballs = {};
+  /** @type {Record<GalleryScenarioId, GeneratedGalleryTarball>} */
+  const generatedTarballs = Object.create(null);
 
   for (const theme of themeDefinitions) {
     const genDir = join(options.scratchRoot, `gen-${theme.id}`);
@@ -453,6 +587,7 @@ export async function prepareGallery(options = parseCliArgs()) {
     };
 
     const packageResult = loom.generateThemePackageCatalog(genOpts);
+    /** @param {{files: Iterable<[string, string | Uint8Array | Buffer]>}} result @returns {GalleryInventoryFile[]} */
     const packageInventory = (result) => [...result.files].map(([path, bytes]) => ({ path, sha256: sha256(bytes), bytes: Buffer.byteLength(bytes) })).sort((a, b) => a.path.localeCompare(b.path));
     const generatedInventory = packageInventory(packageResult);
     if (JSON.stringify(generatedInventory) !== JSON.stringify(packageInventory(loom.generateThemePackageCatalog(genOpts)))) throw new Error("Repeat generation changed the generated package inventory");
@@ -518,7 +653,8 @@ export async function prepareGallery(options = parseCliArgs()) {
     }
   }
 
-  const builtScenarios = {};
+  /** @type {Partial<Record<GalleryScenarioId, BuiltGalleryScenario>>} */
+  const builtScenarios = Object.create(null);
 
   for (const theme of themeDefinitions) {
     if (options.scenario && options.scenario !== theme.id) continue;
@@ -700,7 +836,9 @@ export default defineConfig({
         loom,
       });
     } catch (err) {
-      if (err && (err.code === "ERR_MODULE_NOT_FOUND" || err.message?.includes("Cannot find package '@playwright/test'") || err.message?.includes("Playwright browser qualification requires"))) {
+      const code = errorCode(err);
+      const message = errorMessage(err);
+      if (code === "ERR_MODULE_NOT_FOUND" || message.includes("Cannot find package '@playwright/test'") || message.includes("Playwright browser qualification requires")) {
         throw new Error(
           "Playwright browser qualification requires @playwright/test. Install @playwright/test or run with --skip-browser."
         );
@@ -713,11 +851,14 @@ export default defineConfig({
   console.log("\n--- Step 6: Writing gallery manifest and receipts ---");
   let totalGalleryBytes = 0;
   let totalGalleryFiles = 0;
-  const manifestScenarios = {};
+  /** @type {Record<GalleryScenarioId, Record<string, unknown>>} */
+  const manifestScenarios = Object.create(null);
 
   for (const theme of themeDefinitions) {
     const sc = builtScenarios[theme.id];
     if (!sc) continue;
+    const catalog = theme.spec.catalog;
+    if (!catalog) throw new Error(`Gallery input lacks a catalog definition: ${theme.id}`);
     totalGalleryBytes += sc.inventory.totalBytes;
     totalGalleryFiles += sc.inventory.fileCount;
 
@@ -733,7 +874,7 @@ export default defineConfig({
       assetInventoryDigest: sha256(JSON.stringify(sc.inventory.files)),
       canonicalThemeInputDigest: generatedTarballs[theme.id].themeInputDigest,
       representedProperties: GALLERY_SCENARIOS[theme.id].structuralConfig,
-      preparedHeroData: theme.spec.catalog.hero.routes,
+      preparedHeroData: catalog.hero.routes,
       unrepresentedProperties: GALLERY_COVERAGE.notRepresented,
       bridgeScriptSha256: sha256(generateBridgeScript(theme.id)),
       descriptor: generatedTarballs[theme.id].descriptor,
@@ -835,8 +976,7 @@ export default defineConfig({
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const expectedSha256 = process.env.EXPECTED_LOOM_SHA256 || null;
-  prepareGallery({ expectedSha256 }).catch((err) => {
+  Promise.resolve().then(() => prepareGallery(parseCliArgs())).catch((err) => {
     console.error("Gallery preparation failed with error:", err);
     process.exit(1);
   });

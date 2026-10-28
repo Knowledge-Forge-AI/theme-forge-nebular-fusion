@@ -3,13 +3,28 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { digest, identity } from "./candidate-provenance.mjs";
 import { defaultSnapshotReader } from "./fs-snapshot.mjs";
 
+/** @typedef {{dev: number, ino: number, size: number, mode: number, mtimeMs: number, ctimeMs: number}} DescriptorIdentity */
+/** @typedef {{type: string, bytes?: Buffer, sha256?: string, size?: number, mode?: number, executable?: boolean, entries?: string[], identity: DescriptorIdentity}} SnapshotDescriptor */
+/** @typedef {{type: string, size: number, mode: number, identity: DescriptorIdentity}} SnapshotDescription */
+/** @typedef {{bytes: Buffer, sha256: string, size: number, mode: number, executable: boolean, identity: DescriptorIdentity}} SnapshotFile */
+/** @typedef {{describe: (path: string, options?: object) => SnapshotDescription | null, inspect: (path: string, options?: object) => SnapshotDescriptor | null, readRegular: (path: string, options?: object) => SnapshotFile | null}} SnapshotReader */
+/** @typedef {{type: "executionOnly", reason: string} | {type: "locator", multi: boolean} | {type: "semantic"}} EnvironmentClassification */
+/** @typedef {{path: string, identity: string, entries?: Array<{path: string, identity: string}>}} LocatorInventory */
+/** @typedef {{value: string, reason: string}} ExecutionOnlyValue */
+/** @typedef {{path: string, identity: string}} CargoLocator */
+/** @typedef {{type: "file", bytes: number, size?: number, sha256: string, mode: number, executable?: boolean} | {type: "directory", entries: Array<{name: string, identity: string}>, mode?: number}} SnapshotInventoryRecord */
+/** @typedef {{content: string, identity: string, locators: CargoLocator[]}} CargoSettings */
+/** @typedef {{identity?: string, cargo?: CargoSettings | null, environment?: {semantic?: Record<string, string>, locators?: Record<string, LocatorInventory | string>, executionOnly?: Record<string, ExecutionOnlyValue>}, claims?: unknown}} BuildSettings */
+/** @typedef {{cargoConfig?: string, cargoHome?: string, npmCache?: string, frontendModules?: string, previewModules?: string, cwd?: string, environment?: Record<string, string>}} ExecutionSettings */
+
 export const EXECUTION_ONLY_REASONS = Object.freeze({
   NIX_STORE: "Fixed canonical Nix store mount / execution prefix",
   NIX_BUILD_TOP: "Caller locator is replaced by the native builder's owned work directory; compiler path remapping uses that execution root",
 });
 
+/** @param {string} key @returns {EnvironmentClassification | null} */
 export function classifyEnvironmentKey(key) {
-  if (Object.hasOwn(EXECUTION_ONLY_REASONS, key)) return { type: "executionOnly", reason: EXECUTION_ONLY_REASONS[key] };
+  if (key === "NIX_STORE" || key === "NIX_BUILD_TOP") return { type: "executionOnly", reason: EXECUTION_ONLY_REASONS[key] };
   if (["SDKROOT", "DEVELOPER_DIR", "NIX_CC", "NIX_BINTOOLS"].includes(key)) {
     return { type: "locator", multi: false };
   }
@@ -22,10 +37,12 @@ export function classifyEnvironmentKey(key) {
   return null;
 }
 
+/** @param {string} key */
 export function isBuildEnvironmentKey(key) {
   return classifyEnvironmentKey(key) !== null;
 }
 
+/** @param {string} raw */
 export function normalizeCargoConfig(raw) {
   if (typeof raw !== "string") throw new Error("Cargo config content must be a string");
   for (const line of raw.split(/\r?\n/)) {
@@ -38,22 +55,26 @@ export function normalizeCargoConfig(raw) {
     throw new Error("Cargo config include directive is unsupported");
   }
   for (const match of raw.matchAll(/^\s*(?:directory|path)\s*=\s*["']([^"']+)["']/gm)) {
-    if (!match[1].startsWith("/")) {
-      throw new Error(`Unsupported relative path in Cargo config: ${match[1]}`);
+    const capturedPath = match[1];
+    if (capturedPath !== undefined && !capturedPath.startsWith("/")) {
+      throw new Error(`Unsupported relative path in Cargo config: ${capturedPath}`);
     }
   }
   return raw;
 }
 
+/** @param {string} content @returns {string[]} */
 export function extractCargoConfigLocators(content) {
   if (typeof content !== "string") throw new Error("Cargo config content must be a string");
+  /** @type {string[]} */
   const locators = [];
   for (const line of content.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.startsWith("#")) continue;
     const matches = trimmed.matchAll(/["'](\/[^"']+)["']/g);
     for (const match of matches) {
-      locators.push(match[1]);
+      const capturedPath = match[1];
+      if (capturedPath !== undefined) locators.push(capturedPath);
     }
   }
   return [...new Set(locators)].sort();
@@ -69,6 +90,11 @@ export function extractCargoConfigLocators(content) {
 // directory is listed while its descriptor is held and must be unchanged (and
 // still named by its path) afterwards. A member that is swapped for a link,
 // replaced, truncated or changed while it is measured fails closed.
+/**
+ * @param {string} targetPath
+ * @param {{reader?: SnapshotReader}} [options]
+ * @returns {Promise<{path: string, identity: string}>}
+ */
 export async function inventoryPath(targetPath, { reader = defaultSnapshotReader } = {}) {
   if (typeof targetPath !== "string" || !isAbsolute(targetPath)) throw new Error("Locator path must be absolute");
   const root = await realpath(targetPath);
@@ -79,11 +105,14 @@ export async function inventoryPath(targetPath, { reader = defaultSnapshotReader
     maxBytes: 256 * 1024 * 1024,
     messages: { tooLarge: "Locator inventory byte limit exceeded", unsupported: "Unsupported locator member type" },
   };
+  /** @returns {Promise<{identity: string, isDirectory: boolean}>} */
+  /** @param {string} path */
   async function visit(path, depth = 0, scopeRoot = root) {
     const real = await realpath(path);
     let referent = null;
     if ((await lstat(path)).isSymbolicLink()) {
       referent = reader.describe(real, member);
+      if (!referent) throw new Error(`Locator member disappeared while it was read: ${real}`);
       const rel = relative(scopeRoot, real);
       if (rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)) {
         return { identity: identity({ type: "internal-link", target: rel || "." }), isDirectory: referent.type === "directory" };
@@ -97,22 +126,32 @@ export async function inventoryPath(targetPath, { reader = defaultSnapshotReader
     if (cache.has(cacheKey)) return cache.get(cacheKey);
     if (depth > 64 || ++count > 100000) throw new Error("Locator inventory traversal limit exceeded");
     const measured = reader.inspect(real, member);
+    if (!measured) throw new Error(`Locator member disappeared while it was read: ${real}`);
     if (referent && referent.type !== measured.type) throw new Error(`Locator member changed while it was read: ${real}`);
+    /** @type {SnapshotInventoryRecord} */
     let record;
     if (measured.type === "file") {
+      if (typeof measured.size !== "number" || typeof measured.executable !== "boolean" || typeof measured.sha256 !== "string") {
+        throw new Error(`Invalid file descriptor for locator member: ${real}`);
+      }
       if ((totalBytes += measured.size) > 2 * 1024 * 1024 * 1024) throw new Error("Locator inventory byte limit exceeded");
       record = { type: "file", mode: measured.executable ? 0o755 : 0o644, bytes: measured.size, sha256: measured.sha256 };
-    } else {
+    } else if (measured.type === "directory") {
+      if (!Array.isArray(measured.entries)) throw new Error(`Invalid directory descriptor for locator member: ${real}`);
       active.add(real);
       try {
-        const entries = [];
+      /** @type {Array<{name: string, identity: string}>} */
+      const entries = [];
         for (const name of measured.entries) {
           if (name.length > 1024) throw new Error("Locator member path limit exceeded");
           entries.push({ name, identity: (await visit(join(real, name), depth + 1, scopeRoot)).identity });
         }
         record = { type: "directory", entries };
       } finally { active.delete(real); }
+    } else {
+      throw new Error(`Unsupported locator member type: ${real}`);
     }
+    /** @type {{identity: string, isDirectory: boolean}} */
     const result = { identity: identity(record), isDirectory: measured.type === "directory" };
     cache.set(cacheKey, result);
     return result;
@@ -120,6 +159,7 @@ export async function inventoryPath(targetPath, { reader = defaultSnapshotReader
   return { path: resolve(targetPath), ...await visit(root) };
 }
 
+/** @param {string} value @param {boolean} [isMulti] */
 export async function inventoryLocator(value, isMulti = false) {
   if (typeof value !== "string") throw new Error("Locator value must be a string");
   if (isMulti) {
@@ -128,6 +168,7 @@ export async function inventoryLocator(value, isMulti = false) {
     for (const part of parts) {
       if (!isAbsolute(part)) throw new Error(`Locator path must be absolute: ${part}`);
     }
+    /** @type {Array<{path: string, identity: string}>} */
     const entries = [];
     for (const part of parts) {
       entries.push(await inventoryPath(part));
@@ -147,6 +188,7 @@ export async function inventoryLocator(value, isMulti = false) {
   }
 }
 
+/** @param {{cargoConfig?: string | undefined, environment?: Record<string, string>}} options */
 export async function createBuildSettings({ cargoConfig, environment = {} }) {
   let cargo = null;
   if (cargoConfig) {
@@ -157,6 +199,7 @@ export async function createBuildSettings({ cargoConfig, environment = {} }) {
     const raw = await readFile(configPath, "utf8");
     const normalized = normalizeCargoConfig(raw);
     const extractedPaths = extractCargoConfigLocators(normalized);
+    /** @type {CargoLocator[]} */
     const locators = [];
     for (const p of extractedPaths) {
       const inv = await inventoryPath(p);
@@ -170,8 +213,11 @@ export async function createBuildSettings({ cargoConfig, environment = {} }) {
     };
   }
 
+  /** @type {Record<string, string>} */
   const semantic = {};
+  /** @type {Record<string, LocatorInventory>} */
   const locators = {};
+  /** @type {Record<string, ExecutionOnlyValue>} */
   const executionOnly = {};
 
   for (const [key, value] of Object.entries(environment)) {
@@ -198,7 +244,11 @@ export async function createBuildSettings({ cargoConfig, environment = {} }) {
 
   const envClaims = {
     semantic: Object.fromEntries(Object.keys(semantic).sort().map(k => [k, semantic[k]])),
-    locators: Object.fromEntries(Object.keys(locators).sort().map(k => [k, locators[k].identity])),
+    locators: Object.fromEntries(Object.keys(locators).sort().map(k => {
+      const locator = locators[k];
+      if (!locator) throw new Error(`Locator identity missing: ${k}`);
+      return [k, locator.identity];
+    })),
   };
   const cargoClaims = cargo ? { identity: cargo.identity, locators: cargo.locators.map(l => l.identity).sort() } : null;
   const claims = { cargo: cargoClaims, environment: envClaims };
@@ -216,9 +266,10 @@ export async function createBuildSettings({ cargoConfig, environment = {} }) {
   };
 }
 
+/** @param {BuildSettings | null | undefined} settings */
 export function buildSettingsClaims(settings) {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Explicit build settings required");
-  if (!/^[a-f0-9]{64}$/.test(settings.identity)) throw new Error("Settings identity required");
+  if (typeof settings.identity !== "string" || !/^[a-f0-9]{64}$/.test(settings.identity)) throw new Error("Settings identity required");
   const allowedSettingsKeys = new Set(["identity", "cargo", "environment", "claims"]);
   for (const key of Object.keys(settings)) {
     if (!allowedSettingsKeys.has(key)) throw new Error(`Unknown settings field: ${key}`);
@@ -266,7 +317,11 @@ export function buildSettingsClaims(settings) {
   }
   const envClaims = {
     semantic: Object.fromEntries(Object.keys(semantic).sort().map(k => [k, semantic[k]])),
-    locators: Object.fromEntries(Object.keys(locators).sort().map(k => [k, typeof locators[k] === "string" ? locators[k] : locators[k].identity])),
+    locators: Object.fromEntries(Object.keys(locators).sort().map(k => {
+      const locator = locators[k];
+      if (!locator) throw new Error(`Locator identity missing: ${k}`);
+      return [k, typeof locator === "string" ? locator : locator.identity];
+    })),
   };
   const claims = { cargo: cargoClaims, environment: envClaims };
   const expectedId = identity(claims);
@@ -279,6 +334,11 @@ export function buildSettingsClaims(settings) {
   return { ...claims, identity: expectedId };
 }
 
+/**
+ * @param {BuildSettings | null | undefined} settings
+ * @param {ExecutionSettings | null | undefined} [execution]
+ * @param {{reader?: SnapshotReader}} [options]
+ */
 export async function validateBuildSettings(settings, execution = {}, { reader = defaultSnapshotReader } = {}) {
   if (!settings || typeof settings !== "object") {
     throw new Error("Explicit build settings required");
@@ -295,7 +355,9 @@ export async function validateBuildSettings(settings, execution = {}, { reader =
   for (const key of Object.keys(execution)) {
     if (!allowedExecKeys.has(key)) throw new Error(`Unknown execution setting: ${key}`);
   }
-  for (const key of ["cargoHome", "npmCache", "frontendModules", "previewModules", "cwd"]) {
+  /** @type {Array<"cargoHome" | "npmCache" | "frontendModules" | "previewModules" | "cwd">} */
+  const executionLocatorKeys = ["cargoHome", "npmCache", "frontendModules", "previewModules", "cwd"];
+  for (const key of executionLocatorKeys) {
     if (execution[key] !== undefined && (typeof execution[key] !== "string" || !isAbsolute(execution[key]))) throw new Error(`Absolute execution locator required: ${key}`);
   }
 
@@ -385,6 +447,7 @@ export async function validateBuildSettings(settings, execution = {}, { reader =
   const envExecutionOnlyKeys = [];
   for (const key of Object.keys(env)) {
     const c = classifyEnvironmentKey(key);
+    if (!c) throw new Error(`Unknown build environment setting: ${key}`);
     if (c.type === "semantic") envSemanticKeys.push(key);
     else if (c.type === "locator") envLocatorKeys.push(key);
     else if (c.type === "executionOnly") envExecutionOnlyKeys.push(key);
@@ -406,8 +469,12 @@ export async function validateBuildSettings(settings, execution = {}, { reader =
   for (const k of envLocatorKeys) {
     if (!(k in settingsLocators)) throw new Error(`Execution environment has unbound locator setting: ${k}`);
     const classification = classifyEnvironmentKey(k);
-    const fresh = await inventoryLocator(env[k], classification.multi);
+    if (!classification || classification.type !== "locator") throw new Error(`Execution environment has unbound locator setting: ${k}`);
+    const value = env[k];
+    if (typeof value !== "string") throw new Error(`Environment value for ${k} must be a string`);
+    const fresh = await inventoryLocator(value, classification.multi);
     const record = settingsLocators[k];
+    if (record === undefined) throw new Error(`Execution environment has unbound locator setting: ${k}`);
     const expectedId = typeof record === "string" ? record : record.identity;
     if (fresh.identity !== expectedId) {
       throw new Error(`${k} locator bytes mismatch`);
@@ -421,6 +488,7 @@ export async function validateBuildSettings(settings, execution = {}, { reader =
   for (const k of envExecutionOnlyKeys) {
     if (!(k in settingsExecutionOnly)) throw new Error(`Execution environment has unbound execution-only setting: ${k}`);
     const val = env[k];
+    if (typeof val !== "string") throw new Error(`Environment value for ${k} must be a string`);
     if (k === "NIX_STORE") {
       if (val !== "/nix/store") throw new Error("NIX_STORE must be fixed /nix/store");
     } else if (k === "NIX_BUILD_TOP") {

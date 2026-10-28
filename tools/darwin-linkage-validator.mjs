@@ -24,12 +24,19 @@ export const FORBIDDEN_DARWIN_PREFIXES = Object.freeze([
   "/opt/local/",
 ]);
 
+/** @typedef {{ status: "pass" | "fail", valid: boolean, dependencies: string[], rpaths: string[], violations: string[] }} DarwinLinkageResult */
+/** @typedef {{ status: "pass" | "fail", valid: boolean, needed: string[], rpaths: string[], violations: string[] }} LinuxLinkageResult */
+/** @typedef {{ encoding: "utf8", env: NodeJS.ProcessEnv, timeout: number }} LinkageRunnerOptions */
+/** @typedef {{ status: number | null, stdout: string, stderr?: string, error?: Error }} LinkageRunnerResult */
+/** @typedef {(command: string, args: string[], options: LinkageRunnerOptions) => LinkageRunnerResult} DarwinLinkageRunner */
+/** @typedef {{ failOnError?: boolean, runner?: DarwinLinkageRunner }} DarwinLinkageOptions */
+/** @typedef {{ failOnError?: boolean }} LinuxLinkageOptions */
+
 /**
  * Validates dynamic linkage of a Darwin Mach-O binary via `otool -L`.
  * @param {string} binaryPath - Path to the executable or dylib.
- * @param {object} [options]
- * @param {boolean} [options.failOnError=false] - Whether to throw an error if violations are found.
- * @returns {{ status: "pass" | "fail", dependencies: string[], violations: string[] }}
+ * @param {DarwinLinkageOptions} [options]
+ * @returns {DarwinLinkageResult}
  */
 export function validateDarwinLinkage(binaryPath, options = {}) {
   const stat = lstatSync(binaryPath);
@@ -48,21 +55,29 @@ export function validateDarwinLinkage(binaryPath, options = {}) {
     const msg = result.error ? result.error.message : result.stderr;
     throw new Error(`otool -L failed on ${binaryPath}: ${msg}`);
   }
+  if (typeof result.stdout !== "string") {
+    throw new Error(`otool -L returned non-text output for ${binaryPath}`);
+  }
 
   const lines = result.stdout.trim().split("\n");
+  /** @type {string[]} */
   const dependencies = [];
+  /** @type {string[]} */
   const rpaths = [];
+  /** @type {string[]} */
   const violations = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i].trim();
+    const line = lines[i];
+    if (line === undefined) continue;
+    const raw = line.trim();
     if (!raw || raw.endsWith(":")) {
       // First line is binary heading: e.g. "path/to/binary:"
       continue;
     }
     // Format: "/path/to/lib.dylib (compatibility version 1.0.0, current version 1.0.0)"
     const match = raw.match(/^(.+?)(?:\s+\(compatibility version .*\))?$/);
-    const dep = match ? match[1].trim() : raw.trim();
+    const dep = match?.[1]?.trim() ?? raw.trim();
     if (dep) {
       dependencies.push(dep);
       // Check for forbidden prefixes
@@ -82,14 +97,21 @@ export function validateDarwinLinkage(binaryPath, options = {}) {
     timeout: 15_000,
   });
 
-  if (lResult.status === 0 && lResult.stdout) {
-    const lLines = lResult.stdout.split("\n");
+  const lStdout = lResult.stdout;
+  if (lResult.status === 0 && typeof lStdout !== "string") {
+    throw new Error(`otool -l returned non-text output for ${binaryPath}`);
+  }
+  if (lResult.status === 0 && typeof lStdout === "string" && lStdout) {
+    const lLines = lStdout.split("\n");
     for (let i = 0; i < lLines.length; i++) {
-      if (lLines[i].includes("cmd LC_RPATH")) {
+      const line = lLines[i];
+      if (line?.includes("cmd LC_RPATH")) {
         for (let j = i + 1; j < Math.min(i + 5, lLines.length); j++) {
-          const pathMatch = lLines[j].match(/^\s*path\s+(.+?)\s+\(offset\s+\d+\)/);
+          const candidateLine = lLines[j];
+          if (candidateLine === undefined) continue;
+          const pathMatch = candidateLine.match(/^\s*path\s+(.+?)\s+\(offset\s+\d+\)/);
           if (pathMatch) {
-            const rpath = pathMatch[1].trim();
+            const rpath = (pathMatch[1] ?? "").trim();
             rpaths.push(rpath);
             const isForbidden = FORBIDDEN_DARWIN_PREFIXES.some(prefix => rpath.startsWith(prefix));
             if (isForbidden) {
@@ -119,9 +141,8 @@ export function validateDarwinLinkage(binaryPath, options = {}) {
 /**
  * Validates dynamic linkage of a Linux ELF binary via `readelf -d` or `objdump -p`.
  * @param {string} binaryPath - Path to the ELF executable.
- * @param {object} [options]
- * @param {boolean} [options.failOnError=false]
- * @returns {{ status: "pass" | "fail", needed: string[], rpaths: string[], violations: string[] }}
+ * @param {LinuxLinkageOptions} [options]
+ * @returns {LinuxLinkageResult}
  */
 export function validateLinuxLinkage(binaryPath, options = {}) {
   const stat = lstatSync(binaryPath);
@@ -136,18 +157,23 @@ export function validateLinuxLinkage(binaryPath, options = {}) {
     timeout: 15_000,
   });
 
+  /** @type {string[]} */
   const needed = [];
+  /** @type {string[]} */
   const rpaths = [];
+  /** @type {string[]} */
   const violations = [];
 
   if (result.status === 0) {
     const lines = result.stdout.split("\n");
     for (const line of lines) {
       const neededMatch = line.match(/\(NEEDED\)\s+Shared library:\s+\[([^\]]+)\]/);
-      if (neededMatch) needed.push(neededMatch[1]);
+      const neededLibrary = neededMatch?.[1];
+      if (neededLibrary) needed.push(neededLibrary);
       const rpathMatch = line.match(/\((?:RPATH|RUNPATH)\)\s+Library (?:rpath|runpath):\s+\[([^\]]+)\]/);
-      if (rpathMatch) {
-        const parts = rpathMatch[1].split(":");
+      const rpathValue = rpathMatch?.[1];
+      if (rpathValue) {
+        const parts = rpathValue.split(":");
         rpaths.push(...parts);
       }
     }
@@ -162,10 +188,12 @@ export function validateLinuxLinkage(binaryPath, options = {}) {
       const lines = result.stdout.split("\n");
       for (const line of lines) {
         const neededMatch = line.match(/\bNEEDED\s+([^\s]+)/);
-        if (neededMatch) needed.push(neededMatch[1]);
+        const neededLibrary = neededMatch?.[1];
+        if (neededLibrary) needed.push(neededLibrary);
         const rpathMatch = line.match(/\b(?:RPATH|RUNPATH)\s+([^\s]+)/);
-        if (rpathMatch) {
-          const parts = rpathMatch[1].split(":");
+        const rpathValue = rpathMatch?.[1];
+        if (rpathValue) {
+          const parts = rpathValue.split(":");
           rpaths.push(...parts);
         }
       }

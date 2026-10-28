@@ -66,11 +66,11 @@ test("repository discovery fails on unknown live version text outside known proj
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("Candidate version constant is projected at 0.6.0", () => {
-  assert.equal(CANDIDATE_VERSION, "0.6.1");
+test("Candidate version constant is projected at 0.7.0", () => {
+  assert.equal(CANDIDATE_VERSION, "0.7.0");
 });
 
-test("Cargo, Tauri and application lock project the maintained candidate version 0.6.0", () => {
+test("Cargo, Tauri and application lock project the maintained candidate version 0.7.0", () => {
   assert.equal(verifyApplicationVersion(studioRoot), CANDIDATE_VERSION);
 });
 
@@ -120,6 +120,47 @@ test("Dynamic discovery detects newly added candidate package/version surface", 
   }
 });
 
+test("Malformed live package metadata remains visible with an undefined version claim", async () => {
+  const tempRepo = await mkdtemp(join(tmpdir(), "nebular-malformed-package-surfaces-"));
+  try {
+    const wrapperDir = join(tempRepo, "packages/nebular-fusion-npm");
+    await mkdir(wrapperDir, { recursive: true });
+    await writeFile(join(wrapperDir, "package.json"), JSON.stringify([]));
+
+    const bindingDir = join(tempRepo, "packages/nebular-fusion-bindings");
+    await mkdir(bindingDir, { recursive: true });
+    await writeFile(join(bindingDir, "package.json"), JSON.stringify({
+      name: "@knowledge-forge-ai/theme-forge-nebular-fusion",
+      version: CANDIDATE_VERSION,
+      optionalDependencies: {
+        "@knowledge-forge-ai/theme-forge-nebular-fusion-darwin-arm64": CANDIDATE_VERSION,
+        "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-arm64": 17,
+      },
+    }));
+    await writeFile(join(bindingDir, "payload-bindings.json"), JSON.stringify(["malformed"]));
+
+    const manifestDir = join(tempRepo, "packages/nebular-fusion-linux-x64");
+    await mkdir(manifestDir, { recursive: true });
+    await writeFile(join(manifestDir, "package-manifest.json"), JSON.stringify("malformed"));
+
+    const surfaces = discoverPackageSurfaces(tempRepo);
+    expectSurfaceVersion(surfaces, "platform-nebular-fusion-npm-package.json", undefined);
+    expectSurfaceVersion(surfaces, "npm-wrapper-payload-bindings.json", undefined);
+    expectSurfaceVersion(surfaces, "npm-wrapper-optionalDependency:@knowledge-forge-ai/theme-forge-nebular-fusion-darwin-arm64", CANDIDATE_VERSION);
+    expectSurfaceVersion(surfaces, "npm-wrapper-optionalDependency:@knowledge-forge-ai/theme-forge-nebular-fusion-linux-arm64", 17);
+    expectSurfaceVersion(surfaces, "platform-nebular-fusion-linux-x64-package-manifest.json", undefined);
+  } finally {
+    await rm(tempRepo, { recursive: true, force: true });
+  }
+});
+
+/** @param {Array<{ id: string, version: unknown }>} surfaces @param {string} id @param {unknown} version */
+function expectSurfaceVersion(surfaces, id, version) {
+  const surface = surfaces.find(item => item.id === id);
+  assert.ok(surface, `Missing malformed metadata surface: ${id}`);
+  assert.equal(surface.version, version, `Unexpected version claim for ${id}`);
+}
+
 test("Generated channel manifests, native launchers, and Cask manifests are checkable against candidate version", async () => {
   // 1. Release manifest checking
   const validManifest = {
@@ -166,6 +207,82 @@ test("Cross-surface candidate gate requires every discovered production projecti
   }
   assert.equal(audit.wholeCrossSurfaceInvariantPassed, true,
     `Unresolved candidate version drift: ${audit.unalignedProductionSurfaces.map(item => `${item.id}=${item.version}`).join(", ")}; discovery drift=${audit.discovery.drift.length}, unclassified=${audit.discovery.unclassified.length}`);
+});
+
+test("Known contextual projections classify narrowly while unknown neighboring versions remain blocking", async () => {
+  const root = await mkdtemp(join(tmpdir(), "candidate-context-owners-"));
+  try {
+    const files = new Map([
+      ["snapshot-manifest.json", JSON.stringify({ version: "4.2.1", entries: [{ version: "2.1.0" }] })],
+      [".rs9/intent.json", JSON.stringify({ version: "0.6.1" })],
+      [".rs9/evidence/public-metadata-evidence.json", JSON.stringify({ version: "0.4.0" })],
+      [".rs9/evidence/public-nebular-checksums-evidence.json", JSON.stringify({ version: "0.6.1" })],
+      ["tools/distribution/docs/DIST1-VALIDATION-WORKFLOW-CONTRACT.json", JSON.stringify({ version: 7 })],
+      ["tools/distribution/templates/nix/packages/solar-sail.nix", 'version = "0.2.1";\nnebularVersion = "0.4.0";\n'],
+      ["tools/distribution/templates/nix/packages/stellar-loom.nix", 'version = "0.4.0";\n'],
+      ["tools/distribution/theme-forge-packages/packages/solar-sail.nix", 'version = "0.2.1";\n'],
+      ["tools/distribution/theme-forge-packages/packages/stellar-loom.nix", 'version = "0.4.0";\n'],
+      ["tools/distribution/test-fixtures/signing/generate-multi-subkey-fixture.mjs", 'const rpmVersion = "1.0.0-1.noarch.rpm";\n'],
+      ["tools/distribution/qualify-distribution.mjs", 'const actionlintVersion = "1.7.9";\nconst tools = { actionlint: AUTHORITATIVE_ACTIONLINT_VERSION, nebularVersion: "0.4.0" };\n'],
+      ["apps/studio/src-tauri/build.rs", 'const ADMITTED_SOLAR_SAIL_VERSION: &str = "0.2.1";\nconst ADMITTED_SOLAR_SAIL_VERSION: &str = "0.2.1"; const NEBULAR: &str = "0.4.0";\n'],
+      ["apps/studio/tools/gallery-prepare.mjs", 'const genOpts = { metadata: { version: "0.1.0" } };\nconst other = { version: "0.4.0" };\n'],
+      [".rs9/unknown-live.mjs", 'export const release = "0.6.1";\n'],
+      ["nested/snapshot-manifest.json", JSON.stringify({ version: "4.2.1" })],
+      ["tools/distribution/docs/OTHER-CONTRACT.json", JSON.stringify({ version: "0.6.1" })],
+      ["tools/distribution/test-fixtures/signing/other-fixture.mjs", 'export const release = "1.0.0";\n'],
+      ["tools/distribution/templates/nix/packages/unknown.nix", 'version = "0.2.1";\n'],
+    ]);
+    for (const [file, content] of files) {
+      await mkdir(join(root, file.slice(0, file.lastIndexOf("/"))), { recursive: true });
+      await writeFile(join(root, file), content);
+    }
+
+    const report = discoverVersionReferences(root);
+    const classified = (path) => report.hits.filter(hit => hit.path === path && hit.classification !== null);
+    for (const path of [
+      "snapshot-manifest.json",
+      ".rs9/intent.json",
+      ".rs9/evidence/public-metadata-evidence.json",
+      ".rs9/evidence/public-nebular-checksums-evidence.json",
+      "tools/distribution/docs/DIST1-VALIDATION-WORKFLOW-CONTRACT.json",
+      "tools/distribution/templates/nix/packages/solar-sail.nix",
+      "tools/distribution/templates/nix/packages/stellar-loom.nix",
+      "tools/distribution/theme-forge-packages/packages/solar-sail.nix",
+      "tools/distribution/theme-forge-packages/packages/stellar-loom.nix",
+      "tools/distribution/test-fixtures/signing/generate-multi-subkey-fixture.mjs",
+      "tools/distribution/qualify-distribution.mjs",
+      "apps/studio/src-tauri/build.rs",
+      "apps/studio/tools/gallery-prepare.mjs",
+    ]) {
+      assert.ok(classified(path).length > 0, `Expected maintained contextual owner for ${path}`);
+    }
+    for (const path of [
+      ".rs9/unknown-live.mjs",
+      "nested/snapshot-manifest.json",
+      "tools/distribution/docs/OTHER-CONTRACT.json",
+      "tools/distribution/test-fixtures/signing/other-fixture.mjs",
+      "apps/studio/src-tauri/build.rs",
+      "apps/studio/tools/gallery-prepare.mjs",
+    ]) {
+      assert.ok(report.unclassified.some(hit => hit.path === path), `Unknown neighboring version must remain unclassified: ${path}`);
+    }
+    assert.ok(report.drift.some(hit => hit.path === "tools/distribution/templates/nix/packages/unknown.nix"),
+      "An unowned Nix projection must remain a candidate drift");
+    assert.ok(report.drift.some(hit => hit.path === "tools/distribution/templates/nix/packages/solar-sail.nix" && hit.version === "0.4.0"),
+      "A new live Nix declaration in a known component file must remain a candidate drift");
+    assert.ok(
+      report.unclassified.some(hit => hit.path === "tools/distribution/qualify-distribution.mjs" && hit.version === "0.4.0")
+        || report.drift.some(hit => hit.path === "tools/distribution/qualify-distribution.mjs" && hit.version === "0.4.0"),
+      "A same-file actionlint neighbor must remain blocking",
+    );
+    for (const path of ["apps/studio/src-tauri/build.rs", "apps/studio/tools/gallery-prepare.mjs"]) {
+      assert.ok(report.unclassified.some(hit => hit.path === path && hit.version === "0.4.0"),
+        `A same-file neighboring declaration must remain unclassified: ${path}`);
+    }
+    assert.equal(report.passed, false, "Unknown contextual versions must keep the discovery gate closed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("Injected mismatch regression tests candidate version drift detection across application, package, and build surfaces", async () => {

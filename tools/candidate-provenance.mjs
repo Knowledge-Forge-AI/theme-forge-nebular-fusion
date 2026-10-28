@@ -6,32 +6,72 @@ import { constants } from "node:fs";
 import { join } from "node:path";
 import { CANDIDATE_VERSION, TARGETS, resourcePreparationPlan } from "./platform-targets.mjs";
 
+/** @typedef {Record<string, unknown>} JsonRecord */
+/** @typedef {JsonRecord & { path: string, bytes: number, mode: number, sha256: string }} InventoryEntry */
+/** @typedef {{ files: InventoryEntry[], identity: string }} Inventory */
+/** @typedef {JsonRecord & { resources: string[], externalBin: string[] }} ResourcePlan */
+/** @typedef {JsonRecord & { cargo: string, frontend: string }} SourceLocks */
+/** @typedef {JsonRecord & { burst: string, loom: string, solar: string }} SourceComponents */
+/** @typedef {JsonRecord & { schema: "nebular-source-candidate-v1", identity: string, version: string, composition: string, locks: SourceLocks, components: SourceComponents, recipe: string, resourcePlans: Record<string, ResourcePlan> }} SourceCandidate */
+/** @typedef {JsonRecord & { path: string, identity: string }} ResourceRecord */
+/** @typedef {JsonRecord & { source: string, output: string, producer: string }} ReceiptComponent */
+/** @typedef {JsonRecord & { identity: string, resources: ResourceRecord[], externalBin: ResourceRecord[] }} PreparationRecord */
+/** @typedef {JsonRecord & { schema: "nebular-build-receipt-v1", identity: string, sourceCandidate: string, version: string, target: string, mode: "nix-source" | "portable-source", toolchains: Record<string, string>, components: Record<string, ReceiptComponent>, settings: string, preparation: PreparationRecord, nativePayload: string }} BuildReceipt */
+/** @typedef {JsonRecord & { schema: "nebular-candidate-provenance-v1", identity: string, source: SourceCandidate, receipt: BuildReceipt }} ProvenanceRecord */
+/** @typedef {JsonRecord & { schema: "nebular-artifact-binding-v1", identity: string, candidateProvenance: string, sourceCandidate: string, target: string, nativePayload: string, artifact: string }} ArtifactBinding */
+/** @typedef {{ sourceCandidate: string, buildReceipts?: Record<string, string>, settings?: string | Record<string, string>, artifactBindings?: Record<string, string[]> }} ProvenanceAuthority */
+/** @typedef {{ bundle: { externalBin: string[] } }} ResourceConfig */
+
+/** @param {unknown} value @returns {value is JsonRecord} */
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** @param {unknown} value @returns {string} */
 export function canonical(value) {
   if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && Object.getPrototypeOf(value) === Object.prototype) {
+  if (isRecord(value) && Object.getPrototypeOf(value) === Object.prototype) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
   }
   throw new Error("Unsupported candidate identity value");
 }
+
+/** @param {string | Uint8Array} bytes @returns {string} */
 export const digest = bytes => createHash("sha256").update(bytes).digest("hex");
+/** @param {unknown} value @returns {string} */
 export const identity = value => digest(canonical(value));
+/** @param {string} message @returns {never} */
 const fail = message => { throw new Error(`Candidate provenance: ${message}`); };
+/** @param {unknown} value @returns {value is string} */
 const sha = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+/** @param {unknown} a @param {unknown} b @returns {boolean} */
 const same = (a, b) => canonical(a) === canonical(b);
+/** @param {unknown} value @param {readonly string[]} names */
 function keys(value, names) {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !same(Object.keys(value).sort(), [...names].sort())) fail("record fields differ");
+  if (!isRecord(value) || !same(Object.keys(value).sort(), [...names].sort())) fail("record fields differ");
 }
+/** @param {JsonRecord} value @param {readonly string[]} names */
 function digests(value, names) {
   keys(value, names);
   for (const key of names) if (!sha(value[key])) fail(`invalid ${key} identity`);
 }
+/** @param {unknown} value @param {string} schema @param {readonly string[]} fields */
 function envelope(value, schema, fields) {
+  if (!isRecord(value)) fail("record fields differ");
   keys(value, ["schema", "identity", ...fields]);
-  const { identity: declared, ...body } = value;
+  const record = /** @type {JsonRecord} */ (value);
+  const { identity: declared, ...body } = record;
   if (body.schema !== schema || !sha(declared) || identity(body) !== declared) fail("envelope identity mismatch");
 }
+/**
+ * @template {string} S
+ * @template {JsonRecord} T
+ * @param {S} schema
+ * @param {T} fields
+ * @returns {T & { schema: S, identity: string }}
+ */
 export function seal(schema, fields) {
   if (Object.hasOwn(fields, "schema") || Object.hasOwn(fields, "identity")) fail("reserved envelope field");
   const body = { schema, ...fields };
@@ -40,9 +80,12 @@ export function seal(schema, fields) {
 
 // No symlinks, implicit omissions, timestamps or absolute paths in identities.
 // Callers inventory an already materialized public composition, not a checkout.
+/** @param {string} root @returns {Promise<Inventory>} */
 export async function inventoryTree(root) {
+  /** @type {InventoryEntry[]} */
   const files = [];
   let total = 0;
+  /** @param {string} directory @param {string} [prefix] @returns {Promise<void>} */
   async function visit(directory, prefix = "") {
     const before = await lstat(directory);
     if (!before.isDirectory() || before.isSymbolicLink()) fail("non-directory inventory root");
@@ -77,11 +120,16 @@ export async function inventoryTree(root) {
   return { files, identity: identity(files) };
 }
 
+/** @param {unknown} plans */
 function validateResourcePlans(plans) {
+  if (!isRecord(plans)) fail("source resource plan invalid");
   keys(plans, TARGETS.map(target => target.triple));
-  for (const plan of Object.values(plans)) {
-    keys(plan, ["resources", "externalBin"]);
-    for (const paths of [plan.resources, plan.externalBin]) {
+  const records = /** @type {JsonRecord} */ (plans);
+  for (const plan of Object.values(records)) {
+    if (!isRecord(plan)) fail("source resource plan invalid");
+    const resourcePlan = /** @type {ResourcePlan} */ (plan);
+    keys(resourcePlan, ["resources", "externalBin"]);
+    for (const paths of [resourcePlan.resources, resourcePlan.externalBin]) {
       if (!Array.isArray(paths) || !paths.length || new Set(paths).size !== paths.length
           || paths.some(path => typeof path !== "string" || !/^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(path))) fail("source resource plan invalid");
     }
@@ -90,6 +138,7 @@ function validateResourcePlans(plans) {
 
 // Called by the source producer with the materialized composition's config.
 // Consumers use the sealed result, never their own checkout's Tauri config.
+/** @param {ResourceConfig} config @returns {Record<string, ResourcePlan>} */
 export function sourceResourcePlans(config) {
   const plans = Object.fromEntries(TARGETS.map(target => [target.triple, {
     resources: resourcePreparationPlan(config, target).map(entry => entry.directory).sort(),
@@ -99,8 +148,10 @@ export function sourceResourcePlans(config) {
   return plans;
 }
 
-export function validateSourceCandidate(source) {
-  envelope(source, "nebular-source-candidate-v1", ["version", "composition", "locks", "components", "recipe", "resourcePlans"]);
+/** @param {unknown} value @returns {SourceCandidate} */
+export function validateSourceCandidate(value) {
+  envelope(value, "nebular-source-candidate-v1", ["version", "composition", "locks", "components", "recipe", "resourcePlans"]);
+  const source = /** @type {SourceCandidate} */ (value);
   if (source.version !== CANDIDATE_VERSION || !sha(source.composition) || !sha(source.recipe)) fail("source candidate mismatch");
   digests(source.locks, ["cargo", "frontend"]);
   digests(source.components, ["burst", "loom", "solar"]);
@@ -108,11 +159,13 @@ export function validateSourceCandidate(source) {
   return source;
 }
 
-export function validateBuildReceipt(receipt, source) {
-  validateSourceCandidate(source);
-  envelope(receipt, "nebular-build-receipt-v1", [
+/** @param {unknown} value @param {unknown} sourceValue @returns {BuildReceipt} */
+export function validateBuildReceipt(value, sourceValue) {
+  const source = validateSourceCandidate(sourceValue);
+  envelope(value, "nebular-build-receipt-v1", [
     "sourceCandidate", "version", "target", "mode", "toolchains", "components", "settings", "preparation", "nativePayload"
   ]);
+  const receipt = /** @type {BuildReceipt} */ (value);
   if (receipt.sourceCandidate !== source.identity || receipt.version !== source.version || !TARGETS.some(t => t.triple === receipt.target)
       || !["nix-source", "portable-source"].includes(receipt.mode)) fail("build candidate, mode or target mismatch");
   digests(receipt.toolchains, ["node", "rust", "cargo", "compiler", "linker", "systemLibraries"]);
@@ -120,8 +173,10 @@ export function validateBuildReceipt(receipt, source) {
   keys(receipt.components, ["burst", "loom", "solar"]);
   for (const name of ["burst", "loom", "solar"]) {
     const component = receipt.components[name];
-    keys(component, ["source", "output", "producer"]);
-    if (component.source !== source.components[name] || !sha(component.output) || !sha(component.producer)) fail("component source or producer mismatch");
+    if (!component) fail("component source or producer mismatch");
+    const receiptComponent = /** @type {ReceiptComponent} */ (component);
+    keys(receiptComponent, ["source", "output", "producer"]);
+    if (receiptComponent.source !== source.components[name] || !sha(receiptComponent.output) || !sha(receiptComponent.producer)) fail("component source or producer mismatch");
   }
   keys(receipt.preparation, ["identity", "resources", "externalBin"]);
   if (!sha(receipt.preparation.identity) || !sha(receipt.nativePayload)) fail("output identity missing");
@@ -140,22 +195,28 @@ export function validateBuildReceipt(receipt, source) {
   return receipt;
 }
 
+/** @param {BuildReceipt} receipt @param {SourceCandidate} source @returns {void} */
 export function validateResourceCoverage(receipt, source) {
   validateSourceCandidate(source);
   const plan = source.resourcePlans[receipt.target];
-  if (!plan || receipt.sourceCandidate !== source.identity) fail("resource plan candidate or target mismatch");
-  const expected = [...plan.resources].sort();
+  if (receipt.sourceCandidate !== source.identity) fail("resource plan candidate or target mismatch");
+  if (!plan) fail("resource plan candidate or target mismatch");
+  const resourcePlan = /** @type {ResourcePlan} */ (plan);
+  const expected = [...resourcePlan.resources].sort();
   const actual = receipt.preparation.resources.map(x => x.path).sort();
-  if (!same(expected, actual) || !same([...plan.externalBin].sort(), receipt.preparation.externalBin.map(x => x.path).sort())) fail("required Tauri resource coverage mismatch");
+  if (!same(expected, actual) || !same([...resourcePlan.externalBin].sort(), receipt.preparation.externalBin.map(x => x.path).sort())) fail("required Tauri resource coverage mismatch");
 }
 
+/** @param {SourceCandidate} source @param {BuildReceipt} receipt @returns {ProvenanceRecord} */
 export function candidateProvenance(source, receipt) {
   validateBuildReceipt(receipt, source);
-  return seal("nebular-candidate-provenance-v1", { source, receipt });
+  return /** @type {ProvenanceRecord} */ (seal("nebular-candidate-provenance-v1", { source, receipt }));
 }
 
-export function verifyCandidateProvenance(record, authority) {
-  envelope(record, "nebular-candidate-provenance-v1", ["source", "receipt"]);
+/** @param {unknown} value @param {ProvenanceAuthority} authority @returns {ProvenanceRecord} */
+export function verifyCandidateProvenance(value, authority) {
+  envelope(value, "nebular-candidate-provenance-v1", ["source", "receipt"]);
+  const record = /** @type {ProvenanceRecord} */ (value);
   validateBuildReceipt(record.receipt, record.source);
   // These anchors must come from the owner's successful producer, never from
   // the untrusted artifact or its accompanying path/hash request itself.
@@ -178,13 +239,15 @@ export function verifyCandidateProvenance(record, authority) {
   return record;
 }
 
-export function verifyArtifactBinding(binding, provenance, authority, artifact) {
-  verifyCandidateProvenance(provenance, authority);
-  envelope(binding, "nebular-artifact-binding-v1", ["candidateProvenance", "sourceCandidate", "target", "nativePayload", "artifact"]);
+/** @param {unknown} value @param {unknown} provenanceValue @param {ProvenanceAuthority} authority @param {string} artifact @returns {ArtifactBinding} */
+export function verifyArtifactBinding(value, provenanceValue, authority, artifact) {
+  const provenance = verifyCandidateProvenance(provenanceValue, authority);
+  envelope(value, "nebular-artifact-binding-v1", ["candidateProvenance", "sourceCandidate", "target", "nativePayload", "artifact"]);
+  const binding = /** @type {ArtifactBinding} */ (value);
   if (binding.candidateProvenance !== provenance.identity || binding.sourceCandidate !== provenance.source.identity
       || binding.target !== provenance.receipt.target || binding.nativePayload !== provenance.receipt.nativePayload
       || !sha(binding.artifact) || binding.artifact !== artifact) fail("mixed candidate artifact");
-  if (!Array.isArray(authority.artifactBindings?.[binding.target])
-      || !authority.artifactBindings[binding.target].includes(binding.identity)) fail("unaccepted artifact producer identity");
+  const artifactBindings = authority.artifactBindings?.[binding.target];
+  if (!Array.isArray(artifactBindings) || !artifactBindings.includes(binding.identity)) fail("unaccepted artifact producer identity");
   return binding;
 }

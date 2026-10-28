@@ -4,6 +4,10 @@ import type {
   AppThemeBridge,
   AppThemeCompileResult,
   AppThemeStatus,
+  AppThemeOpenedDocument,
+  AppThemeOpenProfileResponse,
+  AppThemeSaveProfileRequest,
+  AppThemeSaveProfileResponse,
   PairedCompileResult,
   PairedProfile,
 } from "./types";
@@ -16,6 +20,7 @@ export class TauriAppThemeBridge implements AppThemeBridge {
       return {
         available: false,
         compilerVersion: "unknown",
+        supportedFormats: [],
         sessionId: "unavailable",
         latestRevision: 0,
         message: e?.message || "Failed to communicate with native Application Theme host",
@@ -36,24 +41,12 @@ export class TauriAppThemeBridge implements AppThemeBridge {
     });
   }
 
-  async openProfile(): Promise<{
-    cancelled: boolean;
-    profile?: PairedProfile;
-    displayName?: string;
-    filePath?: string;
-    error?: string;
-  }> {
-    return await invoke("studio_app_theme_open_profile");
+  async openProfile(): Promise<AppThemeOpenProfileResponse> {
+    return await invoke<AppThemeOpenProfileResponse>("studio_app_theme_open_profile");
   }
 
-  async saveProfile(profile: PairedProfile, saveAs?: boolean): Promise<{
-    cancelled: boolean;
-    filePath?: string;
-    error?: string;
-  }> {
-    return await invoke("studio_app_theme_save_profile", {
-      request: { profile, saveAs },
-    });
+  async saveProfile(request: AppThemeSaveProfileRequest): Promise<AppThemeSaveProfileResponse> {
+    return await invoke<AppThemeSaveProfileResponse>("studio_app_theme_save_profile", { request });
   }
 
   async exportPackage(
@@ -74,6 +67,10 @@ export class TauriAppThemeBridge implements AppThemeBridge {
   async reset(): Promise<AppThemeStatus> {
     return await invoke<AppThemeStatus>("studio_app_theme_reset");
   }
+
+  async resetAll(): Promise<AppThemeStatus> {
+    return await this.reset();
+  }
 }
 
 export interface MockAppThemeBridgeOptions {
@@ -86,6 +83,7 @@ export interface MockAppThemeBridgeOptions {
 
 export class MockAppThemeBridge implements AppThemeBridge {
   private status: AppThemeStatus;
+  private document: AppThemeOpenedDocument | null = null;
   private loomError?: string | undefined;
   private compiledSolarSailCss?: string | undefined;
   private compiledStarlightCss?: string | undefined;
@@ -94,6 +92,7 @@ export class MockAppThemeBridge implements AppThemeBridge {
     this.status = {
       available: options?.available ?? true,
       compilerVersion: "0.1.0",
+      supportedFormats: ["tf-paired-profile-v1", "tf-paired-profile-v2"],
       sessionId: "mock-session",
       latestRevision: 1,
       dirty: false,
@@ -150,29 +149,63 @@ export class MockAppThemeBridge implements AppThemeBridge {
     };
   }
 
-  async openProfile(): Promise<{
-    cancelled: boolean;
-    profile?: PairedProfile;
-    displayName?: string;
-    filePath?: string;
-    error?: string;
-  }> {
+  private rememberDocument(document: AppThemeOpenedDocument): AppThemeOpenedDocument {
+    this.document = document;
+    this.status.activeDocumentId = document.documentId;
+    this.status.activeDisplayName = document.displayName;
+    this.status.activeSchemaVersion = document.schemaVersion;
+    this.status.activeVerificationStatus = document.verificationStatus;
+    return document;
+  }
+
+  async openProfile(): Promise<AppThemeOpenProfileResponse> {
     return {
       cancelled: false,
-      profile: { ...BUILTIN_FORGE_CONSOLE_PROFILE },
-      displayName: "forge-console.profile.json",
-      filePath: "/mock/forge-console.profile.json",
+      document: this.rememberDocument({
+        documentId: "mock-profile-document",
+        displayName: "forge-console.profile.json",
+        schemaVersion: "tf-paired-profile-v1",
+        aliasResolved: false,
+        verificationStatus: "verified",
+        isTransformed: false,
+        semantic: "validated",
+        rawSourceSha256: "0".repeat(64),
+        normalizedSha256: "1".repeat(64),
+        editable: true,
+        profile: JSON.parse(JSON.stringify(BUILTIN_FORGE_CONSOLE_PROFILE)),
+      }),
     };
   }
 
-  async saveProfile(_profile: PairedProfile, _saveAs?: boolean): Promise<{
-    cancelled: boolean;
-    filePath?: string;
-    error?: string;
-  }> {
+  async saveProfile(request: AppThemeSaveProfileRequest): Promise<AppThemeSaveProfileResponse> {
+    if (request.saveMode === "original") {
+      if (!this.document || this.document.documentId !== request.documentId) {
+        return { cancelled: false, saved: false, error: "Document is unavailable." };
+      }
+      return { cancelled: false, saved: true, document: { ...this.document } };
+    }
+    if (!request.profile) {
+      return { cancelled: false, saved: false, error: "Profile is required." };
+    }
+    const isEdited = request.saveMode === "edited" || Boolean(request.documentId);
+    const parentSha = isEdited ? (this.document?.rawSourceSha256 ?? "0".repeat(64)) : undefined;
     return {
       cancelled: false,
-      filePath: "/mock/forge-console.profile.json",
+      saved: true,
+      document: this.rememberDocument({
+        documentId: this.document?.documentId ?? "mock-profile-document",
+        displayName: "forge-console.profile.json",
+        schemaVersion: "tf-paired-profile-v1",
+        aliasResolved: false,
+        verificationStatus: isEdited ? "transformed" : "verified",
+        isTransformed: isEdited,
+        ...(parentSha !== undefined ? { parentSourceSha256: parentSha } : {}),
+        semantic: "validated",
+        rawSourceSha256: "2".repeat(64),
+        normalizedSha256: "3".repeat(64),
+        editable: true,
+        profile: request.profile,
+      }),
     };
   }
 
@@ -194,8 +227,17 @@ export class MockAppThemeBridge implements AppThemeBridge {
 
 
   async reset(): Promise<AppThemeStatus> {
-    this.status.latestRevision += 1;
+    this.status.latestRevision = (this.status.latestRevision ?? 0) + 1;
     this.status.dirty = false;
+    this.document = null;
+    delete this.status.activeDocumentId;
+    delete this.status.activeDisplayName;
+    delete this.status.activeSchemaVersion;
+    delete this.status.activeVerificationStatus;
     return { ...this.status };
+  }
+
+  async resetAll(): Promise<AppThemeStatus> {
+    return await this.reset();
   }
 }
