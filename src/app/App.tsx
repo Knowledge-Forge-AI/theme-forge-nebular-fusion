@@ -86,7 +86,12 @@ export function App({
     catch { setHostError("The bounded Studio host operation failed. No fixture fallback was used."); }
   };
 
-  const start = () => run(async () => setStatus(await hostBridge.startHost((next) => { setEvent(next); void hostBridge.getStatus().then(setStatus, () => undefined); })));
+  const start = () => run(async () => setStatus(await hostBridge.startHost((next) => {
+    setEvent(next);
+    void hostBridge.getStatus().then((nextStatus) => {
+      if (nextStatus.state === next.state) setStatus(nextStatus);
+    }, () => undefined);
+  })));
   const stop = () => run(async () => { await hostBridge.shutdownHost(); setProject(undefined); setSource(undefined); setSources([]); setProposalDraft(undefined); setStatus(await hostBridge.getStatus()); });
   const selectProject = () => run(async () => {
     const result = await hostBridge.selectProject("existing");
