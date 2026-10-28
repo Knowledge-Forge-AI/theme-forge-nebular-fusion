@@ -1348,6 +1348,7 @@ export function buildCommandPlan({
         qualifyCheckout,
         "--expected-native-payload-sha256",
         expectedNativePayloadSha256,
+        "--archive-legal-envelope",
         "--output",
         join(evidenceDir, `${platform}.qualification.json`),
       ],
@@ -1461,8 +1462,13 @@ export function prepareConsumerQualifyCheckout(checkout, npmPayload, scratch) {
   const bridgeRoot = join(scratch, "qualify-checkout");
   mkdirSyncCompat(join(bridgeRoot, "src-tauri"));
   cpSync(tauriConfPath, join(bridgeRoot, "src-tauri/tauri.conf.json"));
+  const studioSourceRoot = dirname(dirname(tauriConfPath));
   for (const legalName of ["LICENSE", "NOTICE"]) {
-    if (existsSync(join(checkout, legalName))) cpSync(join(checkout, legalName), join(bridgeRoot, legalName));
+    const sourceLegalPath = join(studioSourceRoot, legalName);
+    if (!existsSync(sourceLegalPath)) {
+      fail(`authoritative Studio ${legalName} is missing beside ${tauriConfPath}`);
+    }
+    cpSync(sourceLegalPath, join(bridgeRoot, legalName));
   }
   const npmResourcesRoot = join(npmPayload, "lib/theme-forge-nebular-fusion");
   for (const dir of dirs) {

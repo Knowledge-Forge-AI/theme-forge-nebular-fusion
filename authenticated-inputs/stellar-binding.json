@@ -4,7 +4,7 @@
   "product": "theme-forge-nebular-fusion",
   "input": {
     "product": "theme-forge-stellar-burst",
-    "sourceTree": "db3752c893e2b7fbc46098d7229f327ea1c52b82",
+    "sourceTree": "f70566063a33fc3f4c08c658d07052f03f4f95fe",
     "sourceRole": "exact-composition-input",
     "sourceMaterializationSha256": null,
     "publicMergeCommit": null,
@@ -14,7 +14,7 @@
     "supportLock": {
       "path": "package-lock.json",
       "source": "exact-composition-input-tree",
-      "sourceTree": "db3752c893e2b7fbc46098d7229f327ea1c52b82",
+      "sourceTree": "f70566063a33fc3f4c08c658d07052f03f4f95fe",
       "sha256": "8534f5e5d12eeccbc74d3db2036465d4e6a6eb0b9496c0ff5160da765c9bbdbf",
       "size": 57174,
       "packageJson": "burst-rc-archive:package/package.json",

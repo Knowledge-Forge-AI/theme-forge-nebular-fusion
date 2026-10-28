@@ -12,7 +12,7 @@ import { LANES, RETENTION, artifactName, planLanes, workflowOutputs } from "../t
 import { CANDIDATE_VERSION } from "../tools/platform-targets.mjs";
 import { FIXED_ARCHIVE_TIME, PACKAGE_MANIFEST_PROJECTION_SCHEMA, PLATFORMS, assemblePlatformPackage, assembleRawArchive, packPlatformPackage, platformPackageJson, platformReadme, tarRecords, verifyPlatformPackage, walkTree, writeDeterministicArchive } from "../tools/native-rc-package.mjs";
 import { FINALIZATION_SCHEMA, PLATFORM_SCENARIOS, SCENARIOS, authenticateNpmPackageContext, executablePath, finalizeSmokeRun, judgeReceipt, launcherPath, persistentStateLocations, prepareFixtures, caseSensitive } from "../tools/native-rc-smoke.mjs";
-import { compareVersions, glibcFloor, invokeBounded, qualifyPayload, run, selectPayloadInventoryForQualification } from "../tools/native-rc-qualify.mjs";
+import { compareVersions, glibcFloor, invokeBounded, qualifyPayload, readLinuxArchiveLegalEnvelope, run, selectPayloadInventoryForQualification } from "../tools/native-rc-qualify.mjs";
 import { buildReceipt, seal } from "../tools/native-rc-evidence.mjs";
 import { identity } from "../tools/candidate-provenance.mjs";
 import { buildIndex } from "../tools/native-rc-index.mjs";
@@ -1583,6 +1583,63 @@ describe("linux private-runtime RC integration", () => {
     expect(launcherPath("/opt/app", "darwin-arm64")).toBe(executablePath("/opt/app", "darwin-arm64"));
   });
 
+  it("keeps naked Linux legal files in identity and admits only an explicit archive envelope", async () => {
+    const payload = scratch("legal-envelope-payload");
+    mkdirSync(join(payload, "bin"), { recursive: true });
+    write(join(payload, "bin/theme-forge-nebular-fusion"), "payload\n", 0o755);
+    const base = await inventoryNativePayload(payload);
+    const checkout = scratch("legal-envelope-checkout");
+    const license = "license\n";
+    const notice = "notice\n";
+    write(join(checkout, "LICENSE"), license, 0o644);
+    write(join(checkout, "NOTICE"), notice, 0o644);
+    write(join(payload, "LICENSE"), license, 0o644);
+    write(join(payload, "NOTICE"), notice, 0o644);
+
+    const ordinary = await inventoryNativePayload(payload);
+    expect(ordinary.identity).not.toBe(base.identity);
+    expect(ordinary.files.map(({ path }) => path)).toEqual(expect.arrayContaining(["LICENSE", "NOTICE"]));
+    const envelope = await readLinuxArchiveLegalEnvelope(payload, checkout);
+    const admitted = await inventoryNativePayload(payload, { rootEnvelope: envelope });
+    expect(admitted.identity).toBe(base.identity);
+    expect(admitted.files.map(({ path }) => path)).not.toEqual(expect.arrayContaining(["LICENSE", "NOTICE"]));
+
+    // The native-rc-package producer reads checkout-root legal files. A
+    // nested file is not an alternate source and is not read by admission.
+    mkdirSync(join(checkout, "apps/studio"), { recursive: true });
+    symlinkSync(join(checkout, "NOTICE"), join(checkout, "apps/studio/NOTICE"));
+    await expect(readLinuxArchiveLegalEnvelope(payload, checkout)).resolves.toEqual(envelope);
+    rmSync(join(checkout, "apps/studio"), { recursive: true, force: true });
+
+    write(join(payload, "nested/NOTICE"), "nested legal\n", 0o644);
+    const nested = await inventoryNativePayload(payload, { rootEnvelope: envelope });
+    expect(nested.files.map(({ path }) => path)).toContain("nested/NOTICE");
+    expect(nested.identity).not.toBe(base.identity);
+
+    write(join(payload, "unexpected-root-file"), "reject\n", 0o644);
+    const unexpected = await inventoryNativePayload(payload, { rootEnvelope: envelope });
+    expect(unexpected.files.some(({ path }) => path === "unexpected-root-file")).toBe(true);
+    expect(() => selectPayloadInventoryForQualification(PLATFORMS["linux-x64"], {
+      hasExpectedPayload: true,
+      ordinaryInventory: unexpected,
+      expectedNativePayloadSha256: base.identity,
+    })).toThrow(/does not match expected/);
+    rmSync(join(payload, "unexpected-root-file"));
+    rmSync(join(payload, "nested/NOTICE"));
+
+    rmSync(join(payload, "NOTICE"));
+    expect((await inventoryNativePayload(payload)).files.map(({ path }) => path)).toContain("LICENSE");
+    await expect(readLinuxArchiveLegalEnvelope(payload, checkout)).rejects.toThrow(/both LICENSE and NOTICE/);
+    write(join(payload, "NOTICE"), notice, 0o644);
+
+    rmSync(join(payload, "NOTICE"));
+    symlinkSync(join(checkout, "NOTICE"), join(payload, "NOTICE"));
+    await expect(readLinuxArchiveLegalEnvelope(payload, checkout)).rejects.toThrow();
+    rmSync(join(payload, "NOTICE"));
+    mkdirSync(join(payload, "NOTICE"));
+    await expect(readLinuxArchiveLegalEnvelope(payload, checkout)).rejects.toThrow();
+  });
+
   it("qualifyPayload enforces paired local nativeRuntime vs consumer expectedNativePayloadSha256 and validates private closure", async () => {
     const { root: payload } = populatePrivateLinuxPayload(scratch("payload-qualify"), { extraPayloadElf: true });
     const studio = new URL("..", import.meta.url).pathname;
@@ -1599,6 +1656,12 @@ describe("linux private-runtime RC integration", () => {
     ]) {
       write(join(checkout, "src-tauri", resource), "{}", 0o644);
     }
+    const legalLicense = "qualify license\n";
+    const legalNotice = "qualify notice\n";
+    write(join(checkout, "LICENSE"), legalLicense, 0o644);
+    write(join(checkout, "NOTICE"), legalNotice, 0o644);
+    write(join(payload, "LICENSE"), legalLicense, 0o644);
+    write(join(payload, "NOTICE"), legalNotice, 0o644);
     for (const resource of [
       "loom-adapter/fixture.json",
       "solar-sail-payload/fixture.json",
@@ -1610,6 +1673,8 @@ describe("linux private-runtime RC integration", () => {
       write(join(payload, "lib/theme-forge-nebular-fusion", resource), "{}", 0o644);
     }
     const payloadInv = await inventoryNativePayload(payload);
+    const archiveEnvelope = await readLinuxArchiveLegalEnvelope(payload, checkout);
+    const admittedPayloadInv = await inventoryNativePayload(payload, { rootEnvelope: archiveEnvelope });
 
     // Missing both local runtime authority and expectedNativePayloadSha256 is refused
     await expect(qualifyPayload({ platform: "linux-x64", payload, checkout }))
@@ -1708,6 +1773,19 @@ describe("linux private-runtime RC integration", () => {
     expect(readelfCalls.some(args => args.at(-1) === join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"))).toBe(true);
     expect(lddCalls.some(args => args.at(-1) === join(payload, "lib/theme-forge-nebular-fusion/extra-elf/embedded-helper"))).toBe(true);
     expect(readelfCalls.some(args => args.includes("-n") && args.includes("-A") && args.at(-1) === join(runtimeLib, "libwebkit2gtk-4.1.so.0.19.9"))).toBe(true);
+
+    // The real raw-archive path qualifies a private-marker payload while
+    // excluding only the authenticated root legal envelope from identity.
+    const qualifiedArchive = await qualifyPayload({
+      platform: "linux-x64",
+      payload,
+      checkout,
+      expectedNativePayloadSha256: admittedPayloadInv.identity,
+      archiveLegalEnvelope: true,
+      commandRunner: mockRunner,
+    });
+    expect(qualifiedArchive.checks.find(c => c.id === "private-runtime-closure")?.ok).toBe(true);
+    expect(qualifiedArchive.nativePayload.identity).toBe(admittedPayloadInv.identity);
 
     // The fixture intentionally uses a 64-byte fake sidecar, so import a fresh
     // qualifier instance with its Node authority narrowed to that fixture. This
