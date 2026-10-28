@@ -748,6 +748,7 @@ describe("complete design-exchange controls", () => {
     // Re-import brief and candidateA
     mockPacketClient.importQueue.push(sampleBrief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
+    await screen.findByText(sampleBrief.title);
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
@@ -770,6 +771,7 @@ describe("complete design-exchange controls", () => {
     // Re-import brief and candidateA
     mockPacketClient.importQueue.push(sampleBrief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
+    await screen.findByText(sampleBrief.title);
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);
@@ -802,6 +804,7 @@ describe("complete design-exchange controls", () => {
     );
     mockPacketClient.importQueue.push(sampleBrief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
+    await screen.findByText(sampleBrief.title);
     mockPacketClient.importQueue.push(sampleCandidateA);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     await screen.findByText(sampleCandidateA.title);

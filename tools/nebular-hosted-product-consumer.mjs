@@ -71,6 +71,12 @@ const HOST_PROVIDER_ROOTS = Object.freeze({
   "linux-arm64": Object.freeze({ libraryRoot: "/usr/lib/aarch64-linux-gnu", architecture: "aarch64-linux-gnu", vendorRoot: "/usr/share/glvnd/egl_vendor.d" }),
 });
 const PRIVATE_PROVIDER_ELF_SUFFIX = /(?:\.so(?:\.\d+)*|_dri\.so)$/u;
+const PRIVATE_GRAPHICS_VENDOR_LIBRARY = "libEGL_mesa.so.0";
+const PRIVATE_GRAPHICS_ENDPOINT_COUNT = 7;
+const PRIVATE_GRAPHICS_DRI_PATHS = Object.freeze({
+  "linux-arm64": "lib/dri/armada-drm_dri.so",
+  "linux-x64": "lib/dri/crocus_dri.so",
+});
 const SOURCE_READBACK_ASSET_ROLES = Object.freeze([
   "corresponding-source-offer",
   "darwin-app-source",
@@ -521,6 +527,34 @@ function validatePayloadInventorySummary(value, label, expectedIdentity, expecte
   });
 }
 
+function validatePrivateGraphicsProviderMaterial(value, qualification, platform) {
+  const label = `qualification receipt for ${platform} private graphics provider material`;
+  if (!isRecord(value)) fail(`${label} detail must be an object`);
+  const keys = Object.keys(value);
+  if (
+    keys.length !== 4 ||
+    keys.some((key) => !["vendorJsonSha256", "vendorLibraryPath", "driPath", "endpointCount"].includes(key))
+  ) {
+    fail(`${label} detail contains unknown or missing keys`);
+  }
+  const vendorJsonSha256 = requireDigest(value.vendorJsonSha256, `${label}.vendorJsonSha256`);
+  if (value.vendorLibraryPath !== PRIVATE_GRAPHICS_VENDOR_LIBRARY) {
+    fail(`${label}.vendorLibraryPath must be ${PRIVATE_GRAPHICS_VENDOR_LIBRARY}`);
+  }
+  if (value.driPath !== PRIVATE_GRAPHICS_DRI_PATHS[platform]) {
+    fail(`${label}.driPath does not match ${platform}`);
+  }
+  if (!Number.isSafeInteger(value.endpointCount) || value.endpointCount !== PRIVATE_GRAPHICS_ENDPOINT_COUNT) {
+    fail(`${label}.endpointCount must be ${PRIVATE_GRAPHICS_ENDPOINT_COUNT}`);
+  }
+  const materialDigest = requireDigest(qualification.materialDigest, `${label} qualification.materialDigest`);
+  const closure = qualification.checks.find((entry) => entry.id === "private-runtime-closure");
+  if (closure !== undefined && (!isRecord(closure.detail) || closure.detail.materialDigest !== materialDigest)) {
+    fail(`${label} materialDigest does not match private-runtime-closure`);
+  }
+  return Object.freeze({ vendorJsonSha256, vendorLibraryPath: value.vendorLibraryPath, driPath: value.driPath, endpointCount: value.endpointCount, materialDigest });
+}
+
 export function validateQualificationReceipt(qualification, platform, targetSource) {
   requireRecord(qualification, "qualification.json");
   if (!Object.hasOwn(PLATFORMS, platform)) {
@@ -576,7 +610,7 @@ export function validateQualificationReceipt(qualification, platform, targetSour
     ...Object.keys(RESOURCE_PREPARERS).map((dir) => `resource:${dir}`),
     ...(platform === "darwin-arm64"
       ? ["legal-notices", "codesign"]
-      : ["mode:gui", "mode:sidecar", "mode:launcher", "glibc:gui", "glibc:sidecar", "glibc-floor", "linkage"]),
+      : ["private-graphics-provider-material", "mode:gui", "mode:sidecar", "mode:launcher", "glibc:gui", "glibc:sidecar", "glibc-floor", "linkage"]),
   ];
   const allowedChecks = new Set([
     ...requiredChecks,
@@ -599,6 +633,8 @@ export function validateQualificationReceipt(qualification, platform, targetSour
     }
   }
   if (platform.startsWith("linux")) {
+    const graphicsCheck = qualification.checks.find((entry) => entry.id === "private-graphics-provider-material");
+    validatePrivateGraphicsProviderMaterial(graphicsCheck.detail, qualification, platform);
     const glibcTuple = parseGlibcTuple(qualification.glibcMinimum);
     if (compareGlibcTuple(glibcTuple, [2, 36, 0]) > 0) {
       fail(`qualification receipt glibcMinimum ${qualification.glibcMinimum} exceeds floor 2.36 for ${platform}`);
