@@ -283,6 +283,15 @@ jobs:
           printf '%s\n' "$INPUT_DESCRIPTOR_JSON" > "$RUNNER_TEMP/consumer-input.json"
           node tools/nebular-hosted-product-consumer.mjs admit-source --input "$RUNNER_TEMP/consumer-input.json" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output "$RUNNER_TEMP/source-admission.json"
           node tools/nebular-hosted-product-consumer.mjs qualify --input "$RUNNER_TEMP/consumer-input.json" --assets "$RUNNER_TEMP/nebular-product-assets" --platform "$PLATFORM" --checkout . --source-archive "$RUNNER_TEMP/nebular-source-readbacks/source-offer/nebular-corresponding-source.tar.gz" --darwin-source-archive "$RUNNER_TEMP/nebular-source-readbacks/darwin-app-source/source.tar.gz" --linux-source-archive "$RUNNER_TEMP/nebular-source-readbacks/linux-app-source/source.tar.gz" --darwin-receipt "$RUNNER_TEMP/nebular-source-readbacks/darwin-receipt/qualification.json" --output .test-reports/nebular/consumer
+      - name: Retain Linux GUI smoke diagnostics on failure
+        if: ${{ failure() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nebular-0.7.0-consumer-diagnostics-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: .test-reports/nebular/consumer/smoke/
+          if-no-files-found: warn
+          compression-level: 0
+          overwrite: false
       - name: Retain consumer receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
