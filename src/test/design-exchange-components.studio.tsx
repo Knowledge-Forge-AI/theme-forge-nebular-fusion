@@ -676,6 +676,7 @@ describe("complete design-exchange controls", () => {
     );
     mockPacketClient.importQueue.push(longBrief);
     await user.click(screen.getByRole("button", { name: "Import brief" }));
+    await screen.findByText(longBrief.title);
     mockPacketClient.importQueue.push(longCand);
     await user.click(screen.getByRole("button", { name: "Import candidate" }));
     expect(await screen.findByText(longRationale)).toBeTruthy();
