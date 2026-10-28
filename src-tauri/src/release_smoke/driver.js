@@ -3,6 +3,30 @@
 // through its DOM (accessible names and visible status text) and confirms effects through the same
 // read-only status commands the frontend uses. It adds no command and needs no capability beyond the
 // main window's. Results are published on window.__NEBULAR_RELEASE_SMOKE__ for the Rust host.
+function classifyPlanAnnouncement(announcement, outcomes) {
+  if (!announcement) return null;
+  if (outcomes.includes(announcement)) return { kind: "outcome", message: announcement };
+  return { kind: "failure", message: announcement };
+}
+
+function classifyPlanGate(cancelButton, announcement, outcomes) {
+  const current = classifyPlanAnnouncement(announcement, outcomes);
+  if (current) return current;
+  if (cancelButton) return { kind: "cancel", button: cancelButton };
+  return null;
+}
+
+function classifyPlanOutcome(announcement, body, outcomes) {
+  const current = classifyPlanAnnouncement(announcement, outcomes);
+  if (current) return current;
+  const fallback = outcomes.find((message) => body.includes(message));
+  return fallback ? { kind: "outcome", message: fallback } : null;
+}
+
+function formatPlanObservation(announcement, progress) {
+  return `announcement="${String(announcement).slice(0, 240)}" progress="${String(progress).slice(0, 240)}"`;
+}
+
 (function nebularReleaseSmoke() {
   "use strict";
   if (window.__NEBULAR_RELEASE_SMOKE_STARTED__) return;
@@ -59,6 +83,28 @@
     const term = Array.from(document.querySelectorAll("dt")).find((candidate) => text(candidate) === label);
     return term && term.nextElementSibling ? text(term.nextElementSibling) : "";
   }
+
+  // Preserve the original derive failure while recording only the coarse public lifecycle state.
+  // This observer is deliberately best-effort: a DOM/state read must never mask the driver error.
+  function appendPlanLifecycleFact() {
+    let lifecycle = "other";
+    try {
+      const state = described("Sidecar state");
+      lifecycle = state === "ready" ? "ready" : state === "failed" ? "failed" : "other";
+    } catch {
+      lifecycle = "other";
+    }
+    try { facts.push(["deriveCancelLifecycle", lifecycle]); } catch { /* preserve the original failure */ }
+  }
+
+  const withPlanLifecycleFact = async (run) => {
+    try {
+      return await run();
+    } catch (error) {
+      appendPlanLifecycleFact();
+      throw error;
+    }
+  };
 
   function bodyIncludes(value) {
     return text(document.body).includes(value);
@@ -231,26 +277,40 @@
   });
 
   // Scenario C: plan cancellation, then a derive plan applied to the case-exact project.
-  const planMessage = () => text(document.querySelector(".plan-workspace, [aria-label='Plan operation progress']")) + " " + text(document.body);
+  const planObservation = () => {
+    const announcement = text(document.querySelector('.plan-workspace p[role="status"]'));
+    const progress = text(document.querySelector("[aria-label='Plan operation progress']"));
+    return formatPlanObservation(announcement, progress);
+  };
 
-  const deriveCancel = () => step("derive-plan-cancel", "dom", async () => {
+  const deriveCancel = () => step("derive-plan-cancel", "dom", () => withPlanLifecycleFact(async () => {
     const nav = document.querySelector('nav[aria-label="Brand workbench views"]');
     await click("Recipes", { root: nav });
     await click("Review derive plan", { timeout: 60000 });
     const outcomes = ["The operation was cancelled.", "Plan ready for review.", "The operation was already complete or did not belong to this session."];
     // Cancel as soon as the operation exposes its handle; a small plan may finish first, which is recorded.
-    const cancel = await waitFor(() => button("Cancel operation") || outcomes.find((message) => bodyIncludes(message)), "cancellable operation or outcome", 10000);
-    const cancelRequested = typeof cancel !== "string";
-    if (cancelRequested) cancel.click();
-    const outcome = await waitFor(() => outcomes.find((message) => bodyIncludes(message)), "plan outcome after cancel", 90000,
-      () => text(document.querySelector("[aria-label='Plan operation progress']")) || "no progress");
+    const gate = await waitFor(() => {
+      const cancelButton = button("Cancel operation");
+      const announcement = text(document.querySelector('.plan-workspace p[role="status"]'));
+      return classifyPlanGate(cancelButton, announcement, outcomes);
+    }, "cancellable operation or outcome", 10000, planObservation);
+    if (gate.kind === "failure") throw new Error(`plan operation failed: ${gate.message}`);
+    const cancelRequested = gate.kind === "cancel";
+    if (cancelRequested) gate.button.click();
+    const outcomeGate = gate.kind === "outcome" ? gate : await waitFor(() => classifyPlanOutcome(
+      text(document.querySelector('.plan-workspace p[role="status"]')),
+      text(document.body),
+      outcomes,
+    ), "plan outcome after cancel", 90000, planObservation);
+    if (outcomeGate.kind === "failure") throw new Error(`plan operation failed: ${outcomeGate.message}`);
+    const outcome = outcomeGate.message;
     facts.push(["deriveCancel", cancelRequested ? `requested: ${outcome}` : `finished first: ${outcome}`]);
     if (outcome === "Plan ready for review." || button("Discard plan")) {
       await click("Discard plan");
       await waitFor(() => bodyIncludes("The plan was discarded."), "plan discarded", 60000);
     }
     return `${cancelRequested ? "cancel requested" : "operation finished before cancel"} · ${outcome}`;
-  });
+  }));
 
   const deriveApply = () => step("derive-plan-apply", "dom", async () => {
     await click("Review derive plan", { timeout: 60000 });
