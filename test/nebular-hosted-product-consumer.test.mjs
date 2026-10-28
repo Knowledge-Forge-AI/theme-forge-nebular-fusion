@@ -113,6 +113,12 @@ const canonical = (value) =>
           .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
           .join(",")}}`;
 const digest = (character) => character.repeat(64);
+const PRIVATE_GRAPHICS_VENDOR_JSON_SHA256 = digest("a");
+const PRIVATE_GRAPHICS_MATERIAL_DIGEST = digest("b");
+const PRIVATE_GRAPHICS_DRI_PATHS = {
+  "linux-arm64": "lib/dri/armada-drm_dri.so",
+  "linux-x64": "lib/dri/crocus_dri.so",
+};
 
 const RETAINED_DARWIN_QUALIFICATION_JSON = `{
   "schema": "nebular.native-rc-qualification-v1",
@@ -200,6 +206,16 @@ function makeQualificationChecks(platform, executableDetail = targetSources[plat
       { id: "codesign", ok: true, detail: "codesign verified" },
     );
   } else {
+    checks.push({
+      id: "private-graphics-provider-material",
+      ok: true,
+      detail: {
+        vendorJsonSha256: PRIVATE_GRAPHICS_VENDOR_JSON_SHA256,
+        vendorLibraryPath: "libEGL_mesa.so.0",
+        driPath: PRIVATE_GRAPHICS_DRI_PATHS[platform],
+        endpointCount: 7,
+      },
+    });
     checks.push(
       { id: "mode:gui", ok: true, detail: "0755" },
       { id: "mode:sidecar", ok: true, detail: "0755" },
@@ -234,6 +250,7 @@ function makeQualificationReceipt(platform, targetSource) {
     status: "pass",
     executableSha256: targetSource.executableSha256,
     glibcMinimum: "2.36",
+    materialDigest: PRIVATE_GRAPHICS_MATERIAL_DIGEST,
     nativePayload: { identity: targetSource.nativePayloadSha256, files: 10 },
     checks: makeQualificationChecks(platform, targetSource.executableSha256),
   };
@@ -1496,7 +1513,13 @@ if (observedPayload.identity !== expectedPayload) {
   process.exit(1);
 }
 const executableSha256 = platform === "linux-x64" ? "__LINUX_X64_EXE__" : "__LINUX_ARM64_EXE__";
-const checks = ${JSON.stringify(makeQualificationChecks("linux-x64"))}.map((c) => c.id === "executable-header" ? { ...c, detail: executableSha256 } : c);
+const checks = ${JSON.stringify(makeQualificationChecks("linux-x64"))}.map((c) => {
+  if (c.id === "executable-header") return { ...c, detail: executableSha256 };
+  if (c.id === "private-graphics-provider-material") {
+    return { ...c, detail: { ...c.detail, driPath: ${JSON.stringify(PRIVATE_GRAPHICS_DRI_PATHS)}[platform] } };
+  }
+  return c;
+});
 writeFileSync(out, JSON.stringify({
   schema: "${QUALIFICATION_RECEIPT_SCHEMA}",
   platform,
@@ -1505,6 +1528,7 @@ writeFileSync(out, JSON.stringify({
   status: "pass",
   executableSha256,
   glibcMinimum: "2.36",
+  materialDigest: "${PRIVATE_GRAPHICS_MATERIAL_DIGEST}",
   nativePayload: { identity: observedPayload.identity, files: observedPayload.files.length },
   checks
 }, null, 2));
@@ -2943,6 +2967,121 @@ assert.throws(
     ),
   /missing required passing check/,
 );
+const linuxGraphicsReceipt = makeQualificationReceipt("linux-x64", targetSources["linux-x64"]);
+const linuxGraphicsCheck = linuxGraphicsReceipt.checks.find((entry) => entry.id === "private-graphics-provider-material");
+assert.equal(
+  validateQualificationReceipt(linuxGraphicsReceipt, "linux-x64", targetSources["linux-x64"]),
+  linuxGraphicsReceipt,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: linuxGraphicsReceipt.checks.filter((entry) => entry.id !== "private-graphics-provider-material"),
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /missing required passing check 'private-graphics-provider-material'/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: linuxGraphicsReceipt.checks.map((entry) =>
+          entry.id === "private-graphics-provider-material" ? { ...entry, ok: false } : entry,
+        ),
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /checks are incomplete or failing/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: [...linuxGraphicsReceipt.checks, linuxGraphicsCheck],
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /unknown or duplicate check 'private-graphics-provider-material'/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: [...linuxGraphicsReceipt.checks, { id: "unrecognized-check", ok: true, detail: "unexpected" }],
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /unknown or duplicate check 'unrecognized-check'/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: linuxGraphicsReceipt.checks.map((entry) =>
+          entry.id === "private-graphics-provider-material"
+            ? { ...entry, detail: { ...entry.detail, endpointCount: 6 } }
+            : entry,
+        ),
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /endpointCount must be 7/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: linuxGraphicsReceipt.checks.map((entry) =>
+          entry.id === "private-graphics-provider-material"
+            ? { ...entry, detail: { ...entry.detail, driPath: PRIVATE_GRAPHICS_DRI_PATHS["linux-arm64"] } }
+            : entry,
+        ),
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /driPath does not match linux-x64/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        materialDigest: "not-a-digest",
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /qualification\.materialDigest is invalid/,
+);
+assert.throws(
+  () =>
+    validateQualificationReceipt(
+      {
+        ...linuxGraphicsReceipt,
+        checks: [
+          ...linuxGraphicsReceipt.checks,
+          { id: "private-runtime-closure", ok: true, detail: { materialDigest: digest("c") } },
+        ],
+      },
+      "linux-x64",
+      targetSources["linux-x64"],
+    ),
+  /does not match private-runtime-closure/,
+);
 assert.throws(
   () =>
     validateQualificationReceipt(
@@ -2954,6 +3093,7 @@ assert.throws(
         nativePayload: { identity: targetSources["linux-x64"].nativePayloadSha256, files: 1 },
         checks: makeQualificationChecks("linux-x64"),
         glibcMinimum: "2.39",
+        materialDigest: PRIVATE_GRAPHICS_MATERIAL_DIGEST,
       },
       "linux-x64",
       targetSources["linux-x64"],
