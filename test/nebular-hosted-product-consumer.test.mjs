@@ -20,6 +20,7 @@ import {
   PLATFORM_RECEIPT_SCHEMA,
   PLATFORMS,
   PRODUCT,
+  PROVIDER_INVENTORY_LIMITS,
   QUALIFICATION_RECEIPT_SCHEMA,
   RECEIPT_SCHEMA,
   REPOSITORY,
@@ -32,6 +33,7 @@ import {
   VERSION,
   buildCommandPlan,
   buildConsumerReceipt,
+  collectLinuxProviderInventoryForTest,
   fetchReleaseAsset,
   fetchSourceReadbacks,
   prepareConsumerQualifyCheckout,
@@ -39,6 +41,7 @@ import {
   resolveAssetsDir,
   resolveSourceAdmission,
   sourceInventoryFromGitListing,
+  summarizeProviderLoaderOutput,
   validateArchiveMemberNames,
   validateArchiveVerboseListing,
   validateExtractedPackageManifest,
@@ -1571,6 +1574,14 @@ process.stdout.write(JSON.stringify({ label, status: "pass", problems: [] }) + "
     assert.equal(command.env.GDK_BACKEND, "x11");
     assert.equal(command.env.LIBGL_ALWAYS_SOFTWARE, "1");
   }
+  for (const command of plan.smoke) {
+    assert.equal(command.env.EGL_LOG_LEVEL, "debug");
+    assert.equal(command.env.LIBGL_DEBUG, "verbose");
+  }
+  for (const command of [plan.packageVerify, plan.qualification]) {
+    assert.equal(command.env.EGL_LOG_LEVEL, undefined);
+    assert.equal(command.env.LIBGL_DEBUG, undefined);
+  }
   assert.equal(plan.smoke.some((row) => row.args.includes("C-signal")), true);
   assert.equal(plan.smoke.some((row) => row.args.some((arg) => arg.endsWith("native-rc-smoke.mjs"))), true);
 
@@ -1586,6 +1597,136 @@ process.stdout.write(JSON.stringify({ label, status: "pass", problems: [] }) + "
   for (const command of [darwinPlan.packageVerify, ...darwinPlan.smoke]) {
     assert.equal(command.env.GDK_BACKEND, undefined);
     assert.equal(command.env.LIBGL_ALWAYS_SOFTWARE, undefined);
+    assert.equal(command.env.EGL_LOG_LEVEL, undefined);
+    assert.equal(command.env.LIBGL_DEBUG, undefined);
+  }
+
+  {
+    const rawProvider = join(temp, "provider-inventory-raw");
+    const npmProvider = join(temp, "provider-inventory-npm");
+    const outsideProvider = join(temp, "outside-provider.so");
+    const outsideLinkDir = join(temp, "outside-provider-linkdir");
+    await mkdir(join(rawProvider, "opt/nebular-private/lib/dri"), { recursive: true });
+    await mkdir(join(rawProvider, "opt/nebular-private/share/glvnd/egl_vendor.d"), { recursive: true });
+    await mkdir(join(rawProvider, "opt/nebular-private/lib/libGLX.so.0"), { recursive: true });
+    await mkdir(npmProvider, { recursive: true });
+    const outsideParent = join(temp, "outside-provider-parent");
+    await mkdir(join(outsideParent, "nebular-private/lib"), { recursive: true });
+    await mkdir(outsideLinkDir, { recursive: true });
+    await symlink(outsideParent, join(npmProvider, "opt"));
+    await writeFile(outsideProvider, "outside-provider\n");
+    await symlink(outsideProvider, join(rawProvider, "opt/nebular-private/lib/libEGL.so.1"));
+    const rawProviderLib = join(rawProvider, "opt/nebular-private/lib");
+    const containedTarget = join(rawProviderLib, "contained-target.so");
+    await writeFile(containedTarget, "contained-provider\n");
+    await symlink("contained-target.so", join(rawProviderLib, "libGLX_mesa.so.0"));
+    await writeFile(join(outsideLinkDir, "evil.so"), "outside-linkdir-provider\n");
+    await symlink(outsideLinkDir, join(rawProviderLib, "linkdir"));
+    await symlink("linkdir/evil.so", join(rawProviderLib, "libEGL_mesa.so.0"));
+    await symlink("cycle-a", join(rawProviderLib, "libGLdispatch.so.0"));
+    await symlink("cycle-b", join(rawProviderLib, "cycle-a"));
+    await symlink("libGLdispatch.so.0", join(rawProviderLib, "cycle-b"));
+    await symlink("depth-0", join(rawProviderLib, "libgbm.so.1"));
+    for (let index = 0; index < 8; index += 1) {
+      await symlink(`depth-${index + 1}`, join(rawProviderLib, `depth-${index}`));
+    }
+    await writeFile(join(rawProvider, "opt/nebular-private/share/glvnd/egl_vendor.d/50_mesa.json"), "{\"file\":\"private\"}\n");
+    const hostProvider = join(temp, "provider-inventory-host");
+    const hostVendor = join(temp, "provider-inventory-host-vendor");
+    await mkdir(hostProvider, { recursive: true });
+    await mkdir(hostVendor, { recursive: true });
+    await writeFile(join(hostProvider, "libEGL_mesa.so.0"), "host-provider\n");
+    const hostRoots = { "linux-x64": { libraryRoot: hostProvider, architecture: "x86_64-linux-gnu", vendorRoot: hostVendor } };
+    const commandCalls = [];
+    const commandRunner = (tool, args, options) => {
+      commandCalls.push({ tool, args, options });
+      return { status: 0, stdout: tool === "readelf" ? "Shared library: [libfixture.so]\n" : "libfixture.so => not found\nundefined symbol: eglFixture\n", stderr: "", signal: null };
+    };
+
+    const inventory = collectLinuxProviderInventoryForTest({ platform: "linux-x64", rawPayload: rawProvider, npmPayload: npmProvider, hostRoots, commandRunner });
+    assert.equal(inventory.schema, "nebular.linux-provider-inventory-v1");
+    assert.equal(inventory.status, "diagnostic");
+    assert.equal(inventory.diagnosticOnly, true);
+    assert.deepEqual(inventory.limits, PROVIDER_INVENTORY_LIMITS);
+    assert.equal(inventory.entries.length, 2 * inventory.readSet.private.length + inventory.readSet.host.length);
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libEGL.so.1" && entry.kind === "outside-symlink"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libEGL_mesa.so.0" && entry.kind === "outside-symlink"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libGLX.so.0" && entry.kind === "unsupported"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libGLX_mesa.so.0" && entry.kind === "symlink" && entry.targetClass === "contained"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libGLdispatch.so.0" && entry.kind === "symlink-cycle"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "libgbm.so.1" && entry.kind === "symlink-depth"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "raw-private" && entry.member === "50_mesa.json" && entry.kind === "regular" && entry.sha256));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "npm-private" && entry.member === "libEGL.so.1" && entry.kind === "outside-symlink"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "system" && entry.member === "libEGL_mesa.so.0" && entry.elf.ldd.context === "host-default"));
+    assert.ok(inventory.entries.some((entry) => entry.scope === "system" && entry.member === "libEGL_mesa.so.0" && entry.elf.lddPrivateRuntime.context === "host-with-private-library-path"));
+    for (const rejectedPath of ["libEGL_mesa.so.0", "libGLdispatch.so.0", "libgbm.so.1"]) {
+      assert.equal(commandCalls.some(({ args }) => args.at(-1) === join(rawProviderLib, rejectedPath)), false);
+    }
+    const containedLddCall = commandCalls.find(({ tool, args }) => tool === "ldd" && args.at(-1) === containedTarget);
+    assert.equal(containedLddCall?.options.env.LD_LIBRARY_PATH, rawProviderLib);
+    const hostMesaLddCalls = commandCalls.filter(({ tool, args }) => tool === "ldd" && args.at(-1) === join(hostProvider, "libEGL_mesa.so.0"));
+    assert.equal(hostMesaLddCalls.length, 2);
+    assert.ok(hostMesaLddCalls.some(({ options }) => options.env.LD_LIBRARY_PATH === undefined));
+    assert.ok(hostMesaLddCalls.some(({ options }) => options.env.LD_LIBRARY_PATH === rawProviderLib));
+    assert.ok(inventory.entries.some((entry) => entry.kind === "missing"));
+    assert.ok(inventory.entries.every((entry) => !Object.values(entry).some((value) => typeof value === "string" && value.includes(temp))));
+    assert.ok(inventory.commands.count <= PROVIDER_INVENTORY_LIMITS.maxCommands);
+    assert.ok(inventory.commands.outputBytes <= PROVIDER_INVENTORY_LIMITS.maxAggregateCommandOutputBytes);
+    assert.deepEqual(
+      summarizeProviderLoaderOutput(
+        "libz.so => not found\nlibmissing.so => not found\nundefined symbol: zeta\n",
+        "libother.so: cannot open shared object file\nlibmissing.so: cannot open shared object file\nundefined symbol: alpha\nundefined symbol: zeta",
+      ),
+      { missingBasenames: ["libmissing.so", "libother.so", "libz.so"], undefinedSymbols: ["alpha", "zeta"] },
+    );
+    const privateElfPaths = [
+      "opt/nebular-private/lib/libEGL.so.1",
+      "opt/nebular-private/lib/libEGL_mesa.so.0",
+      "opt/nebular-private/lib/libGLX.so.0",
+      "opt/nebular-private/lib/libGLX_mesa.so.0",
+      "opt/nebular-private/lib/libGLdispatch.so.0",
+      "opt/nebular-private/lib/libgbm.so.1",
+      "opt/nebular-private/lib/dri/swrast_dri.so",
+    ];
+    const budgetRaw = join(temp, "provider-budget-raw");
+    const budgetNpm = join(temp, "provider-budget-npm");
+    for (const root of [budgetRaw, budgetNpm]) {
+      for (const relativePath of privateElfPaths) {
+        const path = join(root, relativePath);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, "fixture-elf\n");
+      }
+    }
+    const budgetHost = join(temp, "provider-budget-host");
+    for (const relativePath of ["libEGL.so.1", "libEGL_mesa.so.0", "libGLX.so.0", "libGLX_mesa.so.0", "libGLdispatch.so.0", "libgbm.so.1", "dri/swrast_dri.so"]) {
+      const path = join(budgetHost, relativePath);
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, "fixture-host-elf\n");
+    }
+    const budgetCalls = [];
+    const budgetRunner = (tool, args, options) => {
+      budgetCalls.push({ tool, args, options });
+      return { status: 0, stdout: Buffer.alloc(262144, 0x78), stderr: Buffer.alloc(0), signal: null };
+    };
+    const budgetInventory = collectLinuxProviderInventoryForTest({
+      platform: "linux-x64",
+      rawPayload: budgetRaw,
+      npmPayload: budgetNpm,
+      hostRoots: { "linux-x64": { libraryRoot: budgetHost, architecture: "x86_64-linux-gnu", vendorRoot: join(temp, "provider-budget-vendor") } },
+      commandRunner: budgetRunner,
+    });
+    assert.ok(budgetInventory.commands.outputBytes >= PROVIDER_INVENTORY_LIMITS.maxAggregateCommandOutputBytes);
+    assert.ok(budgetInventory.entries.some((entry) => Object.values(entry.elf ?? {}).some((command) => command.category === "aggregate-output-limit" || command.category === "aggregate-output-budget")));
+    let remainingOutput = PROVIDER_INVENTORY_LIMITS.maxAggregateCommandOutputBytes;
+    for (const call of budgetCalls) {
+      assert.equal(call.options.maxBuffer, Math.min(PROVIDER_INVENTORY_LIMITS.maxCommandOutputBytes, Math.floor(remainingOutput / 2)));
+      remainingOutput -= 262144;
+    }
+    assert.ok(budgetCalls.some(({ options }) => options.maxBuffer < PROVIDER_INVENTORY_LIMITS.maxCommandOutputBytes));
+    assert.throws(
+      () => collectLinuxProviderInventoryForTest({ platform: "darwin-arm64", rawPayload: rawProvider, npmPayload: npmProvider, hostRoots, commandRunner }),
+      /supported Linux platform/,
+    );
   }
 
   const bridgeCheckout = join(temp, "nested-legal-bridge-checkout");
@@ -2195,6 +2336,33 @@ exec "$@"
     assert.equal(linuxArmReceipt.qualification.sourceCommit, linuxCommit);
     assert.equal(linuxArmReceipt.qualification.resourceComparison, "raw-vs-npm-cross-check");
     assert.equal(linuxArmReceipt.smoke.length, 2);
+    assert.equal(existsSync(join(receiptsOutDir, "smoke/linux-arm64.provider-inventory.json")), false);
+
+    const diagnosticOnlyOutDir = join(temp, "receipts-provider-diagnostic-opt-in");
+    let diagnosticCollectorCalls = 0;
+    const diagnosticFailureReceipt = await qualifyPlatform(
+      dynamicInput,
+      assetsDir,
+      "linux-arm64",
+      canonicalCheckoutDir,
+      diagnosticOnlyOutDir,
+      {
+        ...trustedReadbackOptions,
+        providerDiagnostics: true,
+        providerInventoryCollector: ({ platform, rawPayload, npmPayload }) => {
+          diagnosticCollectorCalls += 1;
+          assert.equal(platform, "linux-arm64");
+          assert.equal(typeof rawPayload, "string");
+          assert.equal(typeof npmPayload, "string");
+          throw new Error("synthetic provider collector failure");
+        },
+      },
+    );
+    assert.equal(diagnosticCollectorCalls, 1);
+    assert.equal(diagnosticFailureReceipt.status, "pass");
+    const diagnosticFailureInventory = JSON.parse(await readFile(join(diagnosticOnlyOutDir, "smoke/linux-arm64.provider-inventory.json"), "utf8"));
+    assert.equal(diagnosticFailureInventory.status, "diagnostic-failed");
+    assert.equal(diagnosticFailureInventory.diagnosticOnly, true);
 
     // Subprocess CLI tests for validate, admit-source, verify-assets, qualify (linux-x64), and receipt
     const validateOut = JSON.parse(
@@ -2286,6 +2454,7 @@ exec "$@"
     assert.equal(linuxX64Receipt.qualification.resourceComparison, "raw-vs-npm-cross-check");
     assert.equal(typeof linuxX64Receipt.dpkgPackagesSha256, "string");
     assert.equal(linuxX64Receipt.smoke.length, 4);
+    assert.equal(existsSync(join(receiptsOutDir, "smoke/linux-x64.provider-inventory.json")), false);
 
     // Aggregate consumer receipt via CLI subcommand
     const aggregateReceiptPath = join(receiptsOutDir, "consumer-receipt.json");
