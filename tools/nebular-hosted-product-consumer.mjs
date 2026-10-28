@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { cpSync, createReadStream, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, open, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
@@ -38,6 +38,39 @@ export const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_SOURCE_LISTING_BYTES = 64 * 1024 * 1024;
 export const MAX_READBACK_RECEIPT_BYTES = 8 * 1024 * 1024;
 export const MAX_REDIRECTS = 5;
+export const PROVIDER_INVENTORY_LIMITS = Object.freeze({
+  maxEntries: 48,
+  maxFileBytes: 32 * 1024 * 1024,
+  maxCommands: 48,
+  maxCommandOutputBytes: 256 * 1024,
+  maxAggregateCommandOutputBytes: 4 * 1024 * 1024,
+  commandTimeoutMs: 5_000,
+  maxSymlinkDepth: 8,
+});
+const PRIVATE_PROVIDER_RELATIVE_PATHS = Object.freeze([
+  "opt/nebular-private/lib/libEGL.so.1",
+  "opt/nebular-private/lib/libEGL_mesa.so.0",
+  "opt/nebular-private/lib/libGLX.so.0",
+  "opt/nebular-private/lib/libGLX_mesa.so.0",
+  "opt/nebular-private/lib/libGLdispatch.so.0",
+  "opt/nebular-private/lib/libgbm.so.1",
+  "opt/nebular-private/lib/dri/swrast_dri.so",
+  "opt/nebular-private/share/glvnd/egl_vendor.d/50_mesa.json",
+]);
+const HOST_PROVIDER_SPECS = Object.freeze([
+  Object.freeze({ relative: "libEGL.so.1", label: "libEGL.so.1" }),
+  Object.freeze({ relative: "libEGL_mesa.so.0", label: "libEGL_mesa.so.0" }),
+  Object.freeze({ relative: "libGLX.so.0", label: "libGLX.so.0" }),
+  Object.freeze({ relative: "libGLX_mesa.so.0", label: "libGLX_mesa.so.0" }),
+  Object.freeze({ relative: "libGLdispatch.so.0", label: "libGLdispatch.so.0" }),
+  Object.freeze({ relative: "libgbm.so.1", label: "libgbm.so.1" }),
+  Object.freeze({ relative: "dri/swrast_dri.so", label: "dri/swrast_dri.so" }),
+]);
+const HOST_PROVIDER_ROOTS = Object.freeze({
+  "linux-x64": Object.freeze({ libraryRoot: "/usr/lib/x86_64-linux-gnu", architecture: "x86_64-linux-gnu", vendorRoot: "/usr/share/glvnd/egl_vendor.d" }),
+  "linux-arm64": Object.freeze({ libraryRoot: "/usr/lib/aarch64-linux-gnu", architecture: "aarch64-linux-gnu", vendorRoot: "/usr/share/glvnd/egl_vendor.d" }),
+});
+const PRIVATE_PROVIDER_ELF_SUFFIX = /(?:\.so(?:\.\d+)*|_dri\.so)$/u;
 const SOURCE_READBACK_ASSET_ROLES = Object.freeze([
   "corresponding-source-offer",
   "darwin-app-source",
@@ -1292,7 +1325,286 @@ function toolPath(checkout, name) {
   fail(`maintained consumer tool ${name} is absent from the checked-out public source`);
 }
 
-function commandEnvironment(platform) {
+function providerErrorCategory(error) {
+  const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
+  if (code === "ENOENT") return "missing";
+  if (code === "EACCES" || code === "EPERM") return "permission";
+  if (code === "ELOOP" || code === "EMLINK") return "symlink";
+  if (code === "ETIMEDOUT") return "timeout";
+  if (code === "ENOBUFS") return "output-limit";
+  return "read-error";
+}
+
+function pathContainedBy(root, candidate) {
+  const relativePath = relative(root, candidate).split(sep).join("/");
+  return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith("../") && !relativePath.startsWith("/"));
+}
+
+function captureRegularProvider(path) {
+  let snapshot;
+  try {
+    snapshot = readRegularSnapshot(path, {
+      bindPath: true,
+      label: "authenticated provider member",
+      maxBytes: PROVIDER_INVENTORY_LIMITS.maxFileBytes,
+    });
+  } catch (error) {
+    return { kind: providerErrorCategory(error) };
+  }
+  if (!snapshot) return { kind: "missing" };
+  try {
+    const after = lstatSync(path);
+    if (!after.isFile() || after.isSymbolicLink() || !sameIdentity(descriptorIdentity(after), snapshot.identity)) {
+      return { kind: "changed" };
+    }
+  } catch (error) {
+    return { kind: providerErrorCategory(error) };
+  }
+  return {
+    kind: "regular",
+    bytes: snapshot.size,
+    sha256: snapshot.sha256,
+    mode: snapshot.mode & 0o777,
+    executable: snapshot.executable,
+    commandPath: path,
+  };
+}
+
+function resolveContainedProviderPath(root, requestedPath) {
+  let currentPath = requestedPath;
+  let followedSymlink = false;
+  const visited = new Set();
+  const symlinkChain = [];
+  for (let depth = 0; depth < PROVIDER_INVENTORY_LIMITS.maxSymlinkDepth; depth += 1) {
+    if (!pathContainedBy(root, currentPath)) return { kind: "outside-symlink" };
+    let resolvedParent;
+    try {
+      resolvedParent = realpathSync(dirname(currentPath));
+    } catch (error) {
+      return { kind: providerErrorCategory(error) };
+    }
+    if (!pathContainedBy(root, resolvedParent)) return { kind: "outside-symlink" };
+    if (visited.has(currentPath)) return { kind: "symlink-cycle" };
+    visited.add(currentPath);
+    let before;
+    try {
+      before = lstatSync(currentPath);
+    } catch (error) {
+      return { kind: providerErrorCategory(error) };
+    }
+    if (!before.isSymbolicLink()) return before.isFile() ? { kind: "regular", path: currentPath, followedSymlink, symlinkChain } : { kind: "unsupported" };
+    let rawTarget;
+    let after;
+    try {
+      rawTarget = readlinkSync(currentPath, "utf8");
+      after = lstatSync(currentPath);
+    } catch (error) {
+      return { kind: providerErrorCategory(error) };
+    }
+    if (!rawTarget || rawTarget.includes("\0") || rawTarget.includes("\\") || rawTarget.length > 512) return { kind: "symlink-invalid" };
+    if (!sameIdentity(descriptorIdentity(before), descriptorIdentity(after))) return { kind: "changed" };
+    symlinkChain.push({ path: currentPath, identity: descriptorIdentity(before) });
+    currentPath = rawTarget.startsWith("/") ? resolve(rawTarget) : resolve(dirname(currentPath), rawTarget);
+    followedSymlink = true;
+  }
+  return { kind: "symlink-depth" };
+}
+
+function captureProviderEntry(root, relativePath, label) {
+  let resolvedRoot;
+  try {
+    const rootPath = resolve(root);
+    if (lstatSync(rootPath).isSymbolicLink()) return { path: label, kind: "outside-symlink" };
+    resolvedRoot = realpathSync(rootPath);
+  } catch (error) {
+    return { path: label, kind: providerErrorCategory(error) };
+  }
+  const requestedPath = resolve(resolvedRoot, relativePath);
+  if (!pathContainedBy(resolvedRoot, requestedPath)) return { path: label, kind: "outside-readset" };
+  let resolvedParent;
+  try {
+    resolvedParent = realpathSync(dirname(requestedPath));
+  } catch (error) {
+    return { path: label, kind: providerErrorCategory(error) };
+  }
+  if (!pathContainedBy(resolvedRoot, resolvedParent)) return { path: label, kind: "outside-symlink" };
+  const terminal = resolveContainedProviderPath(resolvedRoot, requestedPath);
+  if (terminal.kind !== "regular") return { path: label, kind: terminal.kind };
+  const snapshot = captureRegularProvider(terminal.path);
+  if (snapshot.kind !== "regular") return { path: label, kind: snapshot.kind };
+  for (const link of terminal.symlinkChain) {
+    try {
+      const after = lstatSync(link.path);
+      if (!after.isSymbolicLink() || !sameIdentity(descriptorIdentity(after), link.identity)) return { path: label, kind: "changed" };
+    } catch (error) {
+      return { path: label, kind: providerErrorCategory(error) };
+    }
+  }
+  return {
+    path: label,
+    ...snapshot,
+    ...(terminal.followedSymlink ? { kind: "symlink", targetClass: "contained" } : {}),
+  };
+}
+
+function boundedProviderCommand(tool, flags, targetPath, environment, budget, context, commandRunner = spawnSync) {
+  if (budget.commands >= PROVIDER_INVENTORY_LIMITS.maxCommands) {
+    return { tool, args: flags, status: "diagnostic", category: "command-budget" };
+  }
+  const remainingOutput = PROVIDER_INVENTORY_LIMITS.maxAggregateCommandOutputBytes - budget.outputBytes;
+  if (remainingOutput < 2) {
+    return { tool, args: flags, status: "diagnostic", category: "aggregate-output-budget" };
+  }
+  budget.commands += 1;
+  let result;
+  try {
+    result = commandRunner(tool, [...flags, targetPath], {
+      env: environment,
+      timeout: PROVIDER_INVENTORY_LIMITS.commandTimeoutMs,
+      maxBuffer: Math.min(PROVIDER_INVENTORY_LIMITS.maxCommandOutputBytes, Math.floor(remainingOutput / 2)),
+      windowsHide: true,
+    });
+  } catch (error) {
+    return { tool, args: flags, context, status: "error", category: providerErrorCategory(error) };
+  }
+  const stdoutBuffer = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(typeof result.stdout === "string" ? result.stdout : "");
+  const stderrBuffer = Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from(typeof result.stderr === "string" ? result.stderr : "");
+  const stdout = stdoutBuffer.subarray(0, PROVIDER_INVENTORY_LIMITS.maxCommandOutputBytes).toString("utf8");
+  const stderr = stderrBuffer.subarray(0, PROVIDER_INVENTORY_LIMITS.maxCommandOutputBytes).toString("utf8");
+  const stdoutBytes = stdoutBuffer.length;
+  const stderrBytes = stderrBuffer.length;
+  const outputBytes = stdoutBytes + stderrBytes;
+  budget.outputBytes += outputBytes;
+  const aggregateExceeded = budget.outputBytes > PROVIDER_INVENTORY_LIMITS.maxAggregateCommandOutputBytes;
+  const category = aggregateExceeded
+    ? "aggregate-output-limit"
+    : result.error ? providerErrorCategory(result.error) : result.status === 0 ? "ok" : "nonzero";
+  const loaderCategories = tool === "ldd" ? summarizeProviderLoaderOutput(stdout, stderr) : null;
+  const elfCategories = tool === "readelf"
+    ? { neededBasenames: [...new Set([...stdout.matchAll(/Shared library:\s*\[([A-Za-z0-9_.@+-]+)\]/gu)].map((match) => match[1]))].slice(0, 32) }
+    : null;
+  return {
+    tool,
+    args: flags,
+    context,
+    status: aggregateExceeded ? "diagnostic" : result.error ? "error" : result.status === 0 ? "pass" : "nonzero",
+    category,
+    exitCode: Number.isInteger(result.status) ? result.status : null,
+    signal: typeof result.signal === "string" ? result.signal : null,
+    stdoutBytes,
+    stderrBytes,
+    stdoutSha256: digestBytes(stdoutBuffer),
+    stderrSha256: digestBytes(stderrBuffer),
+    ...(loaderCategories ?? {}),
+    ...(elfCategories ?? {}),
+  };
+}
+
+export function summarizeProviderLoaderOutput(stdout, stderr) {
+  const loaderText = `${stdout}\n${stderr}`;
+  const missing = [
+    ...loaderText.matchAll(/\b([A-Za-z0-9_.+-]+): cannot open shared object file/gu),
+    ...loaderText.matchAll(/\b([A-Za-z0-9_.+-]+)\s*=>\s*not found/gu),
+  ].map((match) => match[1]);
+  return {
+    missingBasenames: [...new Set(missing)].sort().slice(0, 16),
+    undefinedSymbols: [...new Set([...loaderText.matchAll(/undefined symbol:\s*([A-Za-z0-9_@.+-]+)/gu)].map((match) => match[1]))].sort().slice(0, 16),
+  };
+}
+
+function decorateProviderEntry(entry, privateLibraryRoot, budget, scope, architecture = null, comparisonPrivateLibraryRoot = null, commandRunner = spawnSync) {
+  const { commandPath, path, ...rest } = entry;
+  const member = basename(path.slice(path.lastIndexOf(":") + 1));
+  const publicEntry = { scope, member, ...(architecture ? { architecture } : {}), ...rest };
+  if (!commandPath || !PRIVATE_PROVIDER_ELF_SUFFIX.test(member)) return publicEntry;
+  const environment = {
+    PATH: process.env.PATH ?? "/usr/bin:/bin",
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    ...(privateLibraryRoot ? { LD_LIBRARY_PATH: privateLibraryRoot } : {}),
+  };
+  return {
+    ...publicEntry,
+    elf: {
+      readelf: boundedProviderCommand("readelf", ["-h", "-d", "--wide"], commandPath, environment, budget, privateLibraryRoot ? "private-library-path" : "host-default", commandRunner),
+      ldd: boundedProviderCommand("ldd", ["-r"], commandPath, environment, budget, privateLibraryRoot ? "private-library-path" : "host-default", commandRunner),
+      ...(comparisonPrivateLibraryRoot && scope === "system" && member === "libEGL_mesa.so.0"
+        ? {
+          lddPrivateRuntime: boundedProviderCommand(
+            "ldd",
+            ["-r"],
+            commandPath,
+            { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", LD_LIBRARY_PATH: comparisonPrivateLibraryRoot },
+            budget,
+            "host-with-private-library-path",
+            commandRunner,
+          ),
+        }
+        : {}),
+    },
+  };
+}
+
+function containedPrivateLibraryRoot(root) {
+  try {
+    const resolvedRoot = realpathSync(resolve(root));
+    const candidate = resolve(resolvedRoot, "opt/nebular-private/lib");
+    const resolvedCandidate = realpathSync(candidate);
+    return pathContainedBy(resolvedRoot, resolvedCandidate) ? resolvedCandidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectLinuxProviderInventoryInternal({ platform, rawPayload, npmPayload, hostRoots, commandRunner }) {
+  if (!hostRoots[platform] || !platform.startsWith("linux")) fail("provider inventory requires a supported Linux platform");
+  requireString(rawPayload, "provider inventory raw payload");
+  requireString(npmPayload, "provider inventory npm payload");
+  const budget = { commands: 0, outputBytes: 0 };
+  const entries = [];
+  const add = (entry, privateLibraryRoot = null, scope = "unknown", architecture = null, comparisonPrivateLibraryRoot = null) => {
+    if (entries.length >= PROVIDER_INVENTORY_LIMITS.maxEntries) return;
+    entries.push(decorateProviderEntry(entry, privateLibraryRoot, budget, scope, architecture, comparisonPrivateLibraryRoot, commandRunner));
+  };
+  let rawPrivateLibraryRoot = null;
+  for (const [scope, root] of [["raw-private", rawPayload], ["npm-private", npmPayload]]) {
+    const privateLibraryRoot = containedPrivateLibraryRoot(root);
+    if (scope === "raw-private") rawPrivateLibraryRoot = privateLibraryRoot;
+    for (const relativePath of PRIVATE_PROVIDER_RELATIVE_PATHS) {
+      add(captureProviderEntry(root, relativePath, `${scope}:${relativePath}`), privateLibraryRoot, scope);
+    }
+  }
+  const host = hostRoots[platform];
+  for (const spec of HOST_PROVIDER_SPECS) {
+    add(captureProviderEntry(host.libraryRoot, spec.relative, `host:${host.architecture}/${spec.label}`), null, "system", host.architecture, rawPrivateLibraryRoot);
+  }
+  add(captureProviderEntry(host.vendorRoot, "50_mesa.json", `host:${host.architecture}/egl_vendor.d/50_mesa.json`), null, "system", host.architecture, rawPrivateLibraryRoot);
+  return {
+    schema: "nebular.linux-provider-inventory-v1",
+    status: "diagnostic",
+    diagnosticOnly: true,
+    platform,
+    phase: "after-authenticated-linux-qualification-before-smoke",
+    readSet: {
+      private: [...new Set(PRIVATE_PROVIDER_RELATIVE_PATHS.map((relativePath) => basename(relativePath)))],
+      host: [...HOST_PROVIDER_SPECS.map((spec) => spec.label), "egl_vendor.d/50_mesa.json"],
+    },
+    limits: { ...PROVIDER_INVENTORY_LIMITS },
+    commands: { count: budget.commands, outputBytes: budget.outputBytes },
+    entries,
+  };
+}
+
+export function collectLinuxProviderInventory({ platform, rawPayload, npmPayload }) {
+  return collectLinuxProviderInventoryInternal({ platform, rawPayload, npmPayload, hostRoots: HOST_PROVIDER_ROOTS, commandRunner: spawnSync });
+}
+
+export function collectLinuxProviderInventoryForTest({ platform, rawPayload, npmPayload, hostRoots, commandRunner }) {
+  if (!isRecord(hostRoots) || typeof commandRunner !== "function") fail("provider inventory test seam requires explicit host roots and command runner");
+  return collectLinuxProviderInventoryInternal({ platform, rawPayload, npmPayload, hostRoots, commandRunner });
+}
+
+function commandEnvironment(platform, { smoke = false } = {}) {
   return {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     LANG: "C.UTF-8",
@@ -1303,6 +1615,7 @@ function commandEnvironment(platform) {
         WEBKIT_DISABLE_DMABUF_RENDERER: "1",
         GDK_BACKEND: "x11",
         LIBGL_ALWAYS_SOFTWARE: "1",
+        ...(smoke ? { EGL_LOG_LEVEL: "debug", LIBGL_DEBUG: "verbose" } : {}),
       }
       : {}),
   };
@@ -1333,7 +1646,7 @@ export function buildCommandPlan({
     args: prefix.length
       ? [...prefix.slice(1), node, smokeTool, "--platform", platform, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", checkout, "--evidence", evidenceDir, "--source", source, "--label", label, "--package-manifest-sha256", packageManifestSha256]
       : [smokeTool, "--platform", platform, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", checkout, "--evidence", evidenceDir, "--source", source, "--label", label, "--package-manifest-sha256", packageManifestSha256],
-    env: commandEnvironment(platform),
+    env: commandEnvironment(platform, { smoke: true }),
   });
   const packageVerify = {
     command: node,
@@ -1658,6 +1971,9 @@ export async function qualifyPlatform(normalizedInput, assetsDir, platform, chec
     ? normalizedInput
     : validateInput(normalizedInput);
   if (!Object.hasOwn(PLATFORMS, platform)) fail("unsupported consumer platform");
+  const providerDiagnostics = options.providerDiagnostics === true;
+  const providerInventoryCollector = options.providerInventoryCollector ?? collectLinuxProviderInventory;
+  if (providerDiagnostics && typeof providerInventoryCollector !== "function") fail("provider diagnostics collector must be callable");
   const verifiedTargetSourceReadbacks = options.trustedReadback?.targetSourceReadbacks
     ? assertSourceReadbackBindings(
         options.trustedReadback.targetSourceReadbacks,
@@ -1743,6 +2059,27 @@ export async function qualifyPlatform(normalizedInput, assetsDir, platform, chec
       };
     }
     if (!qualification || qualification.status !== "pass") fail(`consumer qualification did not pass for ${platform}`);
+    if (platform.startsWith("linux") && providerDiagnostics) {
+      let providerInventory;
+      try {
+        providerInventory = providerInventoryCollector({ platform, rawPayload: roots.raw, npmPayload: roots.npmPayload });
+      } catch (error) {
+        providerInventory = {
+          schema: "nebular.linux-provider-inventory-v1",
+          status: "diagnostic-failed",
+          diagnosticOnly: true,
+          platform,
+          phase: "after-authenticated-linux-qualification-before-smoke",
+          category: providerErrorCategory(error),
+          limits: { ...PROVIDER_INVENTORY_LIMITS },
+        };
+      }
+      try {
+        await writeNew(join(evidenceDir, `${platform}.provider-inventory.json`), providerInventory);
+      } catch {
+        // Provider inventory is diagnostic-only: a write failure must not alter smoke or receipt judgement.
+      }
+    }
     const runs = [];
     for (const smoke of plan.smoke) {
       const stdoutResult = parseLastJson(runCommand(smoke, "native consumer smoke"), "native consumer smoke");
@@ -2100,6 +2437,7 @@ async function main(args) {
     const receipt = await qualifyPlatform(normalized, flag(args, "--assets"), flag(args, "--platform"), checkout, flag(args, "--output"), {
       ...readbackOptions,
       trustedReadback: admission.trustedReadback,
+      providerDiagnostics: args.includes("--provider-diagnostics"),
     });
     process.stdout.write(JSON.stringify({ status: receipt.status, schema: receipt.schema, platform: receipt.platform }) + "\n");
     return;
@@ -2115,7 +2453,7 @@ async function main(args) {
     process.stdout.write(JSON.stringify({ status: "pass", schema: RECEIPT_SCHEMA }) + "\n");
     return;
   }
-  throw new Error("Usage: nebular-hosted-product-consumer.mjs validate|fetch-source-readbacks|admit-source|fetch|verify-assets|qualify|receipt ... (admit-source/fetch/qualify require --source-archive, --darwin-source-archive, --linux-source-archive, and --darwin-receipt)");
+  throw new Error("Usage: nebular-hosted-product-consumer.mjs validate|fetch-source-readbacks|admit-source|fetch|verify-assets|qualify|receipt ... (admit-source/fetch/qualify require --source-archive, --darwin-source-archive, --linux-source-archive, and --darwin-receipt; qualify accepts --provider-diagnostics)");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

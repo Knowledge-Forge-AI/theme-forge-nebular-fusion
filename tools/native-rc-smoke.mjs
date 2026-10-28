@@ -370,6 +370,42 @@ export async function finalizeSmokeRun({ result, keep = false, body, cleanup, wr
   return result;
 }
 
+export const SMOKE_INHERITED_ENV_KEYS = Object.freeze([
+  "DISPLAY",
+  "DBUS_SESSION_BUS_ADDRESS",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "WEBKIT_DISABLE_COMPOSITING_MODE",
+  "WEBKIT_DISABLE_DMABUF_RENDERER",
+  "LIBGL_ALWAYS_SOFTWARE",
+  "GDK_BACKEND",
+  "EGL_LOG_LEVEL",
+  "LIBGL_DEBUG",
+]);
+
+export function buildSmokeEnvironment({ platform, home, temp, smokeDir, xdg, inheritedEnv = process.env }) {
+  const env = {
+    PATH: inheritedEnv.PATH ?? "/usr/bin:/bin",
+    HOME: home,
+    TMPDIR: temp,
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+    TZ: "UTC",
+    XDG_CONFIG_HOME: xdg.config,
+    XDG_CACHE_HOME: xdg.cache,
+    XDG_DATA_HOME: xdg.data,
+    XDG_STATE_HOME: xdg.state,
+    XDG_RUNTIME_DIR: xdg.runtime,
+    TFNF_RELEASE_SMOKE_DIR: smokeDir,
+    GSETTINGS_BACKEND: "memory",
+  };
+  for (const key of SMOKE_INHERITED_ENV_KEYS) {
+    if (!platform.startsWith("linux") && (key === "EGL_LOG_LEVEL" || key === "LIBGL_DEBUG")) continue;
+    if (inheritedEnv[key]) env[key] = inheritedEnv[key];
+  }
+  return env;
+}
+
 /**
  * Runs one scenario against one extracted candidate.
  * @param {{ platform: string, scenario: string, launchRoot: string, checkout: string, evidenceDir: string, source?: "raw-archive"|"npm-package", packageManifestSha256?: string, label?: string, timeoutMs?: number, keep?: boolean }} options
@@ -418,16 +454,7 @@ export async function runSmoke(options) {
       const preexisting = candidateProcesses(launchRoot);
       if (preexisting.length) throw new HarnessStateError(`candidate processes already running: ${JSON.stringify(preexisting)}`);
 
-      const env = {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        HOME: home, TMPDIR: temp, LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "UTC",
-        XDG_CONFIG_HOME: xdg.config, XDG_CACHE_HOME: xdg.cache, XDG_DATA_HOME: xdg.data, XDG_STATE_HOME: xdg.state, XDG_RUNTIME_DIR: xdg.runtime,
-        TFNF_RELEASE_SMOKE_DIR: smokeDir,
-        GSETTINGS_BACKEND: "memory",
-      };
-      for (const key of ["DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "XAUTHORITY", "WEBKIT_DISABLE_COMPOSITING_MODE", "WEBKIT_DISABLE_DMABUF_RENDERER", "LIBGL_ALWAYS_SOFTWARE", "GDK_BACKEND"]) {
-        if (process.env[key]) env[key] = process.env[key];
-      }
+      const env = buildSmokeEnvironment({ platform, home, temp, smokeDir, xdg });
       const log = { stdout: [], stderr: [] };
       const child = spawn(launchTarget, [`--nebular-release-smoke=${scenario}`], { cwd: home, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       if (typeof child.pid === "number") run.launched();

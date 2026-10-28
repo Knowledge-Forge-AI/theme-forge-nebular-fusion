@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { LANES, RETENTION, artifactName, planLanes, workflowOutputs } from "../tools/native-rc-plan.mjs";
 import { CANDIDATE_VERSION } from "../tools/platform-targets.mjs";
 import { FIXED_ARCHIVE_TIME, PACKAGE_MANIFEST_PROJECTION_SCHEMA, PLATFORMS, assemblePlatformPackage, assembleRawArchive, packPlatformPackage, platformPackageJson, platformReadme, tarRecords, verifyPlatformPackage, walkTree, writeDeterministicArchive } from "../tools/native-rc-package.mjs";
-import { FINALIZATION_SCHEMA, PLATFORM_SCENARIOS, SCENARIOS, authenticateNpmPackageContext, executablePath, finalizeSmokeRun, judgeReceipt, launcherPath, persistentStateLocations, prepareFixtures, caseSensitive } from "../tools/native-rc-smoke.mjs";
+import { FINALIZATION_SCHEMA, PLATFORM_SCENARIOS, SCENARIOS, authenticateNpmPackageContext, buildSmokeEnvironment, executablePath, finalizeSmokeRun, judgeReceipt, launcherPath, persistentStateLocations, prepareFixtures, caseSensitive } from "../tools/native-rc-smoke.mjs";
 import { compareVersions, glibcFloor, invokeBounded, qualifyPayload, readLinuxArchiveLegalEnvelope, run, selectPayloadInventoryForQualification } from "../tools/native-rc-qualify.mjs";
 import { buildReceipt, seal } from "../tools/native-rc-evidence.mjs";
 import { identity } from "../tools/candidate-provenance.mjs";
@@ -417,6 +417,22 @@ describe("smoke scenarios and receipts", () => {
     expect(SCENARIOS.B.steps.indexOf("app-theme-compile")).toBeLessThan(SCENARIOS.B.steps.indexOf("host-start"));
     expect(SCENARIOS.C.steps).toContain("host-start-idempotent");
     expect(SCENARIOS.C.steps).toContain("derive-plan-cancel");
+  });
+
+  it("forwards bounded Linux EGL diagnostics without changing Darwin smoke environment", () => {
+    const xdg = { config: "/tmp/config", cache: "/tmp/cache", data: "/tmp/data", state: "/tmp/state", runtime: "/tmp/runtime" };
+    const inherited = { PATH: "/usr/bin", DISPLAY: ":99", EGL_LOG_LEVEL: "debug", LIBGL_DEBUG: "verbose" };
+    const linux = buildSmokeEnvironment({ platform: "linux-x64", home: "/tmp/home", temp: "/tmp/tmp", smokeDir: "/tmp/smoke", xdg, inheritedEnv: inherited });
+    expect(linux.DISPLAY).toBe(":99");
+    expect(linux.EGL_LOG_LEVEL).toBe("debug");
+    expect(linux.LIBGL_DEBUG).toBe("verbose");
+    const linuxUnconfigured = buildSmokeEnvironment({ platform: "linux-x64", home: "/tmp/home", temp: "/tmp/tmp", smokeDir: "/tmp/smoke", xdg, inheritedEnv: { PATH: "/usr/bin" } });
+    expect(linuxUnconfigured.EGL_LOG_LEVEL).toBeUndefined();
+    expect(linuxUnconfigured.LIBGL_DEBUG).toBeUndefined();
+    const darwin = buildSmokeEnvironment({ platform: "darwin-arm64", home: "/tmp/home", temp: "/tmp/tmp", smokeDir: "/tmp/smoke", xdg, inheritedEnv: inherited });
+    expect(darwin.DISPLAY).toBe(":99");
+    expect(darwin.EGL_LOG_LEVEL).toBeUndefined();
+    expect(darwin.LIBGL_DEBUG).toBeUndefined();
   });
 
   it("accepts only a complete passing receipt from the candidate executable", () => {
