@@ -715,6 +715,35 @@ function full9Equal(a, b) {
 }
 
 /**
+ * @param {{ bytes: number, mode: number, sha256: string, full9: (string|number)[] }} observed
+ * @param {{ bytes: number, mode: number, sha256: string, full9: (string|number)[] }} expected
+ */
+function rootEnvelopeEntryEqual(observed, expected) {
+  return observed.bytes === expected.bytes &&
+    observed.mode === expected.mode &&
+    observed.sha256 === expected.sha256 &&
+    full9Equal(observed.full9, expected.full9);
+}
+
+/**
+ * Re-reads the archive-root legal entries through descriptor-bound handles.
+ * This is intentionally used both before and after the payload walk: the
+ * legal files are outside the native payload identity but still part of the
+ * authenticated raw archive envelope.
+ * @param {string} resolvedRoot
+ * @param {[string, { bytes: number, mode: number, sha256: string, full9: (string|number)[] }][]} entries
+ * @param {string} label
+ */
+async function verifyRootEnvelope(resolvedRoot, entries, label) {
+  for (const [path, expected] of entries) {
+    const observed = await readRegularDescriptorChecked(join(resolvedRoot, path), MAX_RUNTIME_FILE_BYTES);
+    if (!rootEnvelopeEntryEqual(observed, expected)) {
+      throw new Error(`${label} mismatch at ${path}`);
+    }
+  }
+}
+
+/**
  * @param {string} absDir
  */
 async function openNoFollowDir(absDir) {
@@ -1025,7 +1054,7 @@ async function writeExclusiveFile(destPath, content, mode) {
  * @param {string} filePath
  * @param {number} maxBytes
  */
-async function readRegularDescriptorChecked(filePath, maxBytes) {
+export async function readRegularDescriptorChecked(filePath, maxBytes) {
   let fh;
   /** @type {(string|number)[] | null} */
   let openedFrame = null;
@@ -1485,14 +1514,33 @@ export async function writeNativeRuntimeReceipt(outputDir, { target, material, s
  * When native-runtime.json is present, validates the portable material and full runtime tree
  * and returns the domain-separated nebular-native-payload-inventory-v1 object.
  * @param {string} root
- * @param {{ expectedTarget?: string | null, aliasProjection?: unknown } | string | null} [options]
+ * @param {{ expectedTarget?: string | null, aliasProjection?: unknown, rootEnvelope?: Record<string, { bytes: number, mode: number, sha256: string, full9: (string|number)[] }> | null } | string | null} [options]
  * @returns {Promise<NativePayloadInventory>}
  */
 export async function inventoryNativePayload(root, options = null) {
   const expectedTarget = typeof options === "string" ? options : (options?.expectedTarget ?? null);
   const suppliedProjection = typeof options === "object" && options !== null ? options.aliasProjection ?? null : null;
+  const suppliedRootEnvelope = typeof options === "object" && options !== null ? options.rootEnvelope ?? null : null;
   const resolvedRoot = resolve(root);
   await statStableNoFollow(resolvedRoot, { label: "native payload root", expectDirectory: true });
+
+  const rootEnvelopeEntries = suppliedRootEnvelope === null ? [] : Object.entries(suppliedRootEnvelope);
+  const rootEnvelopePaths = new Set(rootEnvelopeEntries.map(([path]) => path));
+  if (suppliedRootEnvelope !== null) {
+    const legalNames = new Set(["LICENSE", "NOTICE"]);
+    if (rootEnvelopeEntries.length !== legalNames.size || rootEnvelopeEntries.some(([path]) => !legalNames.has(path))) {
+      throw new Error("Native payload root envelope must contain exactly LICENSE and NOTICE");
+    }
+    for (const [path, expected] of rootEnvelopeEntries) {
+      const validFull9 = Array.isArray(expected?.full9) && expected.full9.length === 9 &&
+        expected.full9.every((value) => (typeof value === "string" && value.length > 0) ||
+          (typeof value === "number" && Number.isSafeInteger(value) && value >= 0));
+      if (!expected || expected.bytes < 0 || expected.mode !== 0o644 || !/^[a-f0-9]{64}$/u.test(expected.sha256) || !validFull9) {
+        throw new Error(`Malformed native payload root envelope entry ${path}`);
+      }
+    }
+    await verifyRootEnvelope(resolvedRoot, rootEnvelopeEntries, "Native payload root envelope");
+  }
 
   const markerPath = join(resolvedRoot, PRIVATE_RUNTIME_MARKER);
   let markerExists = false;
@@ -1521,7 +1569,17 @@ export async function inventoryNativePayload(root, options = null) {
         throw err;
       }
     }
-    return await inventoryTree(resolvedRoot);
+    const ordinaryInventory = await inventoryTree(resolvedRoot);
+    if (rootEnvelopePaths.size === 0) return ordinaryInventory;
+    for (const [path, expected] of rootEnvelopeEntries) {
+      const ordinary = ordinaryInventory.files.find((entry) => entry.path === path);
+      if (!ordinary || ordinary.bytes !== expected.bytes || ordinary.mode !== expected.mode || ordinary.sha256 !== expected.sha256) {
+        throw new Error(`Native payload root envelope ordinary inventory mismatch at ${path}`);
+      }
+    }
+    const files = ordinaryInventory.files.filter(({ path }) => !rootEnvelopePaths.has(path));
+    await verifyRootEnvelope(resolvedRoot, rootEnvelopeEntries, "Native payload root envelope changed after ordinary inventory");
+    return { files, identity: identity(files) };
   }
 
   const markerFile = await readRegularDescriptorChecked(markerPath, MAX_RUNTIME_INPUT_BYTES);
@@ -1633,6 +1691,15 @@ export async function inventoryNativePayload(root, options = null) {
 
     for (const entry of entries) {
       const childAbs = join(absDir, entry.name);
+      if (!relDir && rootEnvelopePaths.has(entry.name)) {
+        const expected = suppliedRootEnvelope?.[entry.name];
+        if (!expected) throw new Error(`Missing expected root envelope entry ${entry.name}`);
+        const observed = await readRegularDescriptorChecked(childAbs, MAX_RUNTIME_FILE_BYTES);
+        if (!rootEnvelopeEntryEqual(observed, expected)) {
+          throw new Error(`Native payload root envelope changed at ${entry.name}`);
+        }
+        continue;
+      }
       const childRel = relDir ? `${relDir}/${entry.name}` : entry.name;
       if (childRel !== childRel.normalize("NFC") || childRel.includes("\0") || childRel.includes("\\")) {
         throw new Error(`Invalid payload member path: ${childRel}`);
@@ -1693,6 +1760,9 @@ export async function inventoryNativePayload(root, options = null) {
   };
 
   await walkPayload(resolvedRoot, "");
+  if (rootEnvelopeEntries.length > 0) {
+    await verifyRootEnvelope(resolvedRoot, rootEnvelopeEntries, "Native payload root envelope changed after payload walk");
+  }
 
   for (const [dir, snap] of snapshots.entries()) {
     await verifyDirectorySnapshot(dir, snap.stat, snap.names, "native payload directory");
@@ -1797,7 +1867,7 @@ export async function inventoryNativePayload(root, options = null) {
  * Validates the portable manifest and complete runtime tree when present, refusing malformed markers or unsupported targets.
  * @param {string} payloadRoot
  * @param {string | null} [expectedTarget]
- * @param {{ aliasProjection?: unknown } | null} [options]
+ * @param {{ aliasProjection?: unknown, rootEnvelope?: Record<string, { bytes: number, mode: number, sha256: string, full9: (string|number)[] }> | null } | null} [options]
  */
 export async function selectPayloadNativeRuntime(payloadRoot, expectedTarget = null, options = null) {
   const resolvedRoot = resolve(payloadRoot);
@@ -1842,7 +1912,8 @@ export async function selectPayloadNativeRuntime(payloadRoot, expectedTarget = n
   }
   const material = validateRuntimeMaterial(rawMaterial, expectedTarget);
   const aliasProjection = options?.aliasProjection ?? null;
-  const inventory = await inventoryNativePayload(resolvedRoot, { expectedTarget, aliasProjection });
+  const rootEnvelope = options?.rootEnvelope ?? null;
+  const inventory = await inventoryNativePayload(resolvedRoot, { expectedTarget, aliasProjection, rootEnvelope });
   return {
     nativeRuntime: true,
     material,

@@ -23,6 +23,7 @@ import {
   inventoryNativePayload,
   parseElfMetadata,
   parseLddProviders,
+  readRegularDescriptorChecked,
   selectPayloadNativeRuntime,
   verifyRuntimeSourceSnapshot,
 } from "./native-runtime.mjs";
@@ -575,6 +576,46 @@ export function paths(platform, payload) {
 }
 
 /**
+ * Authenticate the two files that the Linux raw archive carries beside its payload.
+ * The native payload identity intentionally covers only the payload tree; any other
+ * archive-root entry remains visible to inventory and therefore fails closed.
+ * @param {string} payloadRoot
+ * @param {string} checkout
+ * @returns {Promise<Record<string, { bytes: number, mode: number, sha256: string, full9: (string|number)[] }> | null>}
+ */
+export async function readLinuxArchiveLegalEnvelope(payloadRoot, checkout) {
+  const names = ["LICENSE", "NOTICE"];
+  const present = names.map((name) => {
+    try {
+      lstatSync(join(payloadRoot, name), { bigint: true });
+      return name;
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") return null;
+      throw error;
+    }
+  });
+  const presentCount = present.filter(Boolean).length;
+  if (presentCount === 0) return null;
+  if (presentCount !== names.length) {
+    throw new Error("Linux raw archive legal envelope must contain both LICENSE and NOTICE");
+  }
+  /** @type {Record<string, { bytes: number, mode: number, sha256: string, full9: (string|number)[] }>} */
+  const envelope = {};
+  for (const name of names) {
+    const shipped = await readRegularDescriptorChecked(join(payloadRoot, name), 4 * 1024 * 1024);
+    if (shipped.mode !== 0o644) throw new Error(`Archive ${name} must have mode 0644`);
+    const source = readRegularSnapshot(join(checkout, name), {
+      label: `Source ${name}`,
+      bindPath: true,
+      maxBytes: 4 * 1024 * 1024,
+    });
+    if (!source || !shipped.buffer.equals(source.bytes)) throw new Error(`${name} differs from the source legal envelope`);
+    envelope[name] = { bytes: shipped.bytes, mode: shipped.mode, sha256: shipped.sha256, full9: shipped.full9 };
+  }
+  return envelope;
+}
+
+/**
  * @param {{
  *   platform: string,
  *   payload: string,
@@ -584,6 +625,7 @@ export function paths(platform, payload) {
  *   expectedNativePayloadSha256?: string,
  *   observationOutputDir?: string,
  *   sourceCandidate?: string,
+ *   archiveLegalEnvelope?: boolean,
  *   commandRunner?: (command: string, args: string[], env?: Record<string, string>, options?: { deadline: number, signal: AbortSignal }) => Promise<{ status: number | null, stdout: string, stderr: string, error?: string, bounded: true, timedOut: boolean, outputLimitExceeded: boolean, cleanupKnown: boolean, outputComplete: boolean, forcedCleanup: boolean }> | { status: number | null, stdout: string, stderr: string, error?: string, bounded: true, timedOut: boolean, outputLimitExceeded: boolean, cleanupKnown: boolean, outputComplete: boolean, forcedCleanup: boolean }
  * }} options
  */
@@ -596,10 +638,17 @@ export async function qualifyPayload({
   expectedNativePayloadSha256,
   observationOutputDir,
   sourceCandidate,
+  archiveLegalEnvelope = false,
   commandRunner = run,
 }) {
   const platform = PLATFORMS[key];
   if (!platform) throw new Error(`Unsupported platform ${key}`);
+  if (typeof archiveLegalEnvelope !== "boolean") {
+    throw new Error("archiveLegalEnvelope must be a boolean");
+  }
+  if (archiveLegalEnvelope && platform.os !== "linux") {
+    throw new Error("Archive legal envelope normalization is supported only for Linux qualification");
+  }
   if (sourceCandidate !== undefined && observationOutputDir === undefined) {
     throw new Error("sourceCandidate requires observationOutputDir");
   }
@@ -613,6 +662,10 @@ export async function qualifyPayload({
     validateObservationOutputPath(observationOutputDir, payload);
   }
   const resolvedPayload = resolve(payload);
+  // Naked producer/R3B/npm qualification remains the ordinary inventory path.
+  // Only the hosted raw-archive caller may opt into the two archive-root legal
+  // files that are outside the native payload identity.
+  const rootEnvelope = archiveLegalEnvelope ? await readLinuxArchiveLegalEnvelope(resolvedPayload, checkout) : null;
   const hasRuntimeInput = nativeRuntime !== undefined || nativeRuntimeSha256 !== undefined;
   const hasExpectedPayload = expectedNativePayloadSha256 !== undefined;
   if (hasRuntimeInput && (typeof nativeRuntime !== "string" || !nativeRuntime || typeof nativeRuntimeSha256 !== "string" || !nativeRuntimeSha256)) {
@@ -642,6 +695,7 @@ export async function qualifyPayload({
     const runtimeSelection = await selectPayloadNativeRuntime(
       resolvedPayload,
       platform.os === "linux" ? platform.triple : null,
+      { rootEnvelope },
     );
     let payloadInventory = null;
     if (runtimeSelection.nativeRuntime) {
@@ -672,7 +726,7 @@ export async function qualifyPayload({
         throw new Error("Observation export requires a passing private-runtime closure");
       }
       if (platform.os === "linux" || hasExpectedPayload) {
-        const ordinaryInventory = await inventoryNativePayload(resolvedPayload);
+        const ordinaryInventory = await inventoryNativePayload(resolvedPayload, { rootEnvelope });
         payloadInventory = selectPayloadInventoryForQualification(platform, {
           hasExpectedPayload,
           ordinaryInventory,
@@ -1004,6 +1058,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       expectedNativePayloadSha256: value("--expected-native-payload-sha256"),
       observationOutputDir: value("--observation-output-dir"),
       sourceCandidate: value("--source-candidate"),
+      archiveLegalEnvelope: args.includes("--archive-legal-envelope"),
     });
     if (value("--output")) writeFileSync(resolve(value("--output")), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
     process.stdout.write(`${JSON.stringify({ status: result.status, glibcMinimum: result.glibcMinimum, failed: result.checks.filter((entry) => !entry.ok) })}\n`);

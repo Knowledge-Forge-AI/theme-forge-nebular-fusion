@@ -1564,10 +1564,69 @@ process.stdout.write(JSON.stringify({ label, status: "pass", problems: [] }) + "
   assert.equal(plan.expectedScenarioCount, 4);
   assert.equal(plan.qualification.args.includes("--payload"), true);
   assert.equal(plan.qualification.args.includes("--expected-native-payload-sha256"), true);
+  assert.equal(plan.qualification.args.includes("--archive-legal-envelope"), true);
   assert.equal(plan.qualification.args.includes("/owned/evidence/linux-x64.qualification.json"), true);
   assert.equal(plan.packageVerify.args.includes("verify"), true);
   assert.equal(plan.smoke.some((row) => row.args.includes("C-signal")), true);
   assert.equal(plan.smoke.some((row) => row.args.some((arg) => arg.endsWith("native-rc-smoke.mjs"))), true);
+
+  const darwinPlan = buildCommandPlan({
+    platform: "darwin-arm64",
+    checkout: checkoutDir,
+    rawPayload: "/owned/raw",
+    npmPackage: "/owned/npm/package",
+    packageManifestSha256: digest("d"),
+    evidenceDir: "/owned/evidence",
+  });
+  assert.equal(darwinPlan.qualification, null);
+
+  const bridgeCheckout = join(temp, "nested-legal-bridge-checkout");
+  const bridgeScratch = join(temp, "nested-legal-bridge-scratch");
+  const bridgeNpmPayload = join(temp, "nested-legal-bridge-npm", "lib/theme-forge-nebular-fusion");
+  await mkdir(join(bridgeCheckout, "apps/studio/src-tauri"), { recursive: true });
+  await writeFile(
+    join(bridgeCheckout, "apps/studio/src-tauri/tauri.conf.json"),
+    JSON.stringify({ bundle: { resources: ["sidecar-payload/**/*"] } }),
+  );
+  const repositoryLicense = "repository license\n";
+  const repositoryNotice = "repository notice\n";
+  const studioLicense = "studio license\n";
+  const studioNotice = "studio notice\n";
+  await writeFile(join(bridgeCheckout, "LICENSE"), repositoryLicense);
+  await writeFile(join(bridgeCheckout, "NOTICE"), repositoryNotice);
+  await mkdir(join(bridgeCheckout, "apps/studio"), { recursive: true });
+  await writeFile(join(bridgeCheckout, "apps/studio/LICENSE"), studioLicense);
+  await writeFile(join(bridgeCheckout, "apps/studio/NOTICE"), studioNotice);
+  await mkdir(join(bridgeNpmPayload, "sidecar-payload"), { recursive: true });
+  const bridged = prepareConsumerQualifyCheckout(bridgeCheckout, join(temp, "nested-legal-bridge-npm"), bridgeScratch);
+  assert.equal(bridged.resourceComparison, "raw-vs-npm-cross-check");
+  assert.equal((await readFile(join(bridged.qualifyCheckout, "LICENSE"), "utf8")), studioLicense);
+  assert.equal((await readFile(join(bridged.qualifyCheckout, "NOTICE"), "utf8")), studioNotice);
+  assert.notEqual((await readFile(join(bridged.qualifyCheckout, "NOTICE"), "utf8")), repositoryNotice);
+  assert.equal(existsSync(join(bridged.qualifyCheckout, "apps/studio/NOTICE")), false);
+
+  await rm(join(bridgeCheckout, "apps/studio/NOTICE"));
+  assert.throws(
+    () => prepareConsumerQualifyCheckout(bridgeCheckout, join(temp, "nested-legal-bridge-npm"), join(temp, "missing-legal-scratch")),
+    /authoritative Studio NOTICE is missing/,
+  );
+
+  const flatCheckout = join(temp, "flat-legal-bridge-checkout");
+  const flatScratch = join(temp, "flat-legal-bridge-scratch");
+  const flatNpmPayload = join(temp, "flat-legal-bridge-npm", "lib/theme-forge-nebular-fusion");
+  await mkdir(join(flatCheckout, "src-tauri"), { recursive: true });
+  await writeFile(
+    join(flatCheckout, "src-tauri/tauri.conf.json"),
+    JSON.stringify({ bundle: { resources: ["sidecar-payload/**/*"] } }),
+  );
+  const flatLicense = "flat license\n";
+  const flatNotice = "flat notice\n";
+  await writeFile(join(flatCheckout, "LICENSE"), flatLicense);
+  await writeFile(join(flatCheckout, "NOTICE"), flatNotice);
+  await mkdir(join(flatNpmPayload, "sidecar-payload"), { recursive: true });
+  const flatBridged = prepareConsumerQualifyCheckout(flatCheckout, join(temp, "flat-legal-bridge-npm"), flatScratch);
+  assert.equal((await readFile(join(flatBridged.qualifyCheckout, "LICENSE"), "utf8")), flatLicense);
+  assert.equal((await readFile(join(flatBridged.qualifyCheckout, "NOTICE"), "utf8")), flatNotice);
 
   // Test prepareConsumerQualifyCheckout refusal when a declared resource directory is missing from npmPayload
   const incompleteNpmPayload = join(temp, "incomplete-npm-payload");
