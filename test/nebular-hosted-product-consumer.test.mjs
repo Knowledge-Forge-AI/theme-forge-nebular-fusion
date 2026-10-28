@@ -1567,6 +1567,10 @@ process.stdout.write(JSON.stringify({ label, status: "pass", problems: [] }) + "
   assert.equal(plan.qualification.args.includes("--archive-legal-envelope"), true);
   assert.equal(plan.qualification.args.includes("/owned/evidence/linux-x64.qualification.json"), true);
   assert.equal(plan.packageVerify.args.includes("verify"), true);
+  for (const command of [plan.packageVerify, plan.qualification, ...plan.smoke]) {
+    assert.equal(command.env.GDK_BACKEND, "x11");
+    assert.equal(command.env.LIBGL_ALWAYS_SOFTWARE, "1");
+  }
   assert.equal(plan.smoke.some((row) => row.args.includes("C-signal")), true);
   assert.equal(plan.smoke.some((row) => row.args.some((arg) => arg.endsWith("native-rc-smoke.mjs"))), true);
 
@@ -1579,6 +1583,10 @@ process.stdout.write(JSON.stringify({ label, status: "pass", problems: [] }) + "
     evidenceDir: "/owned/evidence",
   });
   assert.equal(darwinPlan.qualification, null);
+  for (const command of [darwinPlan.packageVerify, ...darwinPlan.smoke]) {
+    assert.equal(command.env.GDK_BACKEND, undefined);
+    assert.equal(command.env.LIBGL_ALWAYS_SOFTWARE, undefined);
+  }
 
   const bridgeCheckout = join(temp, "nested-legal-bridge-checkout");
   const bridgeScratch = join(temp, "nested-legal-bridge-scratch");

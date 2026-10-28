@@ -1297,7 +1297,14 @@ function commandEnvironment(platform) {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    ...(platform.startsWith("linux") ? { WEBKIT_DISABLE_COMPOSITING_MODE: "1", WEBKIT_DISABLE_DMABUF_RENDERER: "1" } : {}),
+    ...(platform.startsWith("linux")
+      ? {
+        WEBKIT_DISABLE_COMPOSITING_MODE: "1",
+        WEBKIT_DISABLE_DMABUF_RENDERER: "1",
+        GDK_BACKEND: "x11",
+        LIBGL_ALWAYS_SOFTWARE: "1",
+      }
+      : {}),
   };
 }
 
