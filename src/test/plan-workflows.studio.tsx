@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { StudioBrandPlanClient } from "../brand-plans/StudioBrandPlanClient";
@@ -15,6 +16,12 @@ const rasterBuild = "sha256:22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f3
 const raster = { profileId: "profile-one", adapter: { adapterId: "resvg-png-v1", companionPackage: "@knowledge-forge-ai/tfsb-raster-resvg", companionVersion: "0.0.0-tfsb47f", backend: "wasm", rendererPackage: "@resvg/resvg-wasm", rendererVersion: "2.6.2", rendererBuildDigest: rasterBuild, nodeMajor: 22, platformClaim: "darwin-arm64", qualificationId: "sha256:4bb08e677b87ef1ca74c35c5c22f547cebef4c22a1f98a08a9246fd9397d0f11" }, outputs: [{ profileId: "profile-one", outputId: "output-one", assetId: "asset-one", destination: "public/output.png", state: "create", width: 16, height: 16, purpose: "icon", fit: "contain-pad", background: "transparent", alpha: "straight", canonicalAssetDigest: digest, svgDigest: digest, profileDigest: digest, outputConfigDigest: digest, rendererBuildDigest: rasterBuild, pngDigest: digest, decodedPixelDigest: digest, receiptDigest: digest }], counts: { create: 1, update: 0, unchanged: 0 }, warnings: [] } as const;
 
 function ready(method: BrandPlanMethod, summary: StudioPlanSummary): Extract<StudioBrandPlanStartResult, { readonly kind: "ready" }> { return { kind: "ready", planHandle: `plan_${"b".repeat(64)}`, planDigest: digest, method, expiresInMs: 600000, summary, projectHandle: "project_safe", sourceHandles: [] }; }
+
+const authorityResetAnnouncement = "Plan authority cleared because the host or project/source identity changed.";
+
+function planElement(client: StudioBrandPlanClient, identity = "ready|project_safe") {
+  return <PlanWorkspace client={client} host={{ schemaVersion: 1, studioVersion: packageJson.version, manifestDigest: "a".repeat(64), state: "ready", selectedProtocolVersion: "1.2", serverVersion: "0.1.0", methods: [], capabilities: null, raster: { available: false, qualificationIdentity: null }, projectOpenCount: 1, sourceOpenCount: 0, lastReasonCode: null }} project={{ projectHandle: "project_safe", rootKind: "project", schemaVersion: 1, name: "demo", canonicalDigest: digest, assetCount: 1, companionCount: 0, state: null }} view="recipes" data={{ view: "recipes", graph: { recipeDigest: digest, graphDigest: digest, affectedTargetCount: 1, ownershipConflicts: 0, nodes: [{ recipeId: "recipe-one", sourceAsset: "source-one", targetAsset: "asset-one", dependencies: [], dependents: [], operations: ["copy"], operationDigest: digest, depth: 0, targetState: "missing", receiptDigest: null }] } }} selection={{ kind: "none" }} sources={[]} selectedSourceHandles={[]} onSourceSelection={() => undefined} identity={identity} onReconcile={async () => true} />;
+}
 
 describe("typed Studio plan workflows", () => {
   it("validates all five exact public summary variants and rejects private or mismatched data", () => {
@@ -131,6 +138,42 @@ describe("typed Studio plan workflows", () => {
     resolveApply?.({ kind: "applied", method: "brand.derive.plan" });
     await waitFor(() => expect(reconcile).toHaveBeenCalledOnce());
     expect(await screen.findByText(/applied and canonical reads refreshed/i)).toBeTruthy();
+  });
+
+  it("does not announce an authority change on the initial mount", () => {
+    const client: StudioBrandPlanClient = { startPlanOperation: async () => ({ kind: "discarded" }), cancelPlanOperation: async () => ({ accepted: true }) };
+    render(planElement(client));
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("does not announce an authority change during the initial StrictMode effect replay", () => {
+    const client: StudioBrandPlanClient = { startPlanOperation: async () => ({ kind: "discarded" }), cancelPlanOperation: async () => ({ accepted: true }) };
+    render(<StrictMode>{planElement(client)}</StrictMode>);
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("announces and abandons authority for both A-to-B and B-to-A identity changes", async () => {
+    let resolveStart: ((result: StudioBrandPlanStartResult) => void) | undefined;
+    const start = vi.fn(async (
+      _request: Parameters<StudioBrandPlanClient["startPlanOperation"]>[0],
+      onEvent: Parameters<StudioBrandPlanClient["startPlanOperation"]>[1],
+    ): Promise<StudioBrandPlanStartResult> => {
+      onEvent({ schemaVersion: 1, sequence: 1, operationHandle: `operation_${"c".repeat(64)}`, state: "started" });
+      return new Promise((resolve) => { resolveStart = resolve; });
+    });
+    const cancelPlanOperation = vi.fn(async () => ({ accepted: true }));
+    const client: StudioBrandPlanClient = { startPlanOperation: start, cancelPlanOperation };
+    const rendered = render(planElement(client, "ready|project-a"));
+    fireEvent.click(screen.getByRole("button", { name: "Review derive plan" }));
+    await screen.findByRole("button", { name: /cancel operation/i });
+
+    rendered.rerender(planElement(client, "ready|project-b"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(authorityResetAnnouncement));
+    expect(cancelPlanOperation).toHaveBeenCalledWith(`operation_${"c".repeat(64)}`);
+
+    rendered.rerender(planElement(client, "ready|project-a"));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe(authorityResetAnnouncement));
+    resolveStart?.({ kind: "discarded" });
   });
 
   it("keeps opaque handles, token, nonce, request id, and path out of visible and accessible plan evidence", async () => {
