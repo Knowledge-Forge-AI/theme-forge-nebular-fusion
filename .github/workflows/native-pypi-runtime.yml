@@ -127,6 +127,37 @@ jobs:
       - name: Validate the public runtime producer contract
         run: node "$NEBULAR_PRODUCER_ROOT/tools/public-pypi-runtime-producer-tests.mjs"
 
+      - name: Run the observational Rust census contract tests
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            "$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py" \
+            "$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py"
+          python3 "$NEBULAR_PRODUCER_ROOT/test/test_public_rust_census.py"
+          python3 "$NEBULAR_PRODUCER_ROOT/test/test_public_rust_census_metadata.py"
+
+      - name: Prepare the fresh owned Rust census session
+        run: |
+          set -euo pipefail
+          census_parent="$RUNNER_TEMP/rs9-rust-census"
+          census_dir="$census_parent/$NEBULAR_RC_TRIPLE"
+          test ! -L "$RUNNER_TEMP"
+          test ! -L "$census_parent"
+          mkdir -p "$census_dir"
+          test ! -L "$census_dir"
+          chmod 700 "$census_parent" "$census_dir"
+          session="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${NEBULAR_RC_TRIPLE}"
+          helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py"
+          metadata_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py"
+          test -x "$helper"
+          test -f "$metadata_helper"
+          {
+            echo "NEBULAR_RUSTC_CENSUS_DIR=$census_dir"
+            echo "NEBULAR_RUST_CENSUS_SESSION=$session"
+            echo "NEBULAR_RUST_CENSUS_HELPER_SHA256=$(sha256sum "$helper" | cut -d' ' -f1)"
+            echo "NEBULAR_RUST_CENSUS_METADATA_HELPER_SHA256=$(sha256sum "$metadata_helper" | cut -d' ' -f1)"
+          } >> "$GITHUB_ENV"
+
       - name: Select the repository-pinned Rust 1.98.0 toolchain
         run: |
           set -euo pipefail
@@ -149,6 +180,23 @@ jobs:
           export PATH="$CARGO_HOME/bin:$PATH"
           RUSTUP_TOOLCHAIN=1.98.0 rustc --version | grep '^rustc 1.98.0 '
           RUSTUP_TOOLCHAIN=1.98.0 cargo --version | grep '^cargo 1.98.0 '
+
+      - name: Enable observational Rust census for the unchanged product build
+        run: |
+          set -euo pipefail
+          helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py"
+          test -x "$helper"
+          echo "RUSTC_WRAPPER=$helper" >> "$GITHUB_ENV"
+
+      - name: Observe the selected Rust compiler and target cfg
+        run: |
+          set -euo pipefail
+          rustc_bin="$(rustup which rustc)"
+          test -x "$rustc_bin"
+          python3 "$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py" probe \
+            --rustc "$rustc_bin" \
+            --target "$NEBULAR_RC_TRIPLE" \
+            --output "$RUNNER_TEMP/rc/upload/evidence/rustc-probe.json"
 
       - name: Authenticate the embedded Node runtime
         run: |
@@ -358,6 +406,31 @@ jobs:
             --package-manifest "$RUNNER_TEMP/rc/upload/evidence/package-manifest.json" \
             --smoke-dir "$RUNNER_TEMP/rc/upload/evidence/smoke" \
             --output "$RUNNER_TEMP/rc/upload/evidence/public-pypi-runtime-release.json"
+
+      - name: Aggregate the fresh observational Rust census
+        run: |
+          set -euo pipefail
+          metadata_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py"
+          census_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py"
+          metadata="$RUNNER_TEMP/rc/upload/evidence/rust-census-metadata.json"
+          python3 "$metadata_helper" metadata \
+            --source-origin "$RUNNER_TEMP/rc/upload/evidence/source-origin.json" \
+            --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" \
+            --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" \
+            --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" \
+            --probe "$RUNNER_TEMP/rc/upload/evidence/rustc-probe.json" \
+            --product-commit "$NEBULAR_PRODUCT_SOURCE_SHA" \
+            --product-tree "$NEBULAR_PRODUCT_SOURCE_TREE" \
+            --producer-commit "$NEBULAR_PRODUCER_SHA" \
+            --producer-tree "$NEBULAR_PRODUCER_TREE" \
+            --platform "$NEBULAR_RC_PLATFORM" \
+            --triple "$NEBULAR_RC_TRIPLE" \
+            --output "$metadata"
+          python3 "$census_helper" aggregate \
+            --records "$NEBULAR_RUSTC_CENSUS_DIR" \
+            --metadata "$metadata" \
+            --session "$NEBULAR_RUST_CENSUS_SESSION" \
+            --output "$RUNNER_TEMP/rc/upload/evidence/rust-census.json"
 
       - name: Upload the qualified Linux PyPI intake candidate
         if: ${{ success() }}
