@@ -268,11 +268,15 @@ jobs:
       - name: Bind the public source-origin receipt
         run: |
           set -euo pipefail
+          cp "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-closed-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/runtime-input-closed-manifest.json"
+          cp "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-receipt.json" "$RUNNER_TEMP/rc/upload/evidence/runtime-input-receipt.json"
+          cmp "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-closed-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/runtime-input-closed-manifest.json"
+          cmp "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-receipt.json" "$RUNNER_TEMP/rc/upload/evidence/runtime-input-receipt.json"
           node "$NEBULAR_PRODUCER_ROOT/tools/public-pypi-runtime-producer.mjs" source-origin \
             --manifest "$RUNNER_TEMP/runtime-manifest.json" \
             --manifest-sha256 "$NEBULAR_RUNTIME_MANIFEST_SHA256" \
-            --closed "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-closed-manifest.json" \
-            --receipt "$RUNNER_TEMP/nebular-runtime/$NEBULAR_RC_TRIPLE/runtime-input-receipt.json" \
+            --closed "$RUNNER_TEMP/rc/upload/evidence/runtime-input-closed-manifest.json" \
+            --receipt "$RUNNER_TEMP/rc/upload/evidence/runtime-input-receipt.json" \
             --source-commit "$NEBULAR_RC_SOURCE_SHA" \
             --source-tree "$NEBULAR_RC_SOURCE_TREE" \
             --producer-commit "$NEBULAR_PRODUCER_SHA" \
