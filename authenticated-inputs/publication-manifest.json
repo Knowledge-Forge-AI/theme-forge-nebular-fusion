@@ -4,7 +4,7 @@
     "status": "release-candidate",
     "repository": "Knowledge-Forge-AI/theme-forge-stellar-burst",
     "commit": null,
-    "contentTree": "fb9b06b91c45d54f74dca2513887d82a0e739eb1",
+    "contentTree": "51cb511c2a3fd73668ba062f03ecc5308ac54667",
     "sourceMaterializationSha256": null,
     "packageSha256": "c4b609a0b4705b17483577d5bde5deea518a83af08ce4d93c4662fa7cacc7d88"
   },
@@ -12,7 +12,7 @@
     "status": "release-candidate",
     "repository": "Knowledge-Forge-AI/theme-forge-stellar-loom",
     "commit": null,
-    "contentTree": "fb9b06b91c45d54f74dca2513887d82a0e739eb1",
+    "contentTree": "51cb511c2a3fd73668ba062f03ecc5308ac54667",
     "sourceMaterializationSha256": null,
     "packageSha256": "4e7a7d436c09ba111f5dca8101876c6e085ad15859d96bab8f728c5669880b5f",
     "catalogBuildEvidenceSha256": "6d72303f3b926cd9c3e7245adad511a67f0184b8dad13e9859b5f53be9df5893",

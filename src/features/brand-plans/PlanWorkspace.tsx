@@ -28,7 +28,7 @@ export function publicPlanFailure(error: unknown): { readonly state: "ready" | "
 }
 
 export function PlanWorkspace({ client, host, project, view, data, selection, sources, selectedSourceHandles, onSourceSelection, proposalDraft, identity, onReconcile }: { readonly client: StudioBrandPlanClient | undefined; readonly host: StudioHostStatus; readonly project: StudioProjectOpen; readonly view: WorkbenchView; readonly data: ViewData; readonly selection: SelectedEvidence; readonly sources: readonly StudioSourceOpen[]; readonly selectedSourceHandles: readonly string[]; readonly onSourceSelection: (handles: readonly string[]) => void; readonly proposalDraft?: Proposal | undefined; readonly identity: string; readonly onReconcile: (method: string, indeterminate: boolean) => Promise<boolean> }) {
-  const [state, dispatch] = useReducer(planReducer, initialPlanState); const [now, setNow] = useState(Date.now()); const uiGeneration = useRef(0); const actionInFlight = useRef(false);
+  const [state, dispatch] = useReducer(planReducer, initialPlanState); const [now, setNow] = useState(Date.now()); const uiGeneration = useRef(0); const actionInFlight = useRef(false); const lastIdentity = useRef<string | undefined>(undefined);
   const stateRef = useRef(state); stateRef.current = state;
   const abandon = () => {
     const current = stateRef.current;
@@ -36,7 +36,7 @@ export function PlanWorkspace({ client, host, project, view, data, selection, so
     if (current.operationHandle && ["planning", "applying", "discarding", "cancellation-requested"].includes(current.state)) void client.cancelPlanOperation(current.operationHandle).catch(() => undefined);
     else if (current.plan) void client.startPlanOperation({ kind: "discard", planHandle: current.plan.planHandle }, () => undefined).catch(() => undefined);
   };
-  useEffect(() => { abandon(); actionInFlight.current = false; uiGeneration.current += 1; dispatch({ type: "reset", announcement: "Plan authority cleared because the host or project/source identity changed." }); }, [identity]);
+  useEffect(() => { const identityChanged = lastIdentity.current !== undefined && lastIdentity.current !== identity; lastIdentity.current = identity; abandon(); actionInFlight.current = false; uiGeneration.current += 1; dispatch(identityChanged ? { type: "reset", announcement: "Plan authority cleared because the host or project/source identity changed." } : { type: "reset" }); }, [identity]);
   useEffect(() => () => abandon(), []);
   useEffect(() => { if (state.state !== "ready") return undefined; const timer = window.setInterval(() => { const next = Date.now(); setNow(next); if (state.expiresAt !== undefined && next >= state.expiresAt) dispatch({ type: "expire" }); }, 1_000); return () => window.clearInterval(timer); }, [state.state, state.expiresAt]);
   const disabled = !client || state.state !== "idle" && !["applied", "discarded", "expired", "stale", "cancelled", "failed", "indeterminate"].includes(state.state);
