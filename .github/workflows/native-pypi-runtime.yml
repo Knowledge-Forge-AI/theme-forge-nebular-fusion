@@ -333,7 +333,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$NEBULAR_PRODUCT_ROOT"
-          mkdir -p "$RUNNER_TEMP/rc/runtime-receipt" "$RUNNER_TEMP/rc/upload/evidence/observations"
+          mkdir -p "$RUNNER_TEMP/rc/runtime-receipt"
           node "$NEBULAR_PRODUCER_ROOT/tools/public-pypi-runtime-producer.mjs" runtime-receipt \
             --target "$NEBULAR_RC_TRIPLE" \
             --payload "$RUNNER_TEMP/rc/payload" \
