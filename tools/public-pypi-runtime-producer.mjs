@@ -25,6 +25,8 @@ const PLATFORM_BINDINGS = Object.freeze({
 });
 
 const SHA256 = /^[a-f0-9]{64}$/u;
+const SHA512 = /^[a-f0-9]{128}$/u;
+const SRI = /^sha(256|512)-([A-Za-z0-9+/]+={0,2})$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/u;
 const SAFE_TARGET = new Set(TARGETS);
@@ -49,6 +51,20 @@ export function canonicalJson(value) {
 }
 export function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 export function sriForSha256(digest) { requireDigest(digest, "sha256"); return `sha256-${Buffer.from(digest, "hex").toString("base64")}`; }
+export function sriForSha512(digest) { if (!SHA512.test(digest)) fail("sha512 digest is invalid"); return `sha512-${Buffer.from(digest, "hex").toString("base64")}`; }
+function parseIntegrity(value, label) {
+  const match = typeof value === "string" ? SRI.exec(value) : null;
+  if (!match) fail(`${label} is not a supported SRI digest`);
+  let bytes;
+  try { bytes = Buffer.from(match[2], "base64"); } catch { fail(`${label} is not valid base64`); }
+  if (bytes.toString("base64") !== match[2] || bytes.length !== (match[1] === "256" ? 32 : 64)) fail(`${label} has an invalid digest length`);
+  return Object.freeze({ algorithm: `sha${match[1]}`, digest: bytes.toString("hex") });
+}
+function validateNpmIntegrity(value, sha256Digest, label = "npm integrity") {
+  const parsed = parseIntegrity(value, label);
+  if (parsed.algorithm === "sha256" && parsed.digest !== sha256Digest) fail(`${label} does not bind npm sha256`);
+  return parsed;
+}
 function expectedAssetUrl(assetId) { return `https://api.github.com/repos/${REPOSITORY}/releases/assets/${assetId}`; }
 function validateReleaseUrl(urlString, expected = null) {
   let parsed; try { parsed = new URL(urlString); } catch { fail("runtime release URL is invalid"); }
@@ -141,6 +157,36 @@ export function validateSourceOrigin(value) {
 async function loadRuntimeApi(runtimeTool, runtimeToolSha256) { const bytes = await readBoundedRegular(runtimeTool, 16 * 1024 * 1024, "product native-runtime tool"); const actual = sha256(bytes); if (actual !== requireDigest(runtimeToolSha256, "product native-runtime tool sha256")) fail("product native-runtime tool SHA mismatch"); const runtime = await import(pathToFileURL(resolve(runtimeTool)).href); for (const key of ["inventoryNativePayload", "writeNativeRuntimeReceipt"]) if (typeof runtime[key] !== "function") fail(`product native-runtime tool is missing ${key}`); return runtime; }
 async function writeRuntimeReceipt({ target, payload, input, inputSha256, sourceOrigin, output, runtimeTool, runtimeToolSha256 }) { const runtime = await loadRuntimeApi(runtimeTool, runtimeToolSha256); const origin = await readJson(sourceOrigin, LIMITS.maxManifestBytes, "public source origin"); validateSourceOrigin(origin); const material = await readJson(join(dirname(input), "../source/native-runtime.json"), LIMITS.maxManifestBytes, "runtime material manifest"); return runtime.writeNativeRuntimeReceipt(resolve(output), { target, material, sourceCandidate: origin.identity, payloadInventory: await runtime.inventoryNativePayload(resolve(payload), { expectedTarget: target }), inputSha256: requireDigest(inputSha256, "runtime input sha256") }); }
 function digestFileSync(path) { const bytes = readFileSync(path); return { bytes: bytes.length, sha256: sha256(bytes) }; }
+function sameFileBookends(before, after) {
+  return ["dev", "ino", "mode", "uid", "gid", "size", "mtimeNs", "ctimeNs"].every((key) => before[key] === after[key]);
+}
+async function digestBoundedRegular(path, expectedBytes, label) {
+  let handle;
+  try { handle = await open(resolve(path), constants.O_RDONLY | constants.O_NOFOLLOW); } catch { fail(`${label} is not a readable regular file`); }
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile() || before.size < 1n || before.size > BigInt(LIMITS.maxArchiveBytes) || !Number.isSafeInteger(Number(before.size)) || Number(before.size) !== expectedBytes) fail(`${label} size is not the declared archive size`);
+    const sha256Hash = createHash("sha256"); const sha512Hash = createHash("sha512"); const buffer = Buffer.allocUnsafe(1024 * 1024); let bytes = 0;
+    while (true) {
+      const result = await handle.read(buffer, 0, buffer.length, null);
+      if (result.bytesRead === 0) break;
+      bytes += result.bytesRead;
+      if (bytes > expectedBytes) fail(`${label} exceeded its declared archive size`);
+      const chunk = buffer.subarray(0, result.bytesRead); sha256Hash.update(chunk); sha512Hash.update(chunk);
+    }
+    const after = await handle.stat({ bigint: true });
+    if (bytes !== expectedBytes || !sameFileBookends(before, after)) fail(`${label} changed while it was read`);
+    const digest = sha256Hash.digest("hex"); const sri512 = sriForSha512(sha512Hash.digest("hex"));
+    return Object.freeze({ bytes, sha256: digest, integrity: sri512 });
+  } finally { await handle.close().catch(() => {}); }
+}
+function candidateArchivePath(candidateDir, filename, label) {
+  const root = resolve(requireString(candidateDir, "candidate directory"));
+  const name = requireString(filename, `${label} filename`, SAFE_NAME);
+  const path = resolve(root, name);
+  if (dirname(path) !== root) fail(`${label} filename is not a direct candidate member`);
+  return path;
+}
 function reconstructPackagePayloadIdentity(manifest, materialDigest) {
   if (!Array.isArray(manifest.members)) fail("package manifest payload members are missing");
   const members = [];
@@ -225,7 +271,8 @@ export function validateReleaseInputs({ platform, origin, runtime, qualified, bu
   if (!isRecord(record.raw) || !isRecord(record.npm) || !isRecord(manifest) || !["tfsb.nebular-package-manifest-v1", "tfsb.nebular-package-manifest-v2"].includes(manifest.schema)) fail("release package inputs are invalid");
   if (manifest.package !== binding.package || manifest.version !== VERSION || manifest.target?.os !== "linux" || manifest.target?.cpu !== binding.cpu || manifest.payloadRoot !== "payload" || manifest.executable !== binding.executable || manifest.payloadStatus !== "complete" || !Array.isArray(manifest.members) || manifest.fileCount !== manifest.members.length) fail("package manifest platform identity is invalid");
   if (typeof packageManifest !== "string" || digestFileSync(packageManifest).sha256 !== record.packageManifestSha256) fail("package manifest digest differs from the package record");
-  if (!SAFE_NAME.test(record.raw.filename ?? "") || !SAFE_NAME.test(record.npm.filename ?? "") || !Number.isSafeInteger(record.raw.size) || record.raw.size < 1 || !Number.isSafeInteger(record.npm.size) || record.npm.size < 1 || !SHA256.test(record.raw.sha256 ?? "") || !SHA256.test(record.npm.sha256 ?? "") || record.npm.integrity !== sriForSha256(record.npm.sha256) || record.raw.executableSha256 !== qualified.executableSha256) fail("package record does not bind the qualified executable and exact archives");
+  if (!SAFE_NAME.test(record.raw.filename ?? "") || !SAFE_NAME.test(record.npm.filename ?? "") || !Number.isSafeInteger(record.raw.size) || record.raw.size < 1 || record.raw.size > LIMITS.maxArchiveBytes || !Number.isSafeInteger(record.npm.size) || record.npm.size < 1 || record.npm.size > LIMITS.maxArchiveBytes || !SHA256.test(record.raw.sha256 ?? "") || !SHA256.test(record.npm.sha256 ?? "") || record.raw.executableSha256 !== qualified.executableSha256) fail("package record does not bind the qualified executable and exact archives");
+  validateNpmIntegrity(record.npm.integrity, record.npm.sha256);
   const manifestExecutable = manifest.members?.find((member) => member.path === binding.executable);
   if (manifestExecutable?.sha256 !== qualified.executableSha256) fail("package manifest executable is not the qualified executable");
   const packagePayload = reconstructPackagePayloadIdentity(manifest, qualified.materialDigest);
@@ -240,7 +287,7 @@ export function validateReleaseInputs({ platform, origin, runtime, qualified, bu
   return { packagePayload, scenarios: [...seen].sort() };
 }
 
-async function writeReleaseReceipt({ platform, sourceOrigin, runtimeReceipt, qualification, buildReceipt, packageRecord, packageManifest, smokeDir, output }) {
+async function writeReleaseReceipt({ platform, sourceOrigin, runtimeReceipt, qualification, buildReceipt, packageRecord, packageManifest, candidateDir, smokeDir, output }) {
   const origin = await readJson(sourceOrigin, LIMITS.maxManifestBytes, "public source origin"); validateSourceOrigin(origin);
   const runtime = await readJson(runtimeReceipt, LIMITS.maxReceiptBytes, "native runtime receipt"); const qualified = await readJson(qualification, LIMITS.maxReceiptBytes, "qualification receipt"); const built = await readJson(buildReceipt, LIMITS.maxReceiptBytes, "build receipt"); const record = await readJson(packageRecord, LIMITS.maxReceiptBytes, "package record"); const manifest = await readJson(packageManifest, LIMITS.maxReceiptBytes, "package manifest");
   const smoke = []; const smokeRuns = [];
@@ -250,6 +297,12 @@ async function writeReleaseReceipt({ platform, sourceOrigin, runtimeReceipt, qua
     if (entry.name.endsWith(".run.json")) smokeRuns.push(await readJson(path, LIMITS.maxReceiptBytes, `smoke run ${entry.name}`));
   }
   validateReleaseInputs({ platform, origin, runtime, qualified, built, record, manifest, packageManifest, smokeRuns });
+  const rawArchive = await digestBoundedRegular(candidateArchivePath(candidateDir, record.raw.filename, "raw archive"), record.raw.size, "raw archive");
+  const npmArchive = await digestBoundedRegular(candidateArchivePath(candidateDir, record.npm.filename, "npm archive"), record.npm.size, "npm archive");
+  if (rawArchive.sha256 !== record.raw.sha256 || npmArchive.sha256 !== record.npm.sha256) fail("candidate archive bytes do not match the package record");
+  const npmIntegrity = parseIntegrity(record.npm.integrity, "npm integrity");
+  if (npmIntegrity.algorithm === "sha256" && npmIntegrity.digest !== npmArchive.sha256) fail("candidate npm archive does not match sha256 integrity");
+  if (npmIntegrity.algorithm === "sha512" && npmIntegrity.digest !== Buffer.from(npmArchive.integrity.slice("sha512-".length), "base64").toString("hex")) fail("candidate npm archive does not match sha512 integrity");
   const body = { schema: RELEASE_RECEIPT_SCHEMA, status: "pass", contract: "public-pypi-portable-runtime-v1", repository: REPOSITORY, version: VERSION, platform, sourceOrigin: origin.identity, source: origin.source, producer: origin.producer, runtime: { target: runtime.target, materialDigest: runtime.materialDigest, sourceCandidate: runtime.sourceCandidate, nativePayload: runtime.nativePayload, inputSha256: runtime.inputSha256 }, qualification: { sha256: digestFileSync(qualification).sha256, identity: qualified.identity ?? null }, build: { sha256: digestFileSync(buildReceipt).sha256, identity: built.identity ?? null }, package: { recordSha256: digestFileSync(packageRecord).sha256, manifestSha256: digestFileSync(packageManifest).sha256, raw: { filename: record.raw.filename, bytes: record.raw.size, sha256: record.raw.sha256 }, npm: { filename: record.npm.filename, bytes: record.npm.size, sha256: record.npm.sha256, integrity: record.npm.integrity } }, smoke };
   const result = { ...body, identity: sha256(canonicalJson(body)) }; await writeJsonExclusive(output, result, 0o644); return result;
 }
@@ -266,7 +319,7 @@ if (invokedDirectly) {
     else if (mode === "runtime-input-args") { const manifest = await readRuntimeManifest(need(values, "--manifest"), need(values, "--manifest-sha256")); process.stdout.write(`${JSON.stringify(runtimeInputArguments(manifest, need(values, "--target")))}\n`); }
     else if (mode === "source-origin") { result = await writeSourceOrigin({ manifestPath: need(values, "--manifest"), manifestSha256: need(values, "--manifest-sha256"), closedPath: need(values, "--closed"), receiptPath: need(values, "--receipt"), sourceCommit: need(values, "--source-commit"), sourceTree: need(values, "--source-tree"), producerCommit: need(values, "--producer-commit"), producerTree: need(values, "--producer-tree"), output: need(values, "--output") }); process.stdout.write(`${JSON.stringify({ identity: result.identity, target: result.runtime.target })}\n`); }
     else if (mode === "runtime-receipt") { result = await writeRuntimeReceipt({ target: need(values, "--target"), payload: need(values, "--payload"), input: need(values, "--input"), inputSha256: need(values, "--input-sha256"), sourceOrigin: need(values, "--source-origin"), output: need(values, "--output"), runtimeTool: need(values, "--runtime-tool"), runtimeToolSha256: need(values, "--runtime-tool-sha256") }); process.stdout.write(`${JSON.stringify({ schema: result.schema, target: result.target, materialDigest: result.materialDigest })}\n`); }
-    else if (mode === "release-receipt") { result = await writeReleaseReceipt({ platform: need(values, "--platform"), sourceOrigin: need(values, "--source-origin"), runtimeReceipt: need(values, "--runtime-receipt"), qualification: need(values, "--qualification"), buildReceipt: need(values, "--build-receipt"), packageRecord: need(values, "--package-record"), packageManifest: need(values, "--package-manifest"), smokeDir: values.get("--smoke-dir"), output: need(values, "--output") }); process.stdout.write(`${JSON.stringify({ schema: result.schema, identity: result.identity, platform: result.platform })}\n`); }
+    else if (mode === "release-receipt") { result = await writeReleaseReceipt({ platform: need(values, "--platform"), sourceOrigin: need(values, "--source-origin"), runtimeReceipt: need(values, "--runtime-receipt"), qualification: need(values, "--qualification"), buildReceipt: need(values, "--build-receipt"), packageRecord: need(values, "--package-record"), packageManifest: need(values, "--package-manifest"), candidateDir: need(values, "--candidate-dir"), smokeDir: values.get("--smoke-dir"), output: need(values, "--output") }); process.stdout.write(`${JSON.stringify({ schema: result.schema, identity: result.identity, platform: result.platform })}\n`); }
     else fail("usage: fetch-manifest | runtime-input-args | fetch-runtime-archive | source-origin | runtime-receipt | release-receipt");
   } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; }
 }

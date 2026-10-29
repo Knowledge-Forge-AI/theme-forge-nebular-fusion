@@ -373,6 +373,31 @@ jobs:
           mv "$RUNNER_TEMP/rc/upload/package-record.json" "$RUNNER_TEMP/rc/upload/package-manifest.json" "$RUNNER_TEMP/rc/upload/evidence/"
           chmod -R a-w "$RUNNER_TEMP/rc/upload/candidate"
 
+      - name: Aggregate the fresh observational Rust census
+        run: |
+          set -euo pipefail
+          metadata_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py"
+          census_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py"
+          metadata="$RUNNER_TEMP/rc/upload/evidence/rust-census-metadata.json"
+          python3 "$metadata_helper" metadata \
+            --source-origin "$RUNNER_TEMP/rc/upload/evidence/source-origin.json" \
+            --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" \
+            --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" \
+            --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" \
+            --probe "$RUNNER_TEMP/rc/upload/evidence/rustc-probe.json" \
+            --product-commit "$NEBULAR_PRODUCT_SOURCE_SHA" \
+            --product-tree "$NEBULAR_PRODUCT_SOURCE_TREE" \
+            --producer-commit "$NEBULAR_PRODUCER_SHA" \
+            --producer-tree "$NEBULAR_PRODUCER_TREE" \
+            --platform "$NEBULAR_RC_PLATFORM" \
+            --triple "$NEBULAR_RC_TRIPLE" \
+            --output "$metadata"
+          python3 "$census_helper" aggregate \
+            --records "$NEBULAR_RUSTC_CENSUS_DIR" \
+            --metadata "$metadata" \
+            --session "$NEBULAR_RUST_CENSUS_SESSION" \
+            --output "$RUNNER_TEMP/rc/upload/evidence/rust-census.json"
+
       - name: Smoke-test the packaged candidate from raw and npm bytes
         run: |
           set -euo pipefail
@@ -408,33 +433,9 @@ jobs:
             --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" \
             --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" \
             --package-manifest "$RUNNER_TEMP/rc/upload/evidence/package-manifest.json" \
+            --candidate-dir "$RUNNER_TEMP/rc/upload/candidate" \
             --smoke-dir "$RUNNER_TEMP/rc/upload/evidence/smoke" \
             --output "$RUNNER_TEMP/rc/upload/evidence/public-pypi-runtime-release.json"
-
-      - name: Aggregate the fresh observational Rust census
-        run: |
-          set -euo pipefail
-          metadata_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census-metadata.py"
-          census_helper="$NEBULAR_PRODUCER_ROOT/tools/public-rust-census.py"
-          metadata="$RUNNER_TEMP/rc/upload/evidence/rust-census-metadata.json"
-          python3 "$metadata_helper" metadata \
-            --source-origin "$RUNNER_TEMP/rc/upload/evidence/source-origin.json" \
-            --build-receipt "$RUNNER_TEMP/rc/upload/evidence/build-receipt.json" \
-            --package-record "$RUNNER_TEMP/rc/upload/evidence/package-record.json" \
-            --qualification "$RUNNER_TEMP/rc/upload/evidence/qualification.json" \
-            --probe "$RUNNER_TEMP/rc/upload/evidence/rustc-probe.json" \
-            --product-commit "$NEBULAR_PRODUCT_SOURCE_SHA" \
-            --product-tree "$NEBULAR_PRODUCT_SOURCE_TREE" \
-            --producer-commit "$NEBULAR_PRODUCER_SHA" \
-            --producer-tree "$NEBULAR_PRODUCER_TREE" \
-            --platform "$NEBULAR_RC_PLATFORM" \
-            --triple "$NEBULAR_RC_TRIPLE" \
-            --output "$metadata"
-          python3 "$census_helper" aggregate \
-            --records "$NEBULAR_RUSTC_CENSUS_DIR" \
-            --metadata "$metadata" \
-            --session "$NEBULAR_RUST_CENSUS_SESSION" \
-            --output "$RUNNER_TEMP/rc/upload/evidence/rust-census.json"
 
       - name: Upload the qualified Linux PyPI intake candidate
         if: ${{ success() }}
@@ -452,9 +453,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nebular-public-pypi-runtime-${{ matrix.triple }}-${{ github.run_id }}-diagnostics
-          path: ${{ runner.temp }}/rc/upload/evidence/
+          path: ${{ runner.temp }}/rc/upload/
           if-no-files-found: warn
           retention-days: 14
+          compression-level: 0
           overwrite: false
 
       - name: Restore runner write access for cleanup

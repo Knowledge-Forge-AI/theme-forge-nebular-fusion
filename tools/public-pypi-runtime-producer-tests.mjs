@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import {
   fetchRuntimeAsset,
   sha256,
   sriForSha256,
+  sriForSha512,
   validateReleaseInputs,
   runtimeInputArguments,
   validateRuntimeManifest,
@@ -81,8 +83,11 @@ function releaseFixture() {
   const runtime = { schema: "nebular-native-runtime-material-receipt-v1", target, materialDigest, sourceCandidate: origin.identity, nativePayload: payloadIdentity, inputSha256: digestE };
   const qualified = { schema: "nebular.native-rc-qualification-v1", platform, status: "pass", executableSha256, nativePayload: { identity: payloadIdentity, files: 2 }, materialDigest, checks: [] };
   const built = { schema: "nebular.native-rc-build-receipt-v1", platform, triple: target, source: { ...origin.source }, nativePayload: { identity: payloadIdentity, files: 2 } };
-  const record = { schema: "nebular.native-rc-package-v1", platform, version: VERSION, packageManifestSha256: null, npm: { filename: "package.tgz", size: 3, sha256: digestB, integrity: sriForSha256(digestB) }, raw: { filename: "raw.tar.gz", size: 3, sha256: digestC, executableSha256 } };
-  return { platform, origin, runtime, qualified, built, record, manifest, smokeRuns: [
+  const rawBytes = Buffer.from("raw"); const npmBytes = Buffer.from("npm");
+  const rawSha256 = sha256(rawBytes); const npmSha256 = sha256(npmBytes);
+  const npmDigestBytes = createHash("sha512").update(npmBytes).digest();
+  const record = { schema: "nebular.native-rc-package-v1", platform, version: VERSION, packageManifestSha256: null, npm: { filename: "package.tgz", size: npmBytes.length, sha256: npmSha256, integrity: sriForSha512(npmDigestBytes.toString("hex")) }, raw: { filename: "raw.tar.gz", size: rawBytes.length, sha256: rawSha256, executableSha256 } };
+  return { platform, origin, runtime, qualified, built, record, manifest, archiveBytes: { raw: rawBytes, npm: npmBytes }, smokeRuns: [
     { status: "pass", scenario: "C", source: "raw-archive", executable: { sha256: executableSha256 } },
     { status: "pass", scenario: "C-signal", source: "npm-package", executable: { sha256: executableSha256 } },
   ] };
@@ -95,18 +100,38 @@ release.record.packageManifestSha256 = sha256(await readFile(releaseManifestPath
 const validRelease = validateReleaseInputs({ ...release, packageManifest: releaseManifestPath });
 assert.equal(validRelease.packagePayload.identity, release.qualified.nativePayload.identity);
 assert.deepEqual(validRelease.scenarios, ["C", "C-signal"]);
+const formatOnlySha512 = releaseFixture();
+formatOnlySha512.record.packageManifestSha256 = release.record.packageManifestSha256;
+formatOnlySha512.record.npm.integrity = sriForSha512(Buffer.alloc(64, 9).toString("hex"));
+assert.doesNotThrow(() => validateReleaseInputs({ ...formatOnlySha512, packageManifest: releaseManifestPath }));
+const formatOnlySha256 = releaseFixture();
+formatOnlySha256.record.packageManifestSha256 = release.record.packageManifestSha256;
+formatOnlySha256.record.npm.integrity = sriForSha256(formatOnlySha256.record.npm.sha256);
+assert.doesNotThrow(() => validateReleaseInputs({ ...formatOnlySha256, packageManifest: releaseManifestPath }));
 const cliFiles = {
   origin: join(scratch, "source-origin.json"), runtime: join(scratch, "runtime-receipt.json"), qualification: join(scratch, "qualification.json"),
-  build: join(scratch, "build-receipt.json"), record: join(scratch, "package-record.json"), smoke: join(scratch, "smoke"), output: join(scratch, "release-receipt.json"),
+  build: join(scratch, "build-receipt.json"), record: join(scratch, "package-record.json"), candidate: join(scratch, "candidate"), smoke: join(scratch, "smoke"), output: join(scratch, "release-receipt.json"),
 };
 const writeJson = async (path, value) => writeFile(path, `${JSON.stringify(value)}\n`);
-await mkdir(cliFiles.smoke);
+await mkdir(cliFiles.candidate); await mkdir(cliFiles.smoke);
+await writeFile(join(cliFiles.candidate, release.record.raw.filename), release.archiveBytes.raw);
+await writeFile(join(cliFiles.candidate, release.record.npm.filename), release.archiveBytes.npm);
 await writeJson(cliFiles.origin, release.origin); await writeJson(cliFiles.runtime, release.runtime); await writeJson(cliFiles.qualification, release.qualified); await writeJson(cliFiles.build, release.built); await writeJson(cliFiles.record, release.record);
 await writeJson(join(cliFiles.smoke, "c.run.json"), release.smokeRuns[0]); await writeJson(join(cliFiles.smoke, "c-signal.run.json"), release.smokeRuns[1]);
 const producerPath = fileURLToPath(new URL("./public-pypi-runtime-producer.mjs", import.meta.url));
-const cli = spawnSync(process.execPath, [producerPath, "release-receipt", "--platform", release.platform, "--source-origin", cliFiles.origin, "--runtime-receipt", cliFiles.runtime, "--qualification", cliFiles.qualification, "--build-receipt", cliFiles.build, "--package-record", cliFiles.record, "--package-manifest", releaseManifestPath, "--smoke-dir", cliFiles.smoke, "--output", cliFiles.output], { encoding: "utf8" });
+const cli = spawnSync(process.execPath, [producerPath, "release-receipt", "--platform", release.platform, "--source-origin", cliFiles.origin, "--runtime-receipt", cliFiles.runtime, "--qualification", cliFiles.qualification, "--build-receipt", cliFiles.build, "--package-record", cliFiles.record, "--package-manifest", releaseManifestPath, "--candidate-dir", cliFiles.candidate, "--smoke-dir", cliFiles.smoke, "--output", cliFiles.output], { encoding: "utf8" });
 assert.equal(cli.status, 0, cli.stderr);
 assert.equal(JSON.parse(await readFile(cliFiles.output, "utf8")).status, "pass");
+await rm(cliFiles.output, { force: true });
+await writeJson(cliFiles.record, { ...release.record, npm: { ...release.record.npm, integrity: sriForSha512(Buffer.alloc(64, 8).toString("hex")) } });
+const tamperedCli = spawnSync(process.execPath, [producerPath, "release-receipt", "--platform", release.platform, "--source-origin", cliFiles.origin, "--runtime-receipt", cliFiles.runtime, "--qualification", cliFiles.qualification, "--build-receipt", cliFiles.build, "--package-record", cliFiles.record, "--package-manifest", releaseManifestPath, "--candidate-dir", cliFiles.candidate, "--smoke-dir", cliFiles.smoke, "--output", cliFiles.output], { encoding: "utf8" });
+assert.notEqual(tamperedCli.status, 0);
+assert.match(tamperedCli.stderr, /candidate npm archive does not match sha512 integrity/);
+await writeJson(cliFiles.record, release.record);
+await writeFile(join(cliFiles.candidate, release.record.npm.filename), Buffer.from("bad"));
+const tamperedArchiveCli = spawnSync(process.execPath, [producerPath, "release-receipt", "--platform", release.platform, "--source-origin", cliFiles.origin, "--runtime-receipt", cliFiles.runtime, "--qualification", cliFiles.qualification, "--build-receipt", cliFiles.build, "--package-record", cliFiles.record, "--package-manifest", releaseManifestPath, "--candidate-dir", cliFiles.candidate, "--smoke-dir", cliFiles.smoke, "--output", cliFiles.output], { encoding: "utf8" });
+assert.notEqual(tamperedArchiveCli.status, 0);
+assert.match(tamperedArchiveCli.stderr, /candidate archive bytes do not match/);
 for (const [name, mutate, expected] of [
   ["runtime target", (value) => { value.runtime.target = "aarch64-unknown-linux-gnu"; }, "target/platform join"],
   ["runtime source candidate", (value) => { value.runtime.sourceCandidate = digestF; }, "sourceCandidate"],
