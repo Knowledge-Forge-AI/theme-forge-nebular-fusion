@@ -536,7 +536,7 @@ fn native_path_for_target(target: &str) -> io::Result<String> {
     ))
 }
 
-/// Reviewed closed-input identities per build target. The runtime is the official Node 22.23.3
+/// Reviewed closed-input identities per build target. The runtime is the official Node 22.23.4
 /// executable of the embedded runtime authority (tools/node-runtime-authority.mjs); the native addon
 /// is the prebuild shipped in the authenticated Stellar Burst 0.6.1 core package. A binary accepts only
 /// a payload prepared for the target it was compiled for.
@@ -553,22 +553,22 @@ struct ClosedInputPins {
 const CLOSED_INPUT_PINS: [ClosedInputPins; 3] = [
     ClosedInputPins {
         target: "aarch64-apple-darwin",
-        runtime_sha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-        runtime_size: 112_925_600,
+        runtime_sha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+        runtime_size: 113_002_944,
         native_sha256: "2f842ce43f62c76b04884a92980037067c8e55dfd183c86e788f1c3ac8a533c8",
         native_size: 53_344,
     },
     ClosedInputPins {
         target: "aarch64-unknown-linux-gnu",
-        runtime_sha256: "d09e299258c24f7cdf6f5d5ec185e3a56512b27a697113735dac909f1cac7b8d",
-        runtime_size: 122_179_336,
+        runtime_sha256: "7e48183361053f039294fbbc3ba586722fe756bf296d6cb8195356d10819cd16",
+        runtime_size: 122_293_360,
         native_sha256: "67fb6b85f339a7c2f43ababa20434b26a3ea9bb65b17e70257a03c07810beb79",
         native_size: 73_336,
     },
     ClosedInputPins {
         target: "x86_64-unknown-linux-gnu",
-        runtime_sha256: "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
-        runtime_size: 124_827_920,
+        runtime_sha256: "94efd062ed066c1a0b332e18249859c905e920eeada5df55d24c99b919629a90",
+        runtime_size: 124_902_584,
         native_sha256: "a2999fc9ac1b1f0a31600595f7069e10aadb032f01059b4d7e64ed80cd8a38a8",
         native_size: 27_240,
     },
@@ -747,7 +747,7 @@ fn verify_manifest(
             || !valid_hex(&tarball.sha256, 64)
             || tarball.size > MAX_FILE_BYTES
             || !valid_sri(&tarball.sri)
-            || manifest.runtime.version != "22.23.3"
+            || manifest.runtime.version != "22.23.4"
             || manifest.runtime.v8 != "12.4.254.21-node.57"
             || manifest.runtime.target != pins.target
             || manifest.runtime.mode != 0o755

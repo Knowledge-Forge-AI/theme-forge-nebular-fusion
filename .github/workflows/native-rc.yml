@@ -143,7 +143,7 @@ jobs:
       - name: Authenticate the embedded Node runtime
         run: |
           mkdir -p .test-reports/nebular/node-authenticity
-          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.3" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.4" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
       - run: npm ci --ignore-scripts
       - run: npm ci --prefix loom-preview-source --ignore-scripts
       - run: npm run build
@@ -336,8 +336,8 @@ jobs:
           NODE_DIR="$RUNNER_TEMP/node-linux"
           ARCHIVE=$(node --input-type=module -e 'import { NODE_RELEASE_IDENTITY } from "./tools/node-runtime-authority.mjs"; process.stdout.write(NODE_RELEASE_IDENTITY.targets[process.env.NEBULAR_RC_TRIPLE].archive)')
           mkdir -p "$NODE_DIR"
-          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.3/SHASUMS256.txt.asc
-          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.3/$ARCHIVE"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.4/SHASUMS256.txt.asc
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.4/$ARCHIVE"
           node tools/node-runtime-authority.mjs --authenticate-linux "$NODE_DIR" --target "$NEBULAR_RC_TRIPLE" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
       - run: npm ci --ignore-scripts
       - run: npm ci --prefix loom-preview-source --ignore-scripts
@@ -533,8 +533,8 @@ jobs:
           NODE_DIR="$RUNNER_TEMP/node-linux"
           ARCHIVE=$(node --input-type=module -e 'import { NODE_RELEASE_IDENTITY } from "./tools/node-runtime-authority.mjs"; process.stdout.write(NODE_RELEASE_IDENTITY.targets[process.env.NEBULAR_RC_TRIPLE].archive)')
           mkdir -p "$NODE_DIR"
-          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.3/SHASUMS256.txt.asc
-          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.3/$ARCHIVE"
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/SHASUMS256.txt.asc" https://nodejs.org/dist/v22.23.4/SHASUMS256.txt.asc
+          curl --proto '=https' --tlsv1.2 -fsSLo "$NODE_DIR/$ARCHIVE" "https://nodejs.org/dist/v22.23.4/$ARCHIVE"
           node tools/node-runtime-authority.mjs --authenticate-linux "$NODE_DIR" --target "$NEBULAR_RC_TRIPLE" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
       - run: npm ci --ignore-scripts
       - run: npm ci --prefix loom-preview-source --ignore-scripts
