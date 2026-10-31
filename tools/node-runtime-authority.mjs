@@ -1,5 +1,5 @@
 // Maintained portable Node.js runtime authority for Darwin ARM64 and Linux arm64/x64.
-// Single source of truth for the official Node 22.23.3 embedded sidecar runtime.
+// Single source of truth for the official Node 22.23.4 embedded sidecar runtime.
 import { createHash } from "node:crypto";
 import {
   closeSync, constants, fstatSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync, unlinkSync, writeFileSync, writeSync,
@@ -25,46 +25,47 @@ import { validateDarwinLinkage } from "./darwin-linkage-validator.mjs";
 // Stellar Burst, Loom, Solar Sail and Terminal Nova trees and keeps describing their CI runtime. The
 // Nebular embedded sidecar runtime is owned here so that it can move independently of those trees.
 //
-// Official Node.js 22.23.3 (Jod LTS, 2026-09-23). Its bundled Undici 6.28.1 is outside the 6.x affected
-// range of GHSA-3wwx-pv8p-q78v (>=6.25.0 <6.28.1). SHASUMS256.txt, .asc and .sig were verified against the
-// release-key list in nodejs/node README.md at v22.23.3 with key material from nodejs/release-keys; every
-// archive digest matched the signed manifest and each executable was measured (docs ADR 0030 amendment).
+// Official Node.js 22.23.4 (Jod LTS, 2026-10-21), with bundled Undici 6.29.1. Detached and cleartext
+// SHASUMS signatures were verified with the committed active release-key ring and the documented primary
+// fingerprint. All three archive digests matched the signed entries; executable bodies were measured.
+// These input measurements are separate from the required native runtime probes and qualification.
+// Decision record: ADR 0032 (Nebular 0.7.1 embedded runtime update).
 /** @type {Readonly<NodeReleaseIdentity>} */
 export const NODE_RELEASE_IDENTITY = Object.freeze({
-  version: "22.23.3",
-  darwinArm64TarballSha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
-  nodeExecutableSha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-  nodeExecutableSize: 112_925_600,
+  version: "22.23.4",
+  darwinArm64TarballSha256: "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428",
+  nodeExecutableSha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+  nodeExecutableSize: 113_002_944,
   v8: "12.4.254.21-node.57",
-  undici: "6.28.1",
+  undici: "6.29.1",
   target: "aarch64-apple-darwin",
-  tarballName: "node-v22.23.3-darwin-arm64.tar.gz",
-  archiveUrl: "https://nodejs.org/download/release/v22.23.3/node-v22.23.3-darwin-arm64.tar.gz",
-  shasumsSha256: "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+  tarballName: "node-v22.23.4-darwin-arm64.tar.gz",
+  archiveUrl: "https://nodejs.org/dist/v22.23.4/node-v22.23.4-darwin-arm64.tar.gz",
+  shasumsSha256: "a662bf8938f1ea15a9ba0017a89a53a28812b8ab179be11dd62d642cb6e33396",
   signingKeyFingerprint: "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356", // betterleaks:allow -- public Node.js release signing-key fingerprint
   signingKeyReleaser: "Antoine du Hamel <duhamelantoine1995@gmail.com>",
   targets: Object.freeze({
     "aarch64-apple-darwin": Object.freeze({
-      archive: "node-v22.23.3-darwin-arm64.tar.gz",
-      archiveSha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
-      executableSha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-      executableSize: 112_925_600,
+      archive: "node-v22.23.4-darwin-arm64.tar.gz",
+      archiveSha256: "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428",
+      executableSha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+      executableSize: 113_002_944,
       platform: "darwin",
       arch: "arm64",
     }),
     "aarch64-unknown-linux-gnu": Object.freeze({
-      archive: "node-v22.23.3-linux-arm64.tar.xz",
-      archiveSha256: "a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f",
-      executableSha256: "d09e299258c24f7cdf6f5d5ec185e3a56512b27a697113735dac909f1cac7b8d",
-      executableSize: 122_179_336,
+      archive: "node-v22.23.4-linux-arm64.tar.xz",
+      archiveSha256: "6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b",
+      executableSha256: "7e48183361053f039294fbbc3ba586722fe756bf296d6cb8195356d10819cd16",
+      executableSize: 122_293_360,
       platform: "linux",
       arch: "arm64",
     }),
     "x86_64-unknown-linux-gnu": Object.freeze({
-      archive: "node-v22.23.3-linux-x64.tar.xz",
-      archiveSha256: "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de",
-      executableSha256: "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48",
-      executableSize: 124_827_920,
+      archive: "node-v22.23.4-linux-x64.tar.xz",
+      archiveSha256: "1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce",
+      executableSha256: "94efd062ed066c1a0b332e18249859c905e920eeada5df55d24c99b919629a90",
+      executableSize: 124_902_584,
       platform: "linux",
       arch: "x64",
     }),
@@ -80,7 +81,7 @@ export const EXPECTED_EXECUTABLE_SIZE = NODE_RELEASE_IDENTITY.nodeExecutableSize
 export const EXPECTED_V8_VERSION = NODE_RELEASE_IDENTITY.v8;
 export const EXPECTED_TARGET = NODE_RELEASE_IDENTITY.target;
 
-// Primary release signer for official Node.js 22.23.3
+// Primary release signer for official Node.js 22.23.4
 export const PRIMARY_SIGNING_KEY_FINGERPRINT = NODE_RELEASE_IDENTITY.signingKeyFingerprint;
 export const PRIMARY_SIGNING_RELEASER = NODE_RELEASE_IDENTITY.signingKeyReleaser;
 
@@ -224,7 +225,7 @@ function probeNode(command, displayPath) {
 }
 
 /**
- * Validates that an executable is the exact official portable Node 22.23.3 Darwin ARM64 runtime.
+ * Validates that an executable is the exact official portable Node 22.23.4 Darwin ARM64 runtime.
  * @param {string} executablePath
  * @param {DarwinValidationOptions} [options]
  * @returns {{ valid: boolean, version: string, v8: string, sha256: string, size: number, target: string }}

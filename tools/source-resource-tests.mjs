@@ -577,7 +577,7 @@ describe("Source-built resource preparation for Scene", () => {
     assert.equal(binding.capability, "0.5-development");
     assert.equal(binding.sourceIdentity, "a".repeat(64));
     assert.equal(binding.sourceTreeDigest, binding.sourceIdentity);
-    assert.equal(binding.node.version, "22.23.3");
+    assert.equal(binding.node.version, "22.23.4");
     assert.equal(binding.node.target, "aarch64-apple-darwin");
     assert.deepEqual(binding.runtime, binding.node);
     assert.equal(binding.fileCount, binding.files.length);

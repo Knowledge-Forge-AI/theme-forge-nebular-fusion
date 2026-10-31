@@ -203,9 +203,9 @@ jobs:
       - run: npm run build
       - name: Verify Node authenticity
         run: |
-          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.3" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.4" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
           cp "$RUNNER_TEMP/node-authenticated" .test-reports/nebular/node-runtime
-          cp "$RUNNER_TEMP/node-v22.23.3/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
+          cp "$RUNNER_TEMP/node-v22.23.4/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
       - name: Build and verify sidecar payload twice
         run: |
           ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)
@@ -398,9 +398,9 @@ jobs:
       - run: npm run build
       - name: Verify Node authenticity
         run: |
-          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.3" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
+          node tools/node-runtime-authority.mjs --authenticate-download "$RUNNER_TEMP/node-v22.23.4" --output-node "$RUNNER_TEMP/node-authenticated" --output .test-reports/nebular/node-authenticity/receipt.json
           cp "$RUNNER_TEMP/node-authenticated" .test-reports/nebular/node-runtime
-          cp "$RUNNER_TEMP/node-v22.23.3/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
+          cp "$RUNNER_TEMP/node-v22.23.4/SHASUMS256.txt.asc" .test-reports/nebular/node-authenticity/
       - name: Build and verify sidecar payload twice
         run: |
           ROOT_TGZ=$(find authenticated-inputs/core-tarball -name '*.tgz' -type f -print -quit)

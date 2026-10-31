@@ -22,8 +22,8 @@ import {
   validateLinuxPortableNode,
 } from "../tools/node-runtime-authority.mjs";
 
-const FIXTURE_SHASUMS = fileURLToPath(new URL("./fixtures/node-v22.23.3/SHASUMS256.txt.asc", import.meta.url));
-const FIXTURE_SHASUMS_SHA256 = "e82087fe2cf383fce187b0789eb5ea50fd92f9b68afb4f4e174d65ec59acba4a";
+const FIXTURE_SHASUMS = fileURLToPath(new URL("./fixtures/node-v22.23.4/SHASUMS256.txt.asc", import.meta.url));
+const FIXTURE_SHASUMS_SHA256 = "a662bf8938f1ea15a9ba0017a89a53a28812b8ab179be11dd62d642cb6e33396";
 const DIST_DIR = process.env.NEBULAR_NODE_DIST_DIR;
 const QUALIFICATION = process.env.NEBULAR_NODE_AUTH_QUALIFICATION === "1";
 const LINUX_EXECUTABLES = process.env.NEBULAR_NODE_LINUX_EXECUTABLES; // "<triple>=<path>[,<triple>=<path>]"
@@ -62,24 +62,24 @@ afterEach(() => {
 });
 
 describe("embedded Node runtime identity", () => {
-  it("keeps the accepted Node 22.23.3 / Undici 6.28.1 authority unchanged", () => {
+  it("keeps the accepted Node 22.23.4 / Undici 6.29.1 authority unchanged", () => {
     expect(JSON.parse(JSON.stringify(NODE_RELEASE_IDENTITY))).toEqual({
-      version: "22.23.3",
-      darwinArm64TarballSha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53",
-      nodeExecutableSha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-      nodeExecutableSize: 112925600,
+      version: "22.23.4",
+      darwinArm64TarballSha256: "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428",
+      nodeExecutableSha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+      nodeExecutableSize: 113002944,
       v8: "12.4.254.21-node.57",
-      undici: "6.28.1",
+      undici: "6.29.1",
       target: "aarch64-apple-darwin",
-      tarballName: "node-v22.23.3-darwin-arm64.tar.gz",
-      archiveUrl: "https://nodejs.org/download/release/v22.23.3/node-v22.23.3-darwin-arm64.tar.gz",
-      shasumsSha256: "4fe99a2ba9d552a6f51c13ed68fb11104cfa5df601aec616be689253a8139e7a",
+      tarballName: "node-v22.23.4-darwin-arm64.tar.gz",
+      archiveUrl: "https://nodejs.org/dist/v22.23.4/node-v22.23.4-darwin-arm64.tar.gz",
+      shasumsSha256: "a662bf8938f1ea15a9ba0017a89a53a28812b8ab179be11dd62d642cb6e33396",
       signingKeyFingerprint: "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356", // betterleaks:allow -- public Node.js release signing-key fingerprint
       signingKeyReleaser: "Antoine du Hamel <duhamelantoine1995@gmail.com>",
       targets: {
-        "aarch64-apple-darwin": { archive: "node-v22.23.3-darwin-arm64.tar.gz", archiveSha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53", executableSha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b", executableSize: 112925600, platform: "darwin", arch: "arm64" },
-        "aarch64-unknown-linux-gnu": { archive: "node-v22.23.3-linux-arm64.tar.xz", archiveSha256: "a44aeb94849a299b22df10b9e622ec2f605c2183501bc40590705131de7c740f", executableSha256: "d09e299258c24f7cdf6f5d5ec185e3a56512b27a697113735dac909f1cac7b8d", executableSize: 122179336, platform: "linux", arch: "arm64" },
-        "x86_64-unknown-linux-gnu": { archive: "node-v22.23.3-linux-x64.tar.xz", archiveSha256: "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de", executableSha256: "fde6a4bf8d0562f7751d1a2d6cb9b417c4cfe107bbcb0aa3e9a24e125e348f48", executableSize: 124827920, platform: "linux", arch: "x64" },
+        "aarch64-apple-darwin": { archive: "node-v22.23.4-darwin-arm64.tar.gz", archiveSha256: "c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428", executableSha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0", executableSize: 113002944, platform: "darwin", arch: "arm64" },
+        "aarch64-unknown-linux-gnu": { archive: "node-v22.23.4-linux-arm64.tar.xz", archiveSha256: "6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b", executableSha256: "7e48183361053f039294fbbc3ba586722fe756bf296d6cb8195356d10819cd16", executableSize: 122293360, platform: "linux", arch: "arm64" },
+        "x86_64-unknown-linux-gnu": { archive: "node-v22.23.4-linux-x64.tar.xz", archiveSha256: "1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce", executableSha256: "94efd062ed066c1a0b332e18249859c905e920eeada5df55d24c99b919629a90", executableSize: 124902584, platform: "linux", arch: "x64" },
       },
     });
     expect(sha256(bytesOf(FIXTURE_SHASUMS))).toBe(FIXTURE_SHASUMS_SHA256);
@@ -279,7 +279,7 @@ describe("maintained authenticity chain (shared verifier, signed SHASUMS)", () =
 
   it("rejects a tampered signed SHASUMS manifest before anything is adopted", async () => {
     const p = paths();
-    const tampered = signedSums().toString("utf8").replace("23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53", "0".repeat(64));
+    const tampered = signedSums().toString("utf8").replace("c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428", "0".repeat(64));
     await expect(authenticateDarwinNodeDownload({ downloadDir: p.dir, outputNodePath: p.node, fetchImpl: serve({ "SHASUMS256.txt.asc": tampered, [EXPECTED_TARBALL_NAME]: "archive" }) }))
       .rejects.toThrow(/\[NODE_AUTH_FAIL\] PGP signature verification failed/);
     expectNothingAdopted(p);
@@ -289,7 +289,7 @@ describe("maintained authenticity chain (shared verifier, signed SHASUMS)", () =
     for (const archive of [Buffer.from("not the official archive"), Buffer.alloc(0)]) {
       const p = paths();
       await expect(authenticateDarwinNodeDownload({ downloadDir: p.dir, outputNodePath: p.node, fetchImpl: serve({ "SHASUMS256.txt.asc": signedSums(), [EXPECTED_TARBALL_NAME]: archive }) }))
-        .rejects.toThrow(/\[NODE_AUTH_FAIL\] Tarball 'node-v22\.23\.3-darwin-arm64\.tar\.gz' SHA-256 '[0-9a-f]{64}' does not match verified checksum '23b25245/);
+        .rejects.toThrow(/\[NODE_AUTH_FAIL\] Tarball 'node-v22\.23\.4-darwin-arm64\.tar\.gz' SHA-256 '[0-9a-f]{64}' does not match verified checksum 'c9e1dbc7/);
       expectNothingAdopted(p);
       rmSync(p.dir, { recursive: true, force: true });
     }
@@ -328,7 +328,7 @@ describe("maintained authenticity chain (shared verifier, signed SHASUMS)", () =
     expect(downloaded.signature.fingerprint).toBe(NODE_RELEASE_IDENTITY.signingKeyFingerprint);
     expect(downloaded.tarball).toEqual({ filename: EXPECTED_TARBALL_NAME, sha256: NODE_RELEASE_IDENTITY.darwinArm64TarballSha256, verifiedAgainstShasums: true });
     expect(downloaded.executable).toEqual({ filename: "node-authenticated", sha256: NODE_RELEASE_IDENTITY.nodeExecutableSha256, size: NODE_RELEASE_IDENTITY.nodeExecutableSize });
-    expect(downloaded.embeddedRuntime.undici).toBe("6.28.1");
+    expect(downloaded.embeddedRuntime.undici).toBe("6.29.1");
     expect(sha256(bytesOf(p.node))).toBe(NODE_RELEASE_IDENTITY.nodeExecutableSha256);
     expect(sha256(bytesOf(p.shasums))).toBe(FIXTURE_SHASUMS_SHA256);
 
@@ -359,7 +359,7 @@ describe("Linux runtime archive authentication (hosted Linux release-candidate l
 
   it("verifies the signature through the shared verifier and then rejects an archive that is not the verified one", async () => {
     const staged = stage(Buffer.from("not the official archive"));
-    await expect(authenticateLinuxNodeArchive(staged)).rejects.toThrow(/\[NODE_AUTH_FAIL\] node-v22\.23\.3-linux-arm64\.tar\.xz SHA-256 [0-9a-f]{64} does not match the verified checksum/);
+    await expect(authenticateLinuxNodeArchive(staged)).rejects.toThrow(/\[NODE_AUTH_FAIL\] node-v22\.23\.4-linux-arm64\.tar\.xz SHA-256 [0-9a-f]{64} does not match the verified checksum/);
     expect(absent(staged.outputNodePath)).toBe(true);
     expect(readdirSync(join(staged.dir, "out")).filter((name) => name.startsWith(".node-linux-"))).toEqual([]);
   }, 60_000);
@@ -385,7 +385,7 @@ describe("Linux runtime archive authentication (hosted Linux release-candidate l
       const identity = NODE_RELEASE_IDENTITY.targets[triple];
       const staged = stage(bytesOf(join(DIST_DIR, identity.archive)), bytesOf(FIXTURE_SHASUMS), triple);
       const receipt = await authenticateLinuxNodeArchive(staged);
-      expect(receipt).toMatchObject({ schema: "nebular.linux-node-authenticity-v1", target: triple, nodeVersion: "22.23.3", undici: "6.28.1",
+      expect(receipt).toMatchObject({ schema: "nebular.linux-node-authenticity-v1", target: triple, nodeVersion: "22.23.4", undici: "6.29.1",
         archive: { name: identity.archive, sha256: identity.archiveSha256 }, executable: { sha256: identity.executableSha256, size: identity.executableSize } });
       expect(receipt.signature.fingerprint).toBe(NODE_RELEASE_IDENTITY.signingKeyFingerprint);
       expect(sha256(bytesOf(staged.outputNodePath))).toBe(identity.executableSha256);

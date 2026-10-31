@@ -10,10 +10,10 @@
   "metadataVersion": "0.7.0",
   "capability": "0.5-development",
   "node": {
-    "version": "22.23.3",
+    "version": "22.23.4",
     "target": "aarch64-apple-darwin",
-    "sha256": "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-    "bytes": 112925600
+    "sha256": "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+    "bytes": 113002944
   },
   "adapterSha256": "1d0a28a146df201da9ef1fe2432595ccccef3ee3a4851d54e966adc51a8da195",
   "files": [

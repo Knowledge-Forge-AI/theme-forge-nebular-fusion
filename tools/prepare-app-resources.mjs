@@ -988,10 +988,10 @@ export const EXPECTED_PREVIEW_RECIPE_ENV = Object.freeze({
 });
 
 export const EXPECTED_PREVIEW_NODE = Object.freeze({
-  bytes: 112925600,
+  bytes: 113002944,
   platform: "darwin-arm64",
-  sha256: "68f4d07ca49e0500cc135c7e0a445093e228e42e126ac22306d045f0a8c2636b",
-  version: "22.23.3",
+  sha256: "2cc28a1880d0774616959f2210ee739bffa6ac695c887e8988a496a21271f6c0",
+  version: "22.23.4",
 });
 
 export const EXPECTED_PREVIEW_DEPENDENCY_IDENTITY = "28bfedc35b94ce5e7aee3869bb8b9d5a5b2dcf27644e90fcb709d3db9486747a";
@@ -1697,7 +1697,7 @@ export async function admitPreparedNeutralPreviewInput(manifestPath, authority, 
     manifest.node.identity !== EXPECTED_PREVIEW_NODE.sha256 ||
     manifest.node.identity !== authority.inputs.toolchains?.node?.identity
   ) {
-    throw new Error("Prepared neutral-preview node block does not match pinned Darwin Node 22.23.3 authority");
+    throw new Error("Prepared neutral-preview node block does not match pinned Darwin Node 22.23.4 authority");
   }
   const nodeFile = await readBoundedPreviewRegular(
     resolvedNodePath,
@@ -1706,7 +1706,7 @@ export async function admitPreparedNeutralPreviewInput(manifestPath, authority, 
     { requireExec: true },
   );
   if (nodeFile.bytes !== EXPECTED_PREVIEW_NODE.bytes || nodeFile.sha256 !== EXPECTED_PREVIEW_NODE.sha256) {
-    throw new Error("Authenticated build-time Node binary does not match pinned Darwin Node 22.23.3 bytes/SHA-256");
+    throw new Error("Authenticated build-time Node binary does not match pinned Darwin Node 22.23.4 bytes/SHA-256");
   }
 
   assertPreviewClosedObject(manifest.dependencies, "prepared preview dependencies", ["root", "identity"]);
