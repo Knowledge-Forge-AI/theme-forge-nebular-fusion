@@ -233,7 +233,7 @@ describe("staged no-clobber adoption of the authenticated download", () => {
     const p = paths();
     const beforeAdoption = ({ staged }) => writeFileSync(staged.tarball, "replaced archive");
     await expect(authenticateDarwinNodeDownload({ downloadDir: p.dir, outputNodePath: p.node, verify: fakeVerifier(files).verify, expected, beforeAdoption }))
-      .rejects.toThrow(/Staged node-v22\.23\.3-darwin-arm64\.tar\.gz changed after authentication/);
+      .rejects.toThrow(/Staged node-v22\.23\.4-darwin-arm64\.tar\.gz changed after authentication/);
     for (const path of [p.shasums, p.tarball, p.node]) expect(absent(path)).toBe(true);
   });
 
