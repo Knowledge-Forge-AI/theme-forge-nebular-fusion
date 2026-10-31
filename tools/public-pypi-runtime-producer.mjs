@@ -14,7 +14,8 @@ export const RUNTIME_MANIFEST_SCHEMA = "nebular.public-pypi-runtime-input-manife
 export const SOURCE_ORIGIN_SCHEMA = "nebular.public-pypi-source-origin-v2";
 export const RELEASE_RECEIPT_SCHEMA = "nebular.public-pypi-runtime-release-v1";
 export const REPOSITORY = "Knowledge-Forge-AI/theme-forge-nebular-fusion";
-export const VERSION = "0.7.1";
+// This adapter serves the frozen CADB product checkout, independently of the current app version.
+export const VERSION = "0.7.0";
 export const SOURCE_CONTRACT = "public-source-first-v6";
 export const TARGETS = Object.freeze(["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]);
 export const RELEASE_HOSTS = Object.freeze(new Set(["api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"]));
