@@ -169,6 +169,9 @@ jobs:
           (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
           node tools/release-notices.mjs
           node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Verify exact and read-only installed sidecar identities
+        run: |
+          (cd src-tauri && cargo test --locked --target "$NEBULAR_RC_TRIPLE" --all-targets --all-features sidecar::artifact::tests::installed_modes_ -- --test-threads=1)
       - name: Compile the native release payload
         env:
           TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
@@ -361,6 +364,9 @@ jobs:
           (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
           node tools/release-notices.mjs
           node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Verify exact and read-only installed sidecar identities
+        run: |
+          (cd src-tauri && cargo test --locked --target "$NEBULAR_RC_TRIPLE" --all-targets --all-features sidecar::artifact::tests::installed_modes_ -- --test-threads=1)
       - name: Compile the native release payload
         env:
           TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated
@@ -555,6 +561,9 @@ jobs:
           (cd src-tauri && cargo fetch --locked --target "$NEBULAR_RC_TRIPLE")
           node tools/release-notices.mjs
           node tools/ci/verify-tauri-resource-closure.mjs --build-ready --target "$NEBULAR_RC_TRIPLE"
+      - name: Verify exact and read-only installed sidecar identities
+        run: |
+          (cd src-tauri && cargo test --locked --target "$NEBULAR_RC_TRIPLE" --all-targets --all-features sidecar::artifact::tests::installed_modes_ -- --test-threads=1)
       - name: Compile the native release payload
         env:
           TFSB_STUDIO_NODE_BINARY: ${{ runner.temp }}/node-authenticated

@@ -1,6 +1,6 @@
 # Theme Forge Nebular Fusion
 
-Theme Forge Nebular Fusion 0.7.0 is a native desktop GUI distributed through a
+Theme Forge Nebular Fusion 0.7.1 is a native desktop GUI distributed through a
 small npm wrapper. The wrapper selects exactly one optional platform package:
 `darwin-arm64` (Apple Silicon), `linux-arm64`, or `linux-x64` (AMD64). The
 wrapper owns the `tfnf` command; platform packages do not install competing
@@ -12,11 +12,11 @@ Install the wrapper with npm. npm selects the optional native package for the
 host when the matching package is available:
 
 ```console
-$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.7.0
+$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.7.1
 $ tfnf --version
-theme-forge-nebular-fusion 0.7.0 (<host-target>)
+theme-forge-nebular-fusion 0.7.1 (<host-target>)
 $ tfnf --help
-Theme Forge Nebular Fusion 0.7.0
+Theme Forge Nebular Fusion 0.7.1
 Usage: tfnf [--version|--help|--path]
 Normal invocation launches the installed GUI.
 ```

@@ -1,14 +1,14 @@
 {
   "name": "@knowledge-forge-ai/theme-forge-nebular-fusion",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Desktop workbench for reviewing, inspecting, and managing Theme Forge brand systems and artifacts",
   "bin": {
     "tfnf": "./bin/tfnf.js"
   },
   "optionalDependencies": {
-    "@knowledge-forge-ai/theme-forge-nebular-fusion-darwin-arm64": "0.7.0",
-    "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-arm64": "0.7.0",
-    "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-x64": "0.7.0"
+    "@knowledge-forge-ai/theme-forge-nebular-fusion-darwin-arm64": "0.7.1",
+    "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-arm64": "0.7.1",
+    "@knowledge-forge-ai/theme-forge-nebular-fusion-linux-x64": "0.7.1"
   },
   "files": [
     "bin",

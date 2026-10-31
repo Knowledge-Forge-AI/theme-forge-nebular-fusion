@@ -79,7 +79,7 @@ jobs:
       - id: upload-source-readbacks
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-source-readbacks-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-source-readbacks-${{ github.run_id }}-a${{ github.run_attempt }}
           path: ${{ runner.temp }}/nebular-source-readbacks/
           if-no-files-found: error
           compression-level: 0
@@ -205,7 +205,7 @@ jobs:
       - id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-product-assets-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-product-assets-${{ github.run_id }}-a${{ github.run_attempt }}
           path: ${{ runner.temp }}/nebular-product-assets/
           if-no-files-found: error
           compression-level: 0
@@ -287,7 +287,7 @@ jobs:
         if: ${{ failure() && runner.os == 'Linux' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-consumer-diagnostics-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-consumer-diagnostics-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
           path: .test-reports/nebular/consumer/smoke/
           if-no-files-found: warn
           compression-level: 0
@@ -295,7 +295,7 @@ jobs:
       - name: Retain consumer receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-consumer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-consumer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
           path: .test-reports/nebular/consumer/
           if-no-files-found: error
           compression-level: 0
@@ -326,7 +326,7 @@ jobs:
         if: ${{ always() && runner.os == 'Linux' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-host-newer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-host-newer-${{ matrix.platform }}-${{ github.run_id }}-a${{ github.run_attempt }}
           path: ${{ runner.temp }}/nebular-host-observation/
           if-no-files-found: warn
           compression-level: 0
@@ -368,7 +368,7 @@ jobs:
           node-version: 22.23.3
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: nebular-0.7.0-consumer-*-${{ github.run_id }}-a${{ github.run_attempt }}
+          pattern: nebular-0.7.1-consumer-*-${{ github.run_id }}-a${{ github.run_attempt }}
           merge-multiple: true
           path: ${{ runner.temp }}/nebular-consumer-platforms/
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -386,7 +386,7 @@ jobs:
       - name: Retain aggregate consumer receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nebular-0.7.0-consumer-receipt-${{ github.run_id }}-a${{ github.run_attempt }}
+          name: nebular-0.7.1-consumer-receipt-${{ github.run_id }}-a${{ github.run_attempt }}
           path: .test-reports/nebular/consumer/consumer-receipt.json
           if-no-files-found: error
           compression-level: 0
