@@ -805,7 +805,7 @@ fn verify_manifest(
         let expected = required(&by_path, &relative)?;
         if retained.sha256 != expected.sha256
             || retained.identity.length != expected.size
-            || retained.identity.mode & 0o777 != expected.mode
+            || !installed_mode_matches(retained.identity.mode & 0o777, expected.mode)
         {
             return Err(io::Error::other("payload identity"));
         }
@@ -941,6 +941,14 @@ impl VerifiedDistribution {
     }
 }
 
+// Package stores may remove write permissions while preserving the exact
+// authenticated bytes and executable/read bits. Accept only that complete
+// read-only normalization or the manifest mode itself. Retained identity
+// revalidation still rejects any later permission or object change.
+fn installed_mode_matches(actual: u32, expected: u32) -> bool {
+    expected & !0o777 == 0 && (actual == expected || actual == (expected & 0o555))
+}
+
 pub(crate) fn verify_distribution(
     binary: &Path,
     payload: &Path,
@@ -963,7 +971,7 @@ pub(crate) fn verify_distribution(
         serde_json::from_str(raw).map_err(|_| io::Error::other("manifest shape"))?;
     if runtime.sha256 != manifest.runtime.sha256
         || runtime.identity.length != manifest.runtime.size
-        || runtime.identity.mode & 0o777 != manifest.runtime.mode
+        || !installed_mode_matches(runtime.identity.mode & 0o777, manifest.runtime.mode)
     {
         return Err(io::Error::other("runtime identity"));
     }
@@ -991,14 +999,257 @@ pub(crate) fn verify_distribution(
 mod tests {
     use std::fs;
     use std::io;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
 
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
 
+    use super::{
+        installed_mode_matches, safe_relative, valid_hex, verify_distribution, verify_self_digest,
+    };
     use super::{ActualInputIdentity, Manifest};
-    use super::{safe_relative, valid_hex, verify_distribution, verify_self_digest};
+
+    #[test]
+    fn installed_modes_allow_only_exact_or_complete_write_bit_removal() {
+        for (actual, expected) in [
+            (0o755, 0o755),
+            (0o555, 0o755),
+            (0o644, 0o644),
+            (0o444, 0o644),
+        ] {
+            assert!(installed_mode_matches(actual, expected));
+        }
+        for (actual, expected) in [
+            (0o775, 0o755),
+            (0o777, 0o755),
+            (0o655, 0o755),
+            (0o554, 0o755),
+            (0o555, 0o644),
+            (0o664, 0o644),
+            (0o444, 0o755),
+            (0o400, 0o644),
+            (0o644, 0o1644),
+            (0o444, 0o1644),
+        ] {
+            assert!(!installed_mode_matches(actual, expected));
+        }
+    }
+
+    // Unlike copied_fixture(), this owns an independent runtime inode as well
+    // as an independent payload. Never chmod or rewrite a hard-linked fixture.
+    struct ModeFixture {
+        root: PathBuf,
+        binary: PathBuf,
+        payload: PathBuf,
+    }
+
+    impl Drop for ModeFixture {
+        fn drop(&mut self) {
+            // Also clean on assertion unwinding and partially completed copies.
+            if self.root.exists() {
+                let _ = fs::remove_dir_all(&self.root);
+            }
+        }
+    }
+
+    fn mode_fixture(name: &str) -> io::Result<ModeFixture> {
+        let runtime_name = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "tfsb-studio-service-aarch64-apple-darwin"
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            "tfsb-studio-service-aarch64-unknown-linux-gnu"
+        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "tfsb-studio-service-x86_64-unknown-linux-gnu"
+        } else {
+            return Err(io::Error::other("unsupported mode-fixture target"));
+        };
+        let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = source_root.join("target").join(format!(
+            "tfsb-installed-modes-{}-{name}",
+            std::process::id()
+        ));
+        if root.exists() {
+            fs::remove_dir_all(&root)?;
+        }
+        fs::create_dir_all(&root)?;
+        let fixture = ModeFixture {
+            binary: root.join("sidecar"),
+            payload: root.join("payload"),
+            root,
+        };
+        let source_binary = source_root.join("binaries").join(runtime_name);
+        fs::copy(&source_binary, &fixture.binary)?;
+        let original = fs::metadata(&source_binary)?;
+        let independent = fs::metadata(&fixture.binary)?;
+        if (original.dev(), original.ino()) == (independent.dev(), independent.ino()) {
+            return Err(io::Error::other("mode fixture runtime is not independent"));
+        }
+        copy_tree(&source_root.join("sidecar-payload"), &fixture.payload)?;
+        Ok(fixture)
+    }
+
+    fn with_mode_fixture(
+        name: &str,
+        body: impl FnOnce(&ModeFixture) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let fixture = mode_fixture(name)?;
+        let result = body(&fixture);
+        // Attempt cleanup even on ordinary Result failure, and surface a
+        // cleanup failure on otherwise successful tests. Drop covers unwinding.
+        let cleanup = fs::remove_dir_all(&fixture.root);
+        result.and(cleanup)
+    }
+
+    fn set_file_mode(path: &Path, mode: u32) -> io::Result<()> {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+    }
+
+    fn read_mode_manifest(fixture: &ModeFixture) -> io::Result<Manifest> {
+        serde_json::from_slice(&fs::read(fixture.payload.join("manifest.json"))?)
+            .map_err(io::Error::other)
+    }
+
+    fn readonly_payload(root: &Path) -> io::Result<()> {
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                readonly_payload(&entry.path())?;
+            } else if kind.is_file() {
+                set_file_mode(&entry.path(), 0o444)?;
+            } else {
+                return Err(io::Error::other("unexpected mode-fixture object"));
+            }
+        }
+        Ok(())
+    }
+
+    fn normalize_readonly(fixture: &ModeFixture) -> io::Result<()> {
+        set_file_mode(&fixture.binary, 0o555)?;
+        readonly_payload(&fixture.payload)
+    }
+
+    fn change_owned_bytes(path: &Path, append: bool, mode: u32) -> io::Result<()> {
+        let mut bytes = fs::read(path)?;
+        if append {
+            bytes.push(0);
+        } else {
+            let first = bytes
+                .first_mut()
+                .ok_or_else(|| io::Error::other("empty mode-fixture file"))?;
+            *first ^= 1;
+        }
+        set_file_mode(path, 0o600)?;
+        fs::write(path, bytes)?;
+        set_file_mode(path, mode)
+    }
+
+    #[test]
+    fn installed_modes_accept_exact_and_readonly_verification() -> io::Result<()> {
+        let _guard = super::DISTRIBUTION_TEST_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("distribution test lock"))?;
+        with_mode_fixture("accept", |fixture| {
+            let manifest = read_mode_manifest(fixture)?;
+            assert_eq!(manifest.runtime.mode, 0o755);
+            set_file_mode(&fixture.binary, manifest.runtime.mode)?;
+            set_file_mode(&fixture.payload.join("manifest.json"), 0o644)?;
+            for file in &manifest.files {
+                set_file_mode(&fixture.payload.join(&file.path), file.mode)?;
+            }
+            verify_distribution(&fixture.binary, &fixture.payload)?.revalidate_for_spawn()?;
+            normalize_readonly(fixture)?;
+            verify_distribution(&fixture.binary, &fixture.payload)?.revalidate_for_spawn()?;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn installed_modes_reject_other_modes_bytes_and_inventory() -> io::Result<()> {
+        let _guard = super::DISTRIBUTION_TEST_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("distribution test lock"))?;
+        for case in [
+            "runtime-exec",
+            "runtime-partial-write",
+            "payload-exec",
+            "payload-write",
+            "runtime-content",
+            "runtime-size",
+            "payload-content",
+            "payload-size",
+            "unlisted",
+            "symlink",
+            "declared-runtime-mode",
+        ] {
+            with_mode_fixture(case, |fixture| {
+                normalize_readonly(fixture)?;
+                verify_distribution(&fixture.binary, &fixture.payload)?;
+                let entrypoint = fixture.payload.join(super::ENTRYPOINT);
+                match case {
+                    "runtime-exec" => set_file_mode(&fixture.binary, 0o554)?,
+                    "runtime-partial-write" => set_file_mode(&fixture.binary, 0o575)?,
+                    "payload-exec" => set_file_mode(&entrypoint, 0o544)?,
+                    "payload-write" => set_file_mode(&entrypoint, 0o464)?,
+                    "runtime-content" => change_owned_bytes(&fixture.binary, false, 0o555)?,
+                    "runtime-size" => change_owned_bytes(&fixture.binary, true, 0o555)?,
+                    "payload-content" => change_owned_bytes(&entrypoint, false, 0o444)?,
+                    "payload-size" => change_owned_bytes(&entrypoint, true, 0o444)?,
+                    "unlisted" => {
+                        let extra = fixture.payload.join("extra-unlisted");
+                        fs::write(&extra, b"extra")?;
+                        set_file_mode(&extra, 0o444)?;
+                    }
+                    "symlink" => {
+                        std::os::unix::fs::symlink(
+                            "manifest.json",
+                            fixture.payload.join("extra-link"),
+                        )?;
+                    }
+                    "declared-runtime-mode" => {
+                        let mut manifest = read_mode_manifest(fixture)?;
+                        manifest.runtime.mode = 0o555;
+                        let path = fixture.payload.join("manifest.json");
+                        set_file_mode(&path, 0o644)?;
+                        write_closed_manifest(&fixture.payload, &mut manifest, false)?;
+                        set_file_mode(&path, 0o444)?;
+                    }
+                    _ => return Err(io::Error::other("unknown readonly fixture")),
+                }
+                assert!(
+                    verify_distribution(&fixture.binary, &fixture.payload).is_err(),
+                    "{case}"
+                );
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn installed_modes_revalidate_retained_identity() -> io::Result<()> {
+        let _guard = super::DISTRIBUTION_TEST_LOCK
+            .lock()
+            .map_err(|_| io::Error::other("distribution test lock"))?;
+        for case in ["runtime", "payload"] {
+            with_mode_fixture(case, |fixture| {
+                normalize_readonly(fixture)?;
+                let verified = verify_distribution(&fixture.binary, &fixture.payload)?;
+                if case == "runtime" {
+                    set_file_mode(&fixture.binary, 0o755)?;
+                } else {
+                    set_file_mode(&fixture.payload.join(super::ENTRYPOINT), 0o644)?;
+                }
+                // A fresh verification accepts each new mode; the previously
+                // retained object must reject the intervening mode change.
+                verify_distribution(&fixture.binary, &fixture.payload)?;
+                assert!(verified.revalidate_for_spawn().is_err());
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
 
     fn hard_link_tree(source: &Path, destination: &Path) -> io::Result<()> {
         fs::create_dir(destination)?;
