@@ -1006,10 +1006,10 @@ mod tests {
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
 
+    use super::{ActualInputIdentity, Manifest};
     use super::{
         installed_mode_matches, safe_relative, valid_hex, verify_distribution, verify_self_digest,
     };
-    use super::{ActualInputIdentity, Manifest};
 
     #[test]
     fn installed_modes_allow_only_exact_or_complete_write_bit_removal() {
