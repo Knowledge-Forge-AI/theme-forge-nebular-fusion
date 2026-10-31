@@ -38,12 +38,15 @@ function asset(target, assetId) {
   };
 }
 function manifest() {
-  return { schema: RUNTIME_MANIFEST_SCHEMA, version: VERSION, repository: REPOSITORY, sourceContract: SOURCE_CONTRACT, runtimeToolSha256: digestA,
+  return { schema: RUNTIME_MANIFEST_SCHEMA, version: "0.7.0", repository: REPOSITORY, sourceContract: SOURCE_CONTRACT, runtimeToolSha256: digestA,
     assets: { "aarch64-unknown-linux-gnu": asset("aarch64-unknown-linux-gnu", 11), "x86_64-unknown-linux-gnu": asset("x86_64-unknown-linux-gnu", 22) } };
 }
 function expectFailure(fn, message) { assert.throws(fn, (error) => error instanceof Error && error.message.includes(message)); }
 
 const normalized = validateRuntimeManifest(manifest());
+// This producer serves the separately checked-out frozen CADB 0.7.0 product, even in a newer app checkout.
+assert.equal(normalized.version, "0.7.0");
+expectFailure(() => validateRuntimeManifest({ ...manifest(), version: "0.7.1" }), "identity fields are invalid");
 assert.equal(normalized.schema, RUNTIME_MANIFEST_SCHEMA);
 assert.match(normalized.manifestIdentity, /^[a-f0-9]{64}$/u);
 const runtimeArgs = runtimeInputArguments(normalized, "x86_64-unknown-linux-gnu");
