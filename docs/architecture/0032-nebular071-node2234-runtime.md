@@ -36,7 +36,7 @@ A later 0.7.1 universal Python launcher must bind newly qualified native release
 
 ## Acceptance and rollback
 
-Before publication, require resulting-source/projection verification, authentic OpenPGP fixture checks, native runtime/addon checks on all three public hosts, all four installed-mode regressions on every host, full Rust/frontend/security gates and downstream source, Nix and package-consumer qualification. Both Linux authenticity receipts must record an actual matching-host probe. Preserve required failures and existing protections.
+GitHub and npm native-artifact publication requires resulting-source/projection verification, authentic OpenPGP fixture checks, native runtime/addon checks on all three public hosts, all four installed-mode regressions on every host, full Rust/frontend/security gates and the fresh corresponding-source offer. Both Linux authenticity receipts must record an actual matching-host probe. Each Python, Homebrew, Nix or OS-repository publisher additionally requires its own source, consumer, metadata and signing gates. Track these publication channels independently, preserving their required failures and existing protections.
 
 The earlier Node 22.23.3 native campaigns qualify only their exact source/runtime candidates. Reverting an unpublished candidate restores those inputs but does not resolve their recorded security findings or admit publication.
 
