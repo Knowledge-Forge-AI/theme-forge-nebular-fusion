@@ -62,10 +62,10 @@ class FakeStyleRule {
   readonly selectorText: string;
   readonly style: FakeStyleDeclaration;
 
-  constructor(selectorText: string, inert: boolean) {
+  constructor(selectorText: string, inert: boolean, declarations: ReadonlyMap<string, string> = new Map()) {
     this.selectorText = selectorText;
     this.style = new FakeStyleDeclaration(
-      inert ? new Map([["--theme-forge-appearance-owned-slot-inert", "0"]]) : new Map(),
+      inert ? new Map([["--theme-forge-appearance-owned-slot-inert", "0"]]) : new Map(declarations),
     );
   }
 
@@ -74,21 +74,91 @@ class FakeStyleRule {
   }
 }
 
+function parseStyleRules(source: string): FakeStyleRule[] {
+  const rules: FakeStyleRule[] = [];
+  const pattern = /([^{}]+)\{([^{}]*)\}/g;
+  for (const match of source.matchAll(pattern)) {
+    const selector = match[1]?.trim();
+    const body = match[2];
+    if (!selector || body === undefined || selector.startsWith("@")) continue;
+    const declarations = new Map<string, string>();
+    for (const declaration of body.split(";")) {
+      const separator = declaration.indexOf(":");
+      if (separator < 0) continue;
+      const name = declaration.slice(0, separator).trim();
+      const value = declaration.slice(separator + 1).trim();
+      if (name && value) declarations.set(name, value);
+    }
+    rules.push(new FakeStyleRule(selector, false, declarations));
+  }
+  return rules;
+}
+
+class FakeMediaList {
+  constructor(private readonly owner: FakeMediaRule) {}
+
+  get mediaText(): string {
+    return this.owner.conditionText;
+  }
+
+  set mediaText(value: string) {
+    this.owner.setMediaText(value);
+  }
+}
+
 class FakeMediaRule {
   readonly type = 4;
   readonly cssRules: FakeRuleList;
+  readonly media: FakeMediaList;
+  ignoreNextMediaSet = false;
+  throwOnNextMediaSet = false;
+  throwAfterMediaMutation = false;
+  mediaSetFailures: boolean[] = [];
+  mutateOnNextMediaSet: (() => void) | null = null;
 
-  constructor(conditionText: string, children: FakeRule[], private readonly bodyCssText: string | null = null) {
+  constructor(conditionText: string, children: FakeRule[]) {
     this.conditionText = conditionText;
     this.cssRules = new FakeRuleList(children);
+    this.media = new FakeMediaList(this);
   }
 
   conditionText: string;
 
+  private applyMediaMutation(): void {
+    const mutation = this.mutateOnNextMediaSet;
+    this.mutateOnNextMediaSet = null;
+    mutation?.();
+  }
+
+  setMediaText(value: string): void {
+    if (this.mediaSetFailures.length > 0) {
+      const mutateBeforeThrow = this.mediaSetFailures.shift()!;
+      if (mutateBeforeThrow) {
+        this.conditionText = value;
+        this.applyMediaMutation();
+      }
+      throw new Error("synthetic media list setter failure");
+    }
+    if (this.ignoreNextMediaSet) {
+      this.ignoreNextMediaSet = false;
+      return;
+    }
+    if (this.throwOnNextMediaSet) {
+      this.throwOnNextMediaSet = false;
+      if (this.throwAfterMediaMutation) {
+        this.conditionText = value;
+        this.applyMediaMutation();
+      }
+      this.throwAfterMediaMutation = false;
+      throw new Error("synthetic media list setter failure");
+    }
+    this.conditionText = value;
+    this.applyMediaMutation();
+  }
+
   get cssText(): string {
     const nested = this.cssRules.rules.map((rule) => rule.cssText).join(" ");
-    const body = this.bodyCssText === null ? nested : `${this.bodyCssText}${nested}`;
-    return `@media ${this.conditionText} {${body}}`;
+    return `@media ${this.conditionText} {${nested}}`;
   }
 }
 
@@ -96,6 +166,8 @@ class FakeSheet {
   readonly cssRules: FakeRuleList;
   disabled = false;
   insertThenThrow = false;
+  deleteRuleFailures: Array<"before" | "after"> = [];
+  afterDeleteRule: (() => void) | null = null;
 
   constructor(validAsset = true) {
     this.cssRules = new FakeRuleList([
@@ -106,7 +178,10 @@ class FakeSheet {
   insertRule(source: string, index: number): number {
     if (source.includes("invalid") || source.includes("@bad")) throw new Error("synthetic CSSOM parse failure");
     const body = source.slice(source.indexOf("{") + 1, source.lastIndexOf("}"));
-    const group = new FakeMediaRule("all", [], body);
+    const nested = body.includes("nested-child")
+      ? [new FakeMediaRule("screen", parseStyleRules(body))]
+      : parseStyleRules(body);
+    const group = new FakeMediaRule("not all", nested);
     this.cssRules.insert(index, group);
     if (this.insertThenThrow) {
       this.insertThenThrow = false;
@@ -117,7 +192,11 @@ class FakeSheet {
 
   deleteRule(index: number): void {
     if (index < 0 || index >= this.cssRules.length) throw new Error("synthetic CSSOM delete failure");
+    const failure = this.deleteRuleFailures.shift();
+    if (failure === "before") throw new Error("synthetic CSSOM delete failure");
     this.cssRules.remove(index);
+    this.afterDeleteRule?.();
+    if (failure === "after") throw new Error("synthetic CSSOM delete failure after mutation");
   }
 }
 
@@ -153,6 +232,8 @@ class FakeLink extends FakeNode {
   throwOnNextMediaSet = false;
   throwAfterMediaMutation = false;
   mediaSetFailures: boolean[] = [];
+  mediaSetCount = 0;
+  replaceSheetOnNextMediaSet = false;
   private readonly listeners = new Map<string, Set<FakeListener>>();
 
   get media(): string {
@@ -160,6 +241,7 @@ class FakeLink extends FakeNode {
   }
 
   set media(value: string) {
+    this.mediaSetCount += 1;
     if (this.mediaSetFailures.length > 0) {
       const mutateBeforeThrow = this.mediaSetFailures.shift()!;
       if (mutateBeforeThrow) this.mediaValue = value;
@@ -176,6 +258,10 @@ class FakeLink extends FakeNode {
       throw new Error("synthetic media setter failure");
     }
     this.mediaValue = value;
+    if (this.replaceSheetOnNextMediaSet) {
+      this.replaceSheetOnNextMediaSet = false;
+      this.sheet = new FakeSheet();
+    }
   }
 
   addEventListener(type: string, listener: FakeListener, _options?: unknown): void {
@@ -288,13 +374,14 @@ function expectCode(action: () => unknown, code: string): void {
 }
 
 describe("appearance external CSSOM slots", () => {
-  it("prepares four distinct same-origin disabled link sheets despite load-event races", async () => {
+  it("prepares four distinct same-origin active link sheets despite load-event races", async () => {
     const { documentValue, slots } = await preparedDocument();
     expect(documentValue.links).toHaveLength(4);
     expect(new Set(documentValue.links.map((link) => link.sheet)).size).toBe(4);
     for (const link of documentValue.links) {
       expect(link.rel).toBe("stylesheet");
-      expect(link.media).toBe("not all");
+      expect(link.media).toBe("all");
+      expect(link.mediaSetCount).toBe(1);
       expect(link.href).toBe("https://studio.example.test/appearance-owned-slot.css");
     }
     expect(slots.teardown()).toMatchObject({ ok: true, releasedLinks: 4, remainingOwnedLinks: 0 });
@@ -316,12 +403,16 @@ describe("appearance external CSSOM slots", () => {
     expect(tauriDocument.links[0]!.href).toBe("tauri://localhost/appearance-owned-slot.css");
     tauriSlots.teardown();
 
+    const credentialedUrl = new URL("https://studio.example.test/workbench");
+    credentialedUrl.username = "demo";
+    credentialedUrl.password = "sample";
+
     for (const [href, origin] of [
       ["file:///tmp/workbench", "null"],
       [["da", "ta:text/html,workbench"].join(""), "null"],
       ["about:blank", "null"],
       ["https://studio.example.test/workbench", "https://evil.example.test"],
-      ["https://user:secret@studio.example.test/workbench", "https://studio.example.test"],
+      [credentialedUrl.href, credentialedUrl.origin],
     ] as const) {
       const invalidDocument = new FakeDocument();
       invalidDocument.location.href = href;
@@ -410,19 +501,31 @@ describe("appearance external CSSOM slots", () => {
     expect(documentValue.head.childNodes).toHaveLength(0);
   });
 
-  it("stages an always-matching group while disabled and activates it explicitly", async () => {
+  it("stages an inactive group and activates it through the owned media list", async () => {
     const { documentValue, slots } = await preparedDocument();
     const resource = slots.acquire("baseline", ".panel { color: red; }\n.button { color: blue; }");
     const link = documentValue.links[0]!;
     const sheet = link.sheet!;
-    expect(link.media).toBe("not all");
+    const baseRule = sheet.cssRules.item(0);
+    const group = sheet.cssRules.item(1) as FakeMediaRule;
+    const mediaSetCount = link.mediaSetCount;
+    expect(link.media).toBe("all");
+    expect(group.conditionText).toBe("not all");
+    expect(group.media.mediaText).toBe("not all");
     expect(sheet.cssRules).toHaveLength(2);
-    expect((sheet.cssRules.item(1) as FakeMediaRule).conditionText).toBe("all");
 
     slots.activate(resource);
+    expect(link.mediaSetCount).toBe(mediaSetCount);
     expect(link.media).toBe("all");
+    expect(link.sheet).toBe(sheet);
+    expect(sheet.cssRules.item(0)).toBe(baseRule);
+    expect(sheet.cssRules.item(1)).toBe(group);
+    expect(group.conditionText).toBe("all");
+    expect(group.media.mediaText).toBe("all");
     slots.deactivate(resource);
-    expect(link.media).toBe("not all");
+    expect(link.mediaSetCount).toBe(mediaSetCount);
+    expect(group.conditionText).toBe("not all");
+    expect(group.media.mediaText).toBe("not all");
     slots.release(resource);
     slots.teardown();
   });
@@ -431,31 +534,178 @@ describe("appearance external CSSOM slots", () => {
     const { documentValue, slots } = await preparedDocument();
     const resource = slots.acquire("baseline", ".media-state { color: red; }");
     const link = documentValue.links[0]!;
+    const group = link.sheet!.cssRules.item(1) as FakeMediaRule;
+    const mediaSetCount = link.mediaSetCount;
 
-    link.ignoreNextMediaSet = true;
+    group.ignoreNextMediaSet = true;
     expectCode(() => slots.activate(resource), "resource-drift");
-    expect(link.media).toBe("not all");
+    expect(link.media).toBe("all");
+    expect(group.media.mediaText).toBe("not all");
+    expect(link.mediaSetCount).toBe(mediaSetCount);
 
-    link.throwOnNextMediaSet = true;
-    link.throwAfterMediaMutation = true;
+    group.throwOnNextMediaSet = true;
+    group.throwAfterMediaMutation = true;
     expectCode(() => slots.activate(resource), "resource-drift");
-    expect(link.media).toBe("not all");
+    expect(group.media.mediaText).toBe("not all");
 
     slots.activate(resource);
-    link.ignoreNextMediaSet = true;
+    group.ignoreNextMediaSet = true;
     expectCode(() => slots.deactivate(resource), "resource-drift");
-    expect(link.media).toBe("all");
+    expect(group.media.mediaText).toBe("all");
 
-    link.throwOnNextMediaSet = true;
-    link.throwAfterMediaMutation = true;
+    group.throwOnNextMediaSet = true;
+    group.throwAfterMediaMutation = true;
     expectCode(() => slots.deactivate(resource), "resource-drift");
-    expect(link.media).toBe("all");
+    expect(group.media.mediaText).toBe("all");
 
     slots.deactivate(resource);
-    link.mediaSetFailures = [true, false];
+    group.mediaSetFailures = [true, false];
     expectCode(() => slots.activate(resource), "rollback-failed");
     expect(link.media).toBe("all");
+    expect(link.mediaSetCount).toBe(mediaSetCount);
     expect(slots.teardown().ok).toBe(false);
+  });
+
+  it("retains a staged resource after a non-mutating delete failure and allows retry", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".staged-delete { color: red; }");
+    const sheet = documentValue.links[0]!.sheet!;
+    const group = sheet.cssRules.item(1) as FakeMediaRule;
+
+    sheet.deleteRuleFailures = ["before"];
+    expectCode(() => slots.release(resource), "resource-drift");
+    expect(group.media.mediaText).toBe("not all");
+    slots.verify();
+
+    slots.release(resource);
+    expect(slots.dispose()).toMatchObject({ ok: true, releasedLinks: 4, remainingOwnedLinks: 0 });
+  });
+
+  it("restores an active resource after a non-mutating delete failure and allows retry", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".active-delete { color: red; }");
+    slots.activate(resource);
+    const sheet = documentValue.links[0]!.sheet!;
+    const group = sheet.cssRules.item(1) as FakeMediaRule;
+
+    sheet.deleteRuleFailures = ["before"];
+    expectCode(() => slots.release(resource), "resource-drift");
+    expect(group.media.mediaText).toBe("all");
+    slots.verify();
+
+    slots.release(resource);
+    expect(slots.dispose()).toMatchObject({ ok: true, releasedLinks: 4, remainingOwnedLinks: 0 });
+  });
+
+  it("poisons ownership when delete mutates before reporting failure", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".partial-delete { color: red; }");
+    const sheet = documentValue.links[0]!.sheet!;
+    sheet.deleteRuleFailures = ["after"];
+
+    expectCode(() => slots.release(resource), "rollback-failed");
+    expect(slots.dispose()).toMatchObject({ ok: false, releasedLinks: 0, remainingOwnedLinks: 4 });
+  });
+
+  it("preserves nested body identities while toggling only the owned media rule", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".nested-child { color: red; }");
+    const sheet = documentValue.links[0]!.sheet!;
+    const group = sheet.cssRules.item(1) as FakeMediaRule;
+    const nested = group.cssRules.item(0) as FakeMediaRule;
+    const nestedChild = nested.cssRules.item(0);
+    const beforeCssText = nested.cssText;
+    expect(nestedChild).toBeInstanceOf(FakeStyleRule);
+    expect(nested.cssRules).toHaveLength(1);
+
+    slots.activate(resource);
+    expect(group.media.mediaText).toBe("all");
+    expect(group.cssRules.item(0)).toBe(nested);
+    expect(nested.cssRules.item(0)).toBe(nestedChild);
+    expect(nested.cssText).toBe(beforeCssText);
+    slots.deactivate(resource);
+    expect(group.media.mediaText).toBe("not all");
+    expect(group.cssRules.item(0)).toBe(nested);
+    expect(nested.cssRules.item(0)).toBe(nestedChild);
+
+    slots.release(resource);
+    expect(slots.teardown().ok).toBe(true);
+  });
+
+  it("detects child text, child identity, nested-child, and staged-group drift without poisoning after restore", async () => {
+    const childCase = await preparedDocument();
+    const childResource = childCase.slots.acquire("baseline", ".child { color: red; }");
+    const childGroup = childCase.documentValue.links[0]!.sheet!.cssRules.item(1) as FakeMediaRule;
+    const child = childGroup.cssRules.item(0) as FakeStyleRule;
+    child.style.setProperty("color", "blue");
+    expectCode(() => childCase.slots.activate(childResource), "resource-drift");
+    child.style.setProperty("color", "red");
+    childCase.slots.verify();
+    childCase.slots.release(childResource);
+    expect(childCase.slots.dispose().ok).toBe(true);
+
+    const identityCase = await preparedDocument();
+    const identityResource = identityCase.slots.acquire("baseline", ".identity { color: red; }");
+    const identitySheet = identityCase.documentValue.links[0]!.sheet!;
+    const identityGroup = identitySheet.cssRules.item(1) as FakeMediaRule;
+    const originalChild = identityGroup.cssRules.item(0)!;
+    identityGroup.cssRules.remove(0);
+    identityGroup.cssRules.insert(0, new FakeStyleRule(".identity", false, new Map([["color", "red"]])));
+    expectCode(() => identityCase.slots.activate(identityResource), "resource-drift");
+    identityGroup.cssRules.remove(0);
+    identityGroup.cssRules.insert(0, originalChild);
+    identityCase.slots.verify();
+    identityCase.slots.release(identityResource);
+    expect(identityCase.slots.dispose().ok).toBe(true);
+
+    const nestedCase = await preparedDocument();
+    const nestedResource = nestedCase.slots.acquire("baseline", ".nested-child { color: red; }");
+    const nestedGroup = nestedCase.documentValue.links[0]!.sheet!.cssRules.item(1) as FakeMediaRule;
+    const nestedRule = nestedGroup.cssRules.item(0) as FakeMediaRule;
+    const nestedStyle = nestedRule.cssRules.item(0) as FakeStyleRule;
+    nestedStyle.style.setProperty("color", "blue");
+    expectCode(() => nestedCase.slots.activate(nestedResource), "resource-drift");
+    nestedStyle.style.setProperty("color", "red");
+    nestedCase.slots.verify();
+    const originalNestedChild = nestedRule.cssRules.item(0)!;
+    nestedRule.cssRules.remove(0);
+    nestedRule.cssRules.insert(0, new FakeStyleRule(".nested-child", false, new Map([["color", "red"]])));
+    expectCode(() => nestedCase.slots.activate(nestedResource), "resource-drift");
+    nestedRule.cssRules.remove(0);
+    nestedRule.cssRules.insert(0, originalNestedChild);
+    nestedCase.slots.verify();
+    nestedRule.media.mediaText = "print";
+    expectCode(() => nestedCase.slots.activate(nestedResource), "resource-drift");
+    nestedRule.media.mediaText = "screen";
+    nestedCase.slots.verify();
+    nestedGroup.media.mediaText = "screen";
+    expectCode(() => nestedCase.slots.activate(nestedResource), "resource-drift");
+    nestedGroup.media.mediaText = "not all";
+    nestedCase.slots.verify();
+    nestedCase.slots.release(nestedResource);
+    expect(nestedCase.slots.dispose().ok).toBe(true);
+  });
+
+  it("poisons on a media setter that leaves child drift after rollback", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".setter-drift { color: red; }");
+    const group = documentValue.links[0]!.sheet!.cssRules.item(1) as FakeMediaRule;
+    const child = group.cssRules.item(0) as FakeStyleRule;
+    group.mutateOnNextMediaSet = () => child.style.setProperty("color", "purple");
+
+    expectCode(() => slots.activate(resource), "rollback-failed");
+    expect(slots.dispose()).toMatchObject({ ok: false, releasedLinks: 0, remainingOwnedLinks: 4 });
+  });
+
+  it("detects a later link-media write that replaces the original stylesheet", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".sheet-replacement { color: red; }");
+    const link = documentValue.links[0]!;
+    link.replaceSheetOnNextMediaSet = true;
+    link.media = "not all";
+
+    expectCode(() => slots.activate(resource), "resource-drift");
+    expect(slots.teardown()).toMatchObject({ ok: false, releasedLinks: 0, remainingOwnedLinks: 4 });
   });
 
   it("rejects forbidden or oversized CSS without consuming a pool slot", async () => {
@@ -673,8 +923,7 @@ describe("appearance external CSSOM slots", () => {
     group.cssRules.insert(0, new FakeStyleRule(".nested-foreign", false));
     expectCode(() => slots.activate(resource), "resource-drift");
     group.cssRules.remove(0);
-    sheet.cssRules.insert(1, new FakeStyleRule(".foreign", false));
-    expectCode(() => slots.activate(resource), "resource-drift");
+    slots.verify();
 
     const foreignParent = new FakeHead(documentValue);
     foreignParent.appendChild(link);
@@ -695,6 +944,18 @@ describe("appearance external CSSOM slots", () => {
     expect(sheet.cssRules.item(1)).toBe(oldGroup);
     slots.release(resource);
     slots.teardown();
+  });
+
+  it("poisons when replacement fails after removing the old group", async () => {
+    const { documentValue, slots } = await preparedDocument();
+    const resource = slots.acquire("baseline", ".old-after-remove { color: red; }");
+    const sheet = documentValue.links[0]!.sheet!;
+    sheet.afterDeleteRule = () => {
+      (sheet.cssRules.item(0) as FakeMediaRule).conditionText = "screen";
+    };
+
+    expectCode(() => slots.stage(resource, ".new-after-remove { color: blue; }"), "rollback-failed");
+    expect(slots.dispose()).toMatchObject({ ok: false, releasedLinks: 0, remainingOwnedLinks: 4 });
   });
 
   it("poisons a resource when CSSOM insertion mutates before reporting failure", async () => {

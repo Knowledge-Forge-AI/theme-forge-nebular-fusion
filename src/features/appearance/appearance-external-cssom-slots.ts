@@ -88,12 +88,22 @@ interface SlotRecord {
   readonly role: AppearanceExternalCssomSlotRole;
   readonly baseRules: readonly CSSRule[];
   readonly baseRuleCssTexts: readonly string[];
+  readonly baseRuleSnapshots: readonly RuleTreeSnapshot[];
   readonly inertDeclarations: InertDeclarationSnapshot;
   handle: AppearanceExternalCssomSlot | null;
   state: "free" | AppearanceExternalCssomSlotState | "poisoned";
   group: CSSMediaRule | null;
-  groupCssText: string | null;
+  groupBodySnapshots: readonly RuleTreeSnapshot[] | null;
   css: string | null;
+}
+
+interface RuleTreeSnapshot {
+  readonly rule: CSSRule;
+  readonly type: number;
+  readonly cssText: string;
+  readonly conditionText: string | null;
+  readonly mediaText: string | null;
+  readonly children: readonly RuleTreeSnapshot[];
 }
 
 interface RootLocation {
@@ -134,31 +144,92 @@ function ruleIndex(sheet: CSSStyleSheet, target: CSSRule): number {
   return ruleList(sheet).findIndex((rule) => rule === target);
 }
 
-function conditionText(rule: CSSRule): string | null {
-  const candidate = rule as CSSMediaRule;
-  return typeof candidate.conditionText === "string" ? candidate.conditionText.trim() : null;
+function normalizeMediaText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function mediaChildren(rule: CSSRule): CSSRule[] {
+function conditionText(rule: CSSRule): string | null {
   const candidate = rule as CSSMediaRule;
-  if (!candidate.cssRules) throw makeError("asset-invalid", "The fixed slot asset has no media rule list.");
+  return typeof candidate.conditionText === "string" ? normalizeMediaText(candidate.conditionText) : null;
+}
+
+function mediaText(rule: CSSRule): string | null {
+  try {
+    const candidate = rule as CSSMediaRule;
+    return typeof candidate.media?.mediaText === "string" ? normalizeMediaText(candidate.media.mediaText) : null;
+  } catch {
+    return null;
+  }
+}
+
+function nestedRules(rule: CSSRule): CSSRule[] {
+  let list: CSSRuleList | undefined;
+  try {
+    list = (rule as CSSRule & { readonly cssRules?: CSSRuleList }).cssRules;
+  } catch {
+    throw makeError("asset-invalid", "A stylesheet rule has an unreadable nested rule list.");
+  }
+  if (!list) return [];
   const children: CSSRule[] = [];
-  for (let index = 0; index < candidate.cssRules.length; index += 1) {
-    const child = candidate.cssRules.item(index);
-    if (!child) throw makeError("asset-invalid", "The fixed slot asset has an incomplete media rule.");
+  for (let index = 0; index < list.length; index += 1) {
+    const child = list.item(index);
+    if (!child) throw makeError("asset-invalid", "A stylesheet rule has an incomplete nested rule list.");
     children.push(child);
   }
   return children;
 }
 
+function mediaChildren(rule: CSSRule): CSSRule[] {
+  const candidate = rule as CSSMediaRule;
+  if (!candidate.cssRules) throw makeError("asset-invalid", "The fixed slot asset has no media rule list.");
+  return nestedRules(rule);
+}
+
 function ruleCssText(rule: CSSRule): string {
   const text = rule.cssText;
   if (typeof text !== "string") throw makeError("asset-invalid", "A stylesheet rule has no canonical CSS text.");
-  return text;
+  return text.trim();
 }
 
 function captureRuleCssTexts(rules: readonly CSSRule[]): readonly string[] {
   return freeze(rules.map((rule) => ruleCssText(rule)));
+}
+
+function captureRuleTree(rule: CSSRule): RuleTreeSnapshot {
+  const children = nestedRules(rule).map((child) => captureRuleTree(child));
+  return freeze({
+    rule,
+    type: rule.type,
+    cssText: ruleCssText(rule),
+    conditionText: conditionText(rule),
+    mediaText: mediaText(rule),
+    children: freeze(children),
+  });
+}
+
+function captureRuleTrees(rules: readonly CSSRule[]): readonly RuleTreeSnapshot[] {
+  return freeze(rules.map((rule) => captureRuleTree(rule)));
+}
+
+function sameRuleTreeSnapshot(before: RuleTreeSnapshot, after: RuleTreeSnapshot): boolean {
+  if (
+    before.rule !== after.rule ||
+    before.type !== after.type ||
+    before.cssText !== after.cssText ||
+    before.conditionText !== after.conditionText ||
+    before.mediaText !== after.mediaText ||
+    before.children.length !== after.children.length
+  ) {
+    return false;
+  }
+  return before.children.every((child, index) => sameRuleTreeSnapshot(child, after.children[index]!));
+}
+
+function sameRuleTreeSnapshots(
+  before: readonly RuleTreeSnapshot[],
+  after: readonly RuleTreeSnapshot[],
+): boolean {
+  return before.length === after.length && before.every((snapshot, index) => sameRuleTreeSnapshot(snapshot, after[index]!));
 }
 
 function captureInertDeclarations(rules: readonly CSSRule[]): InertDeclarationSnapshot {
@@ -328,7 +399,7 @@ function loadLink(
   if (signal?.aborted) throw makeError("aborted", "Appearance slot preparation was aborted.");
   const link = documentValue.createElement("link");
   link.rel = "stylesheet";
-  link.media = APPEARANCE_OWNED_SLOT_MEDIA;
+  link.media = APPEARANCE_ACTIVE_MEDIA;
   link.href = href;
 
   let settled = false;
@@ -433,7 +504,7 @@ function insertGroup(sheet: CSSStyleSheet, css: string): CSSMediaRule {
   try {
     beforeRules = ruleList(sheet);
     beforeCssTexts = captureRuleCssTexts(beforeRules);
-    index = sheet.insertRule(`@media all {${css}}`, beforeRules.length);
+    index = sheet.insertRule(`@media ${APPEARANCE_OWNED_SLOT_MEDIA} {${css}}`, beforeRules.length);
   } catch {
     throw makeError("css-parse-failed", "CSSOM rejected staged CSS.");
   }
@@ -447,17 +518,18 @@ function insertGroup(sheet: CSSStyleSheet, css: string): CSSMediaRule {
     const group = rules[index] as CSSMediaRule | undefined;
     if (
       !group ||
-      conditionText(group) !== APPEARANCE_ACTIVE_MEDIA ||
+      conditionText(group) !== APPEARANCE_OWNED_SLOT_MEDIA ||
+      mediaText(group) !== APPEARANCE_OWNED_SLOT_MEDIA ||
       index !== beforeRules.length ||
       rules.length !== beforeRules.length + 1 ||
       !sameRuleSnapshot(beforeRules, beforeCssTexts, rules.slice(0, beforeRules.length))
     ) {
-      throw makeError("css-parse-failed", "CSSOM did not create the expected always-matching group.");
+      throw makeError("css-parse-failed", "CSSOM did not create the expected inactive group.");
     }
     return group;
   } catch (error) {
     if (error instanceof AppearanceExternalCssomSlotsError) throw error;
-    throw makeError("css-parse-failed", "CSSOM did not create the expected always-matching group.");
+    throw makeError("css-parse-failed", "CSSOM did not create the expected inactive group.");
   }
 }
 
@@ -471,53 +543,94 @@ function removeRule(sheet: CSSStyleSheet, target: CSSRule): void {
   }
 }
 
-function ruleShapeMatches(record: SlotRecord): boolean {
-  const rules = ruleList(record.sheet);
-  if (rules.length !== record.baseRules.length + (record.group ? 1 : 0)) return false;
-  for (let index = 0; index < record.baseRules.length; index += 1) {
-    if (rules[index] !== record.baseRules[index] || ruleCssText(rules[index]!) !== record.baseRuleCssTexts[index]) return false;
-  }
-  if (!hasExpectedInertShape(rules.slice(0, record.baseRules.length), record.inertDeclarations)) return false;
-  if (record.group === null) return true;
-  const currentGroup = rules[record.baseRules.length];
-  return (
-    currentGroup === record.group &&
-    record.groupCssText !== null &&
-    ruleCssText(currentGroup!) === record.groupCssText
-  );
+function expectedGroupMedia(state: AppearanceExternalCssomSlotState): string {
+  return state === "active" ? APPEARANCE_ACTIVE_MEDIA : APPEARANCE_OWNED_SLOT_MEDIA;
 }
 
-function setMediaVerified(record: SlotRecord, target: string, previous: string): void {
-  let writeFailed = false;
+function ruleShapeMatches(record: SlotRecord, expectedState: AppearanceExternalCssomSlotState | null = null): boolean {
   try {
-    record.link.media = target;
+    const rules = ruleList(record.sheet);
+    if (rules.length !== record.baseRules.length + (record.group ? 1 : 0)) return false;
+    const baseRules = rules.slice(0, record.baseRules.length);
+    if (!sameRuleTreeSnapshots(record.baseRuleSnapshots, captureRuleTrees(baseRules))) return false;
+    for (let index = 0; index < record.baseRules.length; index += 1) {
+      if (baseRules[index] !== record.baseRules[index] || ruleCssText(baseRules[index]!) !== record.baseRuleCssTexts[index]) return false;
+    }
+    if (!hasExpectedInertShape(baseRules, record.inertDeclarations)) return false;
+    if (record.group === null) {
+      return expectedState === null ? record.state === "free" : expectedState === "staged" && record.state === "staged";
+    }
+    if (expectedState === null && record.state !== "staged" && record.state !== "active") return false;
+    const state = expectedState ?? (record.state === "active" ? "active" : "staged");
+    const currentGroup = rules[record.baseRules.length];
+    if (!currentGroup || currentGroup !== record.group || record.groupBodySnapshots === null) return false;
+    if (conditionText(currentGroup) !== expectedGroupMedia(state) || mediaText(currentGroup) !== expectedGroupMedia(state)) {
+      return false;
+    }
+    return sameRuleTreeSnapshots(record.groupBodySnapshots, captureRuleTrees(mediaChildren(currentGroup)));
   } catch {
-    writeFailed = true;
+    return false;
   }
-  let reachedTarget = false;
-  try {
-    reachedTarget = record.link.media === target;
-  } catch {
-    reachedTarget = false;
-  }
-  if (!writeFailed && reachedTarget) return;
+}
 
-  let restored = false;
+interface GroupTransitionSnapshot {
+  readonly state: AppearanceExternalCssomSlotState;
+  readonly linkMedia: string;
+  readonly sheet: CSSStyleSheet;
+  readonly rules: readonly CSSRule[];
+  readonly ruleTrees: readonly RuleTreeSnapshot[];
+  readonly group: CSSMediaRule;
+  readonly groupIndex: number;
+  readonly groupCondition: string | null;
+  readonly groupMedia: string | null;
+}
+
+function captureGroupTransitionSnapshot(record: SlotRecord): GroupTransitionSnapshot {
+  if (record.state !== "staged" && record.state !== "active") {
+    throw makeError("invalid-resource", "The resource is not in a transitionable state.");
+  }
+  if (!record.group || !ruleShapeMatches(record)) {
+    throw makeError("resource-drift", "The owned CSSOM group is not trustworthy.");
+  }
+  const rules = ruleList(record.sheet);
+  const groupIndex = ruleIndex(record.sheet, record.group);
+  if (groupIndex < 0) throw makeError("resource-drift", "The owned CSSOM group is no longer present.");
+  return freeze({
+    state: record.state,
+    linkMedia: record.link.media,
+    sheet: record.sheet,
+    rules: freeze([...rules]),
+    ruleTrees: captureRuleTrees(rules),
+    group: record.group,
+    groupIndex,
+    groupCondition: conditionText(record.group),
+    groupMedia: mediaText(record.group),
+  });
+}
+
+function transitionSnapshotMatches(record: SlotRecord, snapshot: GroupTransitionSnapshot): boolean {
   try {
-    record.link.media = previous;
+    if (
+      record.link.media !== snapshot.linkMedia ||
+      record.link.sheet !== snapshot.sheet ||
+      record.sheet !== snapshot.sheet ||
+      record.group !== snapshot.group ||
+      ruleIndex(record.sheet, record.group) !== snapshot.groupIndex ||
+      conditionText(record.group) !== snapshot.groupCondition ||
+      mediaText(record.group) !== snapshot.groupMedia
+    ) {
+      return false;
+    }
+    const rules = ruleList(record.sheet);
+    return (
+      rules.length === snapshot.rules.length &&
+      rules.every((rule, index) => rule === snapshot.rules[index]) &&
+      sameRuleTreeSnapshots(snapshot.ruleTrees, captureRuleTrees(rules)) &&
+      ruleShapeMatches(record, snapshot.state)
+    );
   } catch {
-    // Readback below distinguishes a setter that throws after applying its value.
+    return false;
   }
-  try {
-    restored = record.link.media === previous;
-  } catch {
-    restored = false;
-  }
-  if (!restored) {
-    record.state = "poisoned";
-    throw makeError("rollback-failed", "The link media transition could not be safely rolled back.");
-  }
-  throw makeError("resource-drift", "The link media transition did not reach its requested state.");
 }
 
 export async function prepareAppearanceExternalCssomSlots(
@@ -566,6 +679,7 @@ export async function prepareAppearanceExternalCssomSlots(
     const records: SlotRecord[] = loaded.map(({ link, sheet }, index) => {
       const baseRules = validateInertSheet(sheet);
       const baseRuleCssTexts = captureRuleCssTexts(baseRules);
+      const baseRuleSnapshots = captureRuleTrees(baseRules);
       const inertDeclarations = captureInertDeclarations(baseRules);
       if (link.disabled || sheet.disabled) {
         throw makeError("resource-drift", "An owned stylesheet started disabled.");
@@ -576,11 +690,12 @@ export async function prepareAppearanceExternalCssomSlots(
         role: index < APPEARANCE_EXTERNAL_CSSOM_SLOTS_PER_ROLE ? "baseline" : "draft",
         baseRules,
         baseRuleCssTexts,
+        baseRuleSnapshots,
         inertDeclarations,
         handle: null,
         state: "free" as const,
         group: null,
-        groupCssText: null,
+        groupBodySnapshots: null,
         css: null,
       };
     });
@@ -591,7 +706,7 @@ export async function prepareAppearanceExternalCssomSlots(
       if (
         record.link.href !== location.href ||
         record.link.rel !== "stylesheet" ||
-        record.link.media !== APPEARANCE_OWNED_SLOT_MEDIA ||
+        record.link.media !== APPEARANCE_ACTIVE_MEDIA ||
         record.link.disabled ||
         record.sheet.disabled
       ) {
@@ -626,10 +741,11 @@ export async function prepareAppearanceExternalCssomSlots(
         if (record.link.disabled || record.sheet.disabled) {
           throw makeError("resource-drift", "An owned stylesheet disabled state changed.");
         }
-        const expectedMedia = record.state === "active" ? APPEARANCE_ACTIVE_MEDIA : APPEARANCE_OWNED_SLOT_MEDIA;
-        if (record.link.media !== expectedMedia) throw makeError("resource-drift", "An owned link media state changed.");
+        if (record.link.media !== APPEARANCE_ACTIVE_MEDIA) throw makeError("resource-drift", "An owned link media state changed.");
         if (record.link.sheet !== record.sheet) throw makeError("resource-drift", "An owned link stylesheet identity changed.");
-        if (!ruleShapeMatches(record)) throw makeError("resource-drift", "An owned stylesheet rule set changed.");
+        if (!ruleShapeMatches(record, record.state === "active" || record.state === "staged" ? record.state : null)) {
+          throw makeError("resource-drift", "An owned stylesheet rule set changed.");
+        }
       } catch (error) {
         if (error instanceof AppearanceExternalCssomSlotsError) throw error;
         throw makeError("resource-drift", "An owned stylesheet rule set changed.");
@@ -658,7 +774,7 @@ export async function prepareAppearanceExternalCssomSlots(
       if (record.state !== "staged") throw makeError("invalid-resource", "The resource is not acquired.");
       assertRecord(record);
       const oldGroup = record.group;
-      const oldGroupCssText = record.groupCssText;
+      const oldGroupBodySnapshots = record.groupBodySnapshots;
       const oldCss = record.css;
       const beforeRules = ruleList(record.sheet);
       const beforeCssTexts = captureRuleCssTexts(beforeRules);
@@ -671,7 +787,7 @@ export async function prepareAppearanceExternalCssomSlots(
           oldGroupRemoved = true;
         }
         record.group = newGroup;
-        record.groupCssText = ruleCssText(newGroup);
+        record.groupBodySnapshots = captureRuleTrees(mediaChildren(newGroup));
         record.css = css;
         assertRecord(record);
       } catch (error) {
@@ -687,18 +803,11 @@ export async function prepareAppearanceExternalCssomSlots(
             rollbackErrors.push("The new CSSOM group could not be removed.");
           }
         }
-        if (oldGroup && oldCss !== null && oldGroupRemoved) {
-          try {
-            const restored = insertGroup(record.sheet, oldCss);
-            record.group = restored;
-            record.groupCssText = ruleCssText(restored);
-            record.css = oldCss;
-          } catch {
-            rollbackErrors.push("The prior CSSOM group could not be restored.");
-          }
+        if (oldGroupRemoved) {
+          rollbackErrors.push("The prior CSSOM group identity could not be restored after replacement.");
         } else {
           record.group = oldGroup;
-          record.groupCssText = oldGroupCssText;
+          record.groupBodySnapshots = oldGroupBodySnapshots;
           record.css = oldCss;
         }
         if (rollbackErrors.length === 0) {
@@ -714,6 +823,57 @@ export async function prepareAppearanceExternalCssomSlots(
         }
         throw error;
       }
+    };
+
+    const transitionGroup = (record: SlotRecord, targetState: AppearanceExternalCssomSlotState): void => {
+      if (record.state !== "staged" && record.state !== "active") {
+        throw makeError("invalid-resource", "The resource is not in a transitionable state.");
+      }
+      const before = captureGroupTransitionSnapshot(record);
+      const previousState = before.state;
+      const targetMedia = expectedGroupMedia(targetState);
+      let failure: AppearanceExternalCssomSlotsError = makeError("resource-drift", "The CSSOM media transition did not reach its requested state.");
+      try {
+        if (record.link.media !== APPEARANCE_ACTIVE_MEDIA || record.link.sheet !== record.sheet) {
+          throw makeError("resource-drift", "The owned link or stylesheet changed before the CSSOM media transition.");
+        }
+        try {
+          record.group!.media.mediaText = targetMedia;
+        } catch {
+          throw makeError("resource-drift", "The owned CSSOM media list could not be written.");
+        }
+        if (
+          record.link.media !== APPEARANCE_ACTIVE_MEDIA ||
+          record.link.sheet !== record.sheet ||
+          mediaText(record.group!) !== targetMedia ||
+          conditionText(record.group!) !== targetMedia ||
+          !ruleShapeMatches(record, targetState)
+        ) {
+          throw makeError("resource-drift", "The owned CSSOM media transition changed an unexpected rule or stylesheet.");
+        }
+        record.state = targetState;
+        assertPoolIntegrity();
+        return;
+      } catch (error) {
+        if (error instanceof AppearanceExternalCssomSlotsError) failure = error;
+      }
+
+      const alreadyPoisoned = (record.state as SlotRecord["state"]) === "poisoned";
+      if (!alreadyPoisoned) record.state = previousState;
+      let restored = false;
+      try {
+        if (record.group === before.group && record.sheet === before.sheet && before.groupMedia !== null) {
+          record.group.media.mediaText = before.groupMedia;
+        }
+        restored = transitionSnapshotMatches(record, before);
+        if (restored) assertPoolIntegrity();
+      } catch {
+        restored = false;
+      }
+      if (restored && !alreadyPoisoned) throw failure;
+
+      record.state = "poisoned";
+      throw makeError("rollback-failed", "The CSSOM media transition could not restore its complete prior state.");
     };
 
     const failedDisposal = (reason: string, releasedLinks = 0): AppearanceExternalCssomSlotsTeardownResult => freeze({
@@ -734,9 +894,9 @@ export async function prepareAppearanceExternalCssomSlots(
           record.state !== "free" ||
           record.handle !== null ||
           record.group !== null ||
-          record.groupCssText !== null ||
+          record.groupBodySnapshots !== null ||
           record.css !== null ||
-          record.link.media !== APPEARANCE_OWNED_SLOT_MEDIA
+          record.link.media !== APPEARANCE_ACTIVE_MEDIA
         ))) {
           return failedDisposal("All owned stylesheet resources must be free and inert before disposal.");
         }
@@ -806,10 +966,14 @@ export async function prepareAppearanceExternalCssomSlots(
           assertPoolIntegrity();
           return handle;
         } catch (error) {
+          if ((record.state as SlotRecord["state"]) === "poisoned" || staged) {
+            record.state = "poisoned";
+            throw error;
+          }
           handles.delete(handle);
           record.handle = null;
           if (staged) record.state = "poisoned";
-          else if ((record.state as SlotRecord["state"]) !== "poisoned") record.state = "free";
+          else record.state = "free";
           throw error;
         }
       },
@@ -835,14 +999,7 @@ export async function prepareAppearanceExternalCssomSlots(
         if (record.state === "active") return;
         if (record.state === "free") throw makeError("invalid-resource", "The resource is retained for release recovery.");
         assertRecord(record);
-        setMediaVerified(record, APPEARANCE_ACTIVE_MEDIA, APPEARANCE_OWNED_SLOT_MEDIA);
-        record.state = "active";
-        try {
-          assertPoolIntegrity();
-        } catch (error) {
-          record.state = "poisoned";
-          throw error;
-        }
+        transitionGroup(record, "active");
       },
 
       deactivate(resource: AppearanceExternalCssomSlot): void {
@@ -852,35 +1009,58 @@ export async function prepareAppearanceExternalCssomSlots(
         if (record.state === "free") throw makeError("invalid-resource", "The resource is retained for release recovery.");
         if (record.state !== "active") return;
         assertRecord(record);
-        setMediaVerified(record, APPEARANCE_OWNED_SLOT_MEDIA, APPEARANCE_ACTIVE_MEDIA);
-        record.state = "staged";
-        try {
-          assertPoolIntegrity();
-        } catch (error) {
-          record.state = "poisoned";
-          throw error;
-        }
+        transitionGroup(record, "staged");
       },
 
       release(resource: AppearanceExternalCssomSlot): void {
         assertOpen();
-        assertPoolIntegrity();
         const record = recordFor(resource);
-        assertRecord(record);
-        if (record.state === "active") {
-          setMediaVerified(record, APPEARANCE_OWNED_SLOT_MEDIA, APPEARANCE_ACTIVE_MEDIA);
+        if (record.state === "free") {
+          assertPoolIntegrity();
+          assertRecord(record);
+          record.handle = null;
+          handles.delete(resource);
+          return;
         }
+        assertPoolIntegrity();
+        assertRecord(record);
+        const wasActive = record.state === "active";
+        if (record.state === "active") {
+          transitionGroup(record, "staged");
+        }
+        const group = record.group;
         try {
-          if (record.group) removeRule(record.sheet, record.group);
+          if (group) removeRule(record.sheet, group);
         } catch {
-          record.state = "poisoned";
+          if (record.state === "staged" && group && record.group === group && ruleShapeMatches(record, "staged")) {
+            if (wasActive) {
+              try {
+                transitionGroup(record, "active");
+              } catch {
+                record.state = "poisoned";
+                throw makeError("rollback-failed", "The owned CSSOM group could not be restored before release retry.");
+              }
+            }
+            throw makeError("resource-drift", "The owned CSSOM group could not be safely released.");
+          } else {
+            record.state = "poisoned";
+          }
           throw makeError("rollback-failed", "The owned CSSOM group could not be safely released.");
         }
+        if (group && ruleIndex(record.sheet, group) >= 0) {
+          record.state = "poisoned";
+          throw makeError("rollback-failed", "The owned CSSOM group removal could not be confirmed.");
+        }
         record.group = null;
-        record.groupCssText = null;
+        record.groupBodySnapshots = null;
         record.css = null;
         record.state = "free";
-        assertPoolIntegrity();
+        try {
+          assertPoolIntegrity();
+        } catch (error) {
+          // Keep the exact free handle reachable until the complete pool is safe.
+          throw error;
+        }
         record.handle = null;
         handles.delete(resource);
       },

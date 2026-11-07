@@ -154,6 +154,7 @@ function stageInitial(owner: AppearanceStylesheetOwner): void {
 
 class FakeExternalCssomSlots implements AppearanceExternalCssomSlots {
   readonly records = new Map<AppearanceExternalCssomSlot, { role: "baseline" | "draft"; css: string; state: "staged" | "active" }>();
+  readonly operations: string[] = [];
   verifyFailure = false;
   releaseFailureCount = 0;
   activateFailureCount = 0;
@@ -176,6 +177,7 @@ class FakeExternalCssomSlots implements AppearanceExternalCssomSlots {
     if ([...this.records.values()].filter((record) => record.role === role).length >= 2) throw new Error("pool exhausted");
     const handle = Object.freeze({}) as AppearanceExternalCssomSlot;
     this.records.set(handle, { role, css, state: "staged" });
+    this.operations.push(`acquire:${role}`);
     return handle;
   }
 
@@ -183,6 +185,7 @@ class FakeExternalCssomSlots implements AppearanceExternalCssomSlots {
     const record = this.records.get(resource);
     if (!record) throw new Error("invalid resource");
     record.css = css;
+    this.operations.push("stage");
   }
 
   activate(resource: AppearanceExternalCssomSlot): void {
@@ -193,12 +196,14 @@ class FakeExternalCssomSlots implements AppearanceExternalCssomSlots {
       throw new AppearanceExternalCssomSlotsError("resource-drift", "synthetic activation failure");
     }
     record.state = "active";
+    this.operations.push(`activate:${record.role}`);
   }
 
   deactivate(resource: AppearanceExternalCssomSlot): void {
     const record = this.records.get(resource);
     if (!record) throw new Error("invalid resource");
     record.state = "staged";
+    this.operations.push(`deactivate:${record.role}`);
   }
 
   release(resource: AppearanceExternalCssomSlot): void {
@@ -206,7 +211,9 @@ class FakeExternalCssomSlots implements AppearanceExternalCssomSlots {
       this.releaseFailureCount -= 1;
       throw new Error("synthetic release failure");
     }
-    if (!this.records.delete(resource)) throw new Error("invalid resource");
+    const record = this.records.get(resource);
+    if (!record || !this.records.delete(resource)) throw new Error("invalid resource");
+    this.operations.push(`release:${record.role}`);
   }
 
   dispose(): AppearanceExternalCssomSlotsTeardownResult {
@@ -585,12 +592,23 @@ describe("appearance stylesheet owner", () => {
 
     const rollback = owner.stageBaseline("base-1", { rootMode: "dark" });
     expect(slots.active("baseline")).toBe(1);
+    const rollbackOperations = slots.operations.length;
     expect(rollback.rollback().ok).toBe(true);
     expect(slots.active("baseline")).toBe(1);
+    expect(slots.operations.slice(rollbackOperations)).toEqual([
+      "deactivate:baseline",
+      "activate:baseline",
+      "release:baseline",
+    ]);
 
     const commit = owner.stageBaseline("base-2", { rootMode: "dark" });
     expect(commit.commit().ok).toBe(true);
     expect(slots.active("baseline")).toBe(1);
+    expect(slots.operations.slice(-3)).toEqual([
+      "deactivate:baseline",
+      "activate:baseline",
+      "release:baseline",
+    ]);
     expect(owner.teardown().ok).toBe(true);
     expect(slots.records.size).toBe(0);
     expect(slots.disposed).toBe(false);
