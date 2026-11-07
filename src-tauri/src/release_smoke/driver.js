@@ -562,7 +562,7 @@ function formatPlanObservation(announcement, progress) {
       return true;
     };
     try {
-      const candidates = buttons(pairedPanel() || document).filter((candidate) => text(candidate) === "Select candidate");
+      const candidates = buttons(document).filter((candidate) => text(candidate) === "Select candidate");
       const select = candidates[candidates.length - 1];
       if (!select) throw new Error("candidate-select-button-missing");
       select.click();
