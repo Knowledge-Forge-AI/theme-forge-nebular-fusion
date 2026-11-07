@@ -881,7 +881,7 @@ fn reject<T>(field: impl Into<String>, reason: impl Into<String>) -> PairedV2Con
     Err(PairedV2ContractError::new(field, reason))
 }
 
-fn serialized_len<T: Serialize>(value: &T, field: &str) -> PairedV2ContractResult<usize> {
+fn serialized_len<T: Serialize + ?Sized>(value: &T, field: &str) -> PairedV2ContractResult<usize> {
     serde_json::to_vec(value)
         .map(|bytes| bytes.len())
         .map_err(|_| PairedV2ContractError::new(field, "must be JSON-serializable"))
