@@ -456,7 +456,7 @@ function formatPlanObservation(announcement, progress) {
     return "color.dark.primaryAction=#7a4fa3 · typography.ui.family=system-ui · radius.surface=10px";
   });
 
-  const pairedCompileBoth = () => step("paired-compile-both", "dom+status", async () => {
+  const compilePairedCurrentSource = async () => {
     await click("Compile", { root: pairedPanel() || document, timeout: 60000 });
     await waitFor(() => {
       const apply = button("Apply to application", pairedPanel() || document);
@@ -464,50 +464,52 @@ function formatPlanObservation(announcement, progress) {
     }, "paired compile and preview ACK", 120000);
     if (!bodyIncludes("Solar Sail") || !bodyIncludes("Stellar Loom")) throw new Error("paired-compile-response-mismatch");
     return "both target sections acknowledged";
-  });
+  };
 
-  const pairedPreviewAcks = () => step("paired-preview-acks", "frame-ack", async () => {
-    const observe = () => {
-      const root = pairedPanel() || document;
-      const frameFor = (title) => Array.from(root.querySelectorAll("iframe"))
-        .find((frame) => frame.getAttribute("title") === title);
-      const previewFor = (frame) => frame?.closest(".preview-container");
-      const hasStatus = (preview, expected) => Boolean(preview
-        && Array.from(preview.querySelectorAll('[role="status"]'), text).some((value) => value === expected));
-      const revisionFor = (preview) => {
-        const value = Array.from(preview?.querySelectorAll(".preview-meta") || [], text)
-          .find((candidate) => /^Rev:\s*\d+$/.test(candidate));
-        const match = value?.match(/^Rev:\s*(\d+)$/);
-        return match ? Number(match[1]) : null;
-      };
-      const acceptedValue = text(root.querySelector(".paired-v2-review-identity"));
-      const acceptedMatch = acceptedValue.match(/^Revision\s+(\d+)$/);
-      const applicationFrame = frameFor("Application Theme Live Preview");
-      const starlightFrame = frameFor("Starlight Theme Preview");
-      const applicationPreview = previewFor(applicationFrame);
-      const starlightPreview = previewFor(starlightFrame);
-      const apply = button("Apply to application", root);
-      return {
-        applicationFrame,
-        starlightFrame,
-        applicationAck: hasStatus(applicationPreview, "Live CSS applied to shadcn-style component adaptations"),
-        starlightAck: hasStatus(starlightPreview, "Exact current CSS preview"),
-        applicationRevision: revisionFor(applicationPreview),
-        starlightRevision: revisionFor(starlightPreview),
-        acceptedRevision: acceptedMatch ? Number(acceptedMatch[1]) : null,
-        apply: apply && apply.disabled === false ? apply : null,
-        applyEnabled: apply !== undefined && apply.disabled === false,
-      };
+  const observePairedPreviewAcks = () => {
+    const root = pairedPanel() || document;
+    const frameFor = (title) => Array.from(root.querySelectorAll("iframe"))
+      .find((frame) => frame.getAttribute("title") === title);
+    const previewFor = (frame) => frame?.closest(".preview-container");
+    const hasStatus = (preview, expected) => Boolean(preview
+      && Array.from(preview.querySelectorAll('[role="status"]'), text).some((value) => value === expected));
+    const revisionFor = (preview) => {
+      const value = Array.from(preview?.querySelectorAll(".preview-meta") || [], text)
+        .find((candidate) => /^Rev:\s*\d+$/.test(candidate));
+      const match = value?.match(/^Rev:\s*(\d+)$/);
+      return match ? Number(match[1]) : null;
     };
+    const acceptedValue = text(root.querySelector(".paired-v2-review-identity"));
+    const acceptedMatch = acceptedValue.match(/^Revision\s+(\d+)$/);
+    const applicationFrame = frameFor("Application Theme Live Preview");
+    const starlightFrame = frameFor("Starlight Theme Preview");
+    const applicationPreview = previewFor(applicationFrame);
+    const starlightPreview = previewFor(starlightFrame);
+    const apply = button("Apply to application", root);
+    return {
+      applicationFrame,
+      starlightFrame,
+      applicationAck: hasStatus(applicationPreview, "Live CSS applied to shadcn-style component adaptations"),
+      starlightAck: hasStatus(starlightPreview, "Exact current CSS preview"),
+      applicationRevision: revisionFor(applicationPreview),
+      starlightRevision: revisionFor(starlightPreview),
+      acceptedRevision: acceptedMatch ? Number(acceptedMatch[1]) : null,
+      apply: apply && apply.disabled === false ? apply : null,
+      applyEnabled: apply !== undefined && apply.disabled === false,
+    };
+  };
+
+  const waitPairedPreviewAcks = async ({ recordFacts = false, expectedRevision = null } = {}) => {
     const observed = await waitFor(() => {
-      const current = observe();
+      const current = observePairedPreviewAcks();
       const revisionsMatch = current.applicationRevision !== null
         && current.applicationRevision === current.starlightRevision
-        && current.applicationRevision === current.acceptedRevision;
+        && current.applicationRevision === current.acceptedRevision
+        && (expectedRevision === null || current.applicationRevision === expectedRevision);
       return current.applicationFrame && current.starlightFrame && current.applicationAck
         && current.starlightAck && revisionsMatch && current.apply && current.applyEnabled ? current : null;
     }, "paired preview ACKs and current revision", 60000, () => {
-      const current = observe();
+      const current = observePairedPreviewAcks();
       return JSON.stringify({
         applicationAck: current.applicationAck,
         starlightAck: current.starlightAck,
@@ -517,7 +519,14 @@ function formatPlanObservation(announcement, progress) {
         applyEnabled: current.applyEnabled,
       });
     });
-    facts.push(["previewApplication", "applied"], ["previewStarlight", "applied"]);
+    if (recordFacts) facts.push(["previewApplication", "applied"], ["previewStarlight", "applied"]);
+    return observed;
+  };
+
+  const pairedCompileBoth = () => step("paired-compile-both", "dom+status", compilePairedCurrentSource);
+
+  const pairedPreviewAcks = () => step("paired-preview-acks", "frame-ack", async () => {
+    const observed = await waitPairedPreviewAcks({ recordFacts: true });
     return `Application Theme Live Preview and Starlight Theme Preview ACKs correlated at revision ${observed.applicationRevision}`;
   });
 
@@ -711,9 +720,35 @@ function formatPlanObservation(announcement, progress) {
     });
   }
 
+  async function readReopenedSavedSource() {
+    const panel = pairedPanel();
+    if (!panel) throw new Error("paired-editor-not-preserved");
+    const status = await invoke("studio_app_theme_status");
+    const sessionId = status.pairedV2Authoring?.sessionId;
+    if (typeof sessionId !== "string" || sessionId.length === 0) throw new Error("paired-v2-status-unavailable");
+    const sourceName = text(panel.querySelector(".paired-v2-source-name"));
+    const sourceSummary = text(panel.querySelector(".paired-v2-source-summary"));
+    const revision = text(document.querySelector('[data-testid="paired-v2-editor-revision"]'));
+    const frozen = text(panel).includes("This saved source is held unchanged.");
+    if (
+      sourceName !== "v2-saved.theme.json"
+      || !/^Editor revision 0$/.test(revision)
+      || !sourceSummary.includes("Verified source bytes")
+      || sourceSummary.includes("Detached verified bytes")
+      || frozen
+      || !bodyIncludes("Studio history: original source")
+    ) throw new Error("paired-editor-not-preserved");
+    return { sessionId, sourceName, sourceSummary, revision };
+  }
+
   const pairedAppearanceMatrix = () => step("paired-appearance-matrix", "dom+computed", async () => {
     const rows = closedAppearanceExpectations();
     if (!pairedSurface() || !pairedPanel()) throw new Error("paired-editor-not-open");
+    const reopenedBefore = await readReopenedSavedSource();
+    await compilePairedCurrentSource();
+    await waitPairedPreviewAcks({ expectedRevision: 0 });
+    const reopenedAfter = await readReopenedSavedSource();
+    if (reopenedAfter.sessionId !== reopenedBefore.sessionId) throw new Error("paired-editor-not-preserved");
     const frameIdentity = () => {
       const panel = pairedPanel();
       if (!panel) throw new Error("paired-editor-not-open");
