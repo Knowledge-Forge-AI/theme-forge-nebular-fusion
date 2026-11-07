@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
   chmodSync,
+  closeSync,
+  constants,
   cpSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -52,13 +56,19 @@ test("paired-v2 prepares a bound Developer baseline and no destinations", () => 
     assert.equal(mode(exchange), 0o700);
     assert.equal(lstatSync(exchange).isDirectory(), true);
     assert.equal(lstatSync(exchange).isSymbolicLink(), false);
-    assert.equal(mode(baseline), 0o600);
-    assert.equal(lstatSync(baseline).isFile(), true);
-    assert.equal(lstatSync(baseline).isSymbolicLink(), false);
-    assert.equal(lstatSync(baseline).nlink, 1);
-    const bytes = readFileSync(baseline);
-    assert.equal(bytes.byteLength, BASELINE_BYTES);
-    assert.equal(sha256(bytes), BASELINE_SHA256);
+    const fd = openSync(baseline, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const descriptorStat = fstatSync(fd);
+      assert.equal(descriptorStat.mode & 0o7777, 0o600);
+      assert.equal(descriptorStat.isFile(), true);
+      assert.equal(descriptorStat.isSymbolicLink(), false);
+      assert.equal(descriptorStat.nlink, 1);
+      const bytes = readFileSync(fd);
+      assert.equal(bytes.byteLength, BASELINE_BYTES);
+      assert.equal(sha256(bytes), BASELINE_SHA256);
+    } finally {
+      closeSync(fd);
+    }
     for (const name of DESTINATIONS) assertMissing(join(exchange, name));
   } finally {
     rmSync(root, { recursive: true, force: true });
