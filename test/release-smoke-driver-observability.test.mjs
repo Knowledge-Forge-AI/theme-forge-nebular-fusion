@@ -135,6 +135,187 @@ async function runConnected(mode) {
   return { ...fixture, result, progress: fixture.context.window.__NEBULAR_RELEASE_SMOKE_PROGRESS__ };
 }
 
+function reopenHarness({
+  afterStatus,
+  sourceName = "v2-saved.theme.json",
+  revision = "Editor revision 0",
+  sourceSummary = "Verified source bytes",
+  frozen = false,
+  history = true,
+  confirm = false,
+} = {}) {
+  const expectedConfirmation = "Discard the current unsaved editor or application draft and reopen the source?";
+  let statusCalls = 0;
+  let clock = 0;
+  const beforeStatus = {
+    available: true,
+    pairedV2Authoring: { sessionId: "before-session", supported: true },
+  };
+  const nodeText = (value) => makeNode(() => value);
+  const reopenButton = makeNode(() => "Reopen", {
+    onClick: () => {
+      if (confirm) context.window.confirm(expectedConfirmation);
+    },
+  });
+  const panel = {
+    get textContent() {
+      return [sourceName, sourceSummary, frozen ? "This saved source is held unchanged." : ""].filter(Boolean).join(" ");
+    },
+    closest: () => null,
+    querySelector(selector) {
+      if (selector === ".paired-v2-source-name") return nodeText(sourceName);
+      if (selector === ".paired-v2-source-summary") return nodeText(sourceSummary);
+      return null;
+    },
+    querySelectorAll(selector) {
+      return selector === "button" ? [reopenButton] : [];
+    },
+  };
+  const document = {
+    body: { get textContent() { return history ? "Studio history: original source" : ""; } },
+    querySelector(selector) {
+      if (selector === '[data-testid="paired-v2-authoring-panel"]') return panel;
+      if (selector === '[data-testid="paired-v2-editor-revision"]') return nodeText(revision);
+      return null;
+    },
+    querySelectorAll: () => [],
+  };
+  const originalConfirm = () => false;
+  const context = {
+    clearTimeout: () => {},
+    Date: { now: () => clock },
+    document,
+    setTimeout: (callback) => {
+      clock += 90_000;
+      callback();
+      return 1;
+    },
+    window: {
+      __NEBULAR_RELEASE_SMOKE_CONFIG__: { scenario: "__connected-driver-test__" },
+      __TAURI_INTERNALS__: {
+        invoke: async (command) => {
+          assert.equal(command, "studio_app_theme_status");
+          statusCalls += 1;
+          return statusCalls === 1 ? beforeStatus : afterStatus;
+        },
+      },
+      confirm: originalConfirm,
+    },
+  };
+  const marker = "  main().catch((error) => {";
+  assert.equal(driverSource.includes(marker), true);
+  const instrumented = driverSource.replace(marker, `  window.__driverTest = { pairedReopenSaved };\n${marker}`);
+  vm.runInNewContext(instrumented, context, { timeout: 1_000 });
+  return { context, originalConfirm, statusCalls: () => statusCalls, pairedReopenSaved: context.window.__driverTest.pairedReopenSaved };
+}
+
+async function runReopen(options) {
+  const fixture = reopenHarness(options);
+  const result = await fixture.pairedReopenSaved();
+  return { ...fixture, result, progress: fixture.context.window.__NEBULAR_RELEASE_SMOKE_PROGRESS__ };
+}
+
+test("paired reopen accepts the optional legacy root handle without an omission rule", async () => {
+  const run = await runReopen({
+    afterStatus: {
+      available: true,
+      activeDocumentId: "opaque-document-handle",
+      pairedV2Authoring: { sessionId: "after-session", supported: true },
+    },
+  });
+  assert.equal(run.result, true);
+  assert.equal(run.statusCalls(), 2);
+  assert.equal(run.progress.steps.at(-1).ok, true);
+  assert.equal(run.context.window.confirm, run.originalConfirm);
+  assert.deepEqual(Array.from(run.progress.facts.at(-1)), ["reopenConfirmCalls", "0"]);
+});
+
+test("paired reopen refuses a missing or empty nested v2 session", async () => {
+  for (const pairedV2Authoring of [{ supported: true }, { sessionId: "", supported: true }]) {
+    const run = await runReopen({ afterStatus: { available: true, pairedV2Authoring } });
+    assert.equal(run.result, false);
+    assert.equal(run.statusCalls(), 2);
+    assert.equal(run.context.window.confirm, run.originalConfirm);
+    assert.match(run.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+  }
+});
+
+test("paired reopen refuses an unchanged nested v2 session", async () => {
+  const run = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "before-session", supported: true } },
+  });
+  assert.equal(run.result, false);
+  assert.equal(run.statusCalls(), 2);
+  assert.equal(run.context.window.confirm, run.originalConfirm);
+  assert.match(run.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+});
+
+test("paired reopen keeps source identity and confirmation guards fail closed", async () => {
+  const wrongSource = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+    sourceName: "unexpected.theme.json",
+  });
+  assert.equal(wrongSource.result, false);
+  assert.equal(wrongSource.statusCalls(), 2);
+  assert.equal(wrongSource.context.window.confirm, wrongSource.originalConfirm);
+  assert.match(wrongSource.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+
+  const confirmed = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+    confirm: true,
+  });
+  assert.equal(confirmed.result, false);
+  assert.equal(confirmed.statusCalls(), 1);
+  assert.equal(confirmed.context.window.confirm, confirmed.originalConfirm);
+  assert.match(confirmed.progress.steps.at(-1).detail, /reopenConfirmCalls=1/);
+});
+
+test("paired reopen refuses a nonzero revision", async () => {
+  const run = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+    revision: "Editor revision 1",
+  });
+  assert.equal(run.result, false);
+  assert.equal(run.statusCalls(), 2);
+  assert.equal(run.context.window.confirm, run.originalConfirm);
+  assert.match(run.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+});
+
+test("paired reopen refuses detached-only and mixed custody summaries", async () => {
+  for (const sourceSummary of ["Detached verified bytes", "Verified source bytes; Detached verified bytes"]) {
+    const run = await runReopen({
+      afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+      sourceSummary,
+    });
+    assert.equal(run.result, false);
+    assert.equal(run.statusCalls(), 2);
+    assert.equal(run.context.window.confirm, run.originalConfirm);
+    assert.match(run.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+  }
+});
+
+test("paired reopen refuses a frozen saved source", async () => {
+  const run = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+    frozen: true,
+  });
+  assert.equal(run.result, false);
+  assert.equal(run.statusCalls(), 2);
+  assert.equal(run.context.window.confirm, run.originalConfirm);
+  assert.match(run.progress.steps.at(-1).detail, /timed out waiting for reopened saved source/);
+});
+
+test("paired reopen refuses a missing original-source history", async () => {
+  const run = await runReopen({
+    afterStatus: { available: true, pairedV2Authoring: { sessionId: "after-session", supported: true } },
+    history: false,
+  });
+  assert.equal(run.result, false);
+  assert.equal(run.statusCalls(), 2);
+  assert.equal(run.context.window.confirm, run.originalConfirm);
+  assert.match(run.progress.steps.at(-1).detail, /reopened-history-mismatch/);
+});
+
 test("connected flow gives a public failure precedence over an enabled cancel button", async () => {
   const run = await runConnected("failure-with-cancel");
   assert.equal(run.result, false);

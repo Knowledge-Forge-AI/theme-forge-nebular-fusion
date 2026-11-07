@@ -616,7 +616,7 @@ function formatPlanObservation(announcement, progress) {
     };
     try {
       await click("Reopen", { root: panel() });
-      const reopened = await waitFor(async () => {
+      await waitFor(async () => {
         if (calls !== 0) return { confirmationRefused: true };
         const status = await invoke("studio_app_theme_status");
         const currentSession = status.pairedV2Authoring?.sessionId;
@@ -624,13 +624,15 @@ function formatPlanObservation(announcement, progress) {
         const revision = text(document.querySelector('[data-testid="paired-v2-editor-revision"]'));
         const sourceSummary = text(panel().querySelector(".paired-v2-source-summary"));
         const frozen = text(panel()).includes("This saved source is held unchanged.");
-        if (currentSession !== beforeSession
+        if (typeof currentSession === "string"
+          && currentSession.length > 0
+          && currentSession !== beforeSession
           && sourceName === "v2-saved.theme.json"
           && /^Editor revision 0$/.test(revision)
           && sourceSummary.includes("Verified source bytes")
           && !sourceSummary.includes("Detached verified bytes")
           && !frozen) {
-          return { status, currentSession };
+          return true;
         }
         return null;
       }, "reopened saved source with new session", 90000, () => {
@@ -645,10 +647,8 @@ function formatPlanObservation(announcement, progress) {
         });
       });
       if (calls !== 0) throw new Error(`reopenConfirmCalls=${calls}`);
-      const status = reopened.status;
-      if (Object.prototype.hasOwnProperty.call(status, "activeDocumentId")) throw new Error("activeDocumentId-exposed");
       if (!bodyIncludes("Studio history: original source")) throw new Error("reopened-history-mismatch");
-      facts.push(["reopenConfirmCalls", "0"], ["activeDocumentId", "absent"]);
+      facts.push(["reopenConfirmCalls", "0"]);
       return "v2-saved.theme.json · reopened attached editor · new session · zero confirm calls";
     } finally {
       window.confirm = original;

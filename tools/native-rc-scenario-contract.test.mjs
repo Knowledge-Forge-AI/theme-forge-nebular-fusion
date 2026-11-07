@@ -103,7 +103,9 @@ test("driver stays DOM-first for compile/save/reset/packet actions", () => {
   ]) assert.doesNotMatch(driver, new RegExp(`invoke\\(\\\"${command}\\\"`));
   assert.match(driver, /candidateDiscardConfirm/);
   assert.match(driver, /reopenConfirmCalls/);
-  assert.match(driver, /activeDocumentId/);
+  assert.doesNotMatch(driver, /activeDocumentId-exposed/);
+  assert.match(driver, /typeof currentSession === "string"/);
+  assert.match(driver, /currentSession\.length > 0/);
   assert.match(driver, /paired-appearance-dark/);
 });
 
