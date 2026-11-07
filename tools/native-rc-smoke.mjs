@@ -704,7 +704,7 @@ export async function runSmoke(options) {
 }
 
 const APPEARANCE_PAIR_MARKER = ".nebular-appearance-pair-v1";
-const APPEARANCE_PAIR_MARKER_SCHEMA = "nebular.appearance-pair.v1";
+const APPEARANCE_PAIR_MARKER_SCHEMA = "nebular.appearance-pair-v1";
 const APPEARANCE_PREFERENCE_ENV = "TFNF_RELEASE_SMOKE_PREFERENCES_DIR";
 
 function validatedSmokeExtraEnv(scenario, extraEnv) {

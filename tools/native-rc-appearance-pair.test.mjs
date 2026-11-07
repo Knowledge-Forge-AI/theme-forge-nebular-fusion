@@ -88,12 +88,15 @@ test("pair layout enforces empty-before-save and exact dark Developer bytes acro
   try {
     assert.match(layout.sourceRoot, /appearance-pair\/raw-only$/u);
     assert.match(layout.pairId, /^appearance-pair-v1-/u);
+    const expectedMarker = `nebular.appearance-pair-v1\n${layout.pairId}\n`;
+    assert.equal(readFileSync(layout.marker, "utf8"), expectedMarker);
     assertAppearancePairLayout(layout, "before-save");
     writeFileSync(join(layout.viewA.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
     writeFileSync(join(layout.preferencesRoot, "appearance.json"), APPEARANCE_PREFERENCE_BYTES, { mode: 0o600 });
     assertAppearancePairLayout(layout, "after-save");
     assertAppearancePreferenceRecord(layout);
     writeFileSync(join(layout.viewB.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
+    assert.equal(readFileSync(layout.marker, "utf8"), expectedMarker);
     assertAppearancePairLayout(layout, "after-restart");
     assertAppearancePreferenceRecord(layout, APPEARANCE_PREFERENCE_BYTES);
     writeFileSync(join(layout.preferencesRoot, "unexpected"), "x", { mode: 0o600 });
