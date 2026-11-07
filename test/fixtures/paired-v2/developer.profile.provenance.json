@@ -1,0 +1,37 @@
+{
+  "schema": "nebular.paired-v2-developer-fixture-provenance-v2",
+  "fixture": {
+    "publicPath": "test/fixtures/paired-v2/developer.profile.json",
+    "bytes": 4734,
+    "sha256": "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8",
+    "canonicalDigest": "6141a33313456e0b688b6fe343aded7a04294fde0e6c366822e9a3b18c60dcc2"
+  },
+  "githubTag": {
+    "repository": "Knowledge-Forge-AI/shadcn-theme-terminal-nova",
+    "tag": "v0.2.0",
+    "member": "tools/source/appearance-catalog/developer.profile.json",
+    "url": "https://github.com/Knowledge-Forge-AI/shadcn-theme-terminal-nova/tree/v0.2.0/tools/source/appearance-catalog/developer.profile.json",
+    "bytes": 4734,
+    "sha256": "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8"
+  },
+  "publishedNpmArchive": {
+    "package": "@knowledge-forge-ai/shadcn-theme-terminal-nova",
+    "version": "0.2.0",
+    "tarSha256": "410cd76b34a9cce931f2c5f8071795a373272ca51d0bbf509d3af1ff8c6fb440",
+    "packageMember": "reports/appearances/source/profiles/developer.profile.json",
+    "archiveMember": "package/reports/appearances/source/profiles/developer.profile.json",
+    "bytes": 4734,
+    "sha256": "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8"
+  },
+  "nebularGeneratedCorroboration": {
+    "publicPath": "src/features/appearance/generated/source-catalog.json",
+    "sha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+    "developerRecord": {
+      "id": "developer",
+      "path": "tools/source/appearance-catalog/developer.profile.json",
+      "bytes": 4734,
+      "sha256": "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8",
+      "canonicalDigest": "6141a33313456e0b688b6fe343aded7a04294fde0e6c366822e9a3b18c60dcc2"
+    }
+  }
+}

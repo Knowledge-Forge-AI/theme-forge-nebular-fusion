@@ -85,6 +85,12 @@ const FILESYSTEM_CODES = new Set([
   "EMLINK", "ENOSPC", "EROFS", "EIO", "EMFILE", "ENFILE", "EXDEV", "ENAMETOOLONG", "EBADF",
 ]);
 const PROCESS_SYSCALLS = new Set(["kill", "spawn", "spawnSync", "waitpid"]);
+const PAIRED_V2_BASELINE_BYTES = 4734;
+const PAIRED_V2_BASELINE_SHA256 = "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8";
+const PAIRED_V2_BASELINE_FIXTURE = resolve(dirname(fileURLToPath(import.meta.url)), "../test/fixtures/paired-v2/developer.profile.json");
+const PAIRED_V2_EXCHANGE_DIR = "exchange";
+const PAIRED_V2_BASELINE_NAME = "baseline.theme.json";
+const PAIRED_V2_DESTINATION_NAMES = Object.freeze(["candidate-v2.json", "review-v2.json", "v2-saved.theme.json"]);
 
 export function appearanceMatrixCellsForCheckout(checkout) {
   const checkoutRoot = resolve(checkout);
@@ -403,11 +409,49 @@ function deriveProject(checkout, destination, name) {
   writeFileSync(join(destination, ".tfsb/brand-recipes.toml"), `schema = "tfsb.brand-recipes"\nschema_version = 1\n\n[[recipes]]\nid = "recipe-derived-dark"\ntarget_asset = "fixture-mark-derived-dark"\nsource_asset = "fixture-mark-on-light"\n\n[[recipes.operations]]\noperation = "replace-paint"\nchannel = "fill"\nsource_color = "#000000FF"\nreplacement_token = "brand-blue"\nexpected_occurrences = 1\n\n[[recipes.operations]]\noperation = "copy-accessibility"\npolicy = "preserve"\n`);
 }
 
+function pathExistsWithoutFollowing(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function preparePairedV2Exchange(smokeDir) {
+  const fixture = readRegularSnapshot(PAIRED_V2_BASELINE_FIXTURE, {
+    label: "Paired-v2 maintained Developer baseline fixture",
+    maxBytes: 8 * 1024,
+  });
+  if (fixture.bytes.byteLength !== PAIRED_V2_BASELINE_BYTES || fixture.sha256 !== PAIRED_V2_BASELINE_SHA256) {
+    throw new HarnessStateError("paired-v2 maintained Developer baseline fixture identity changed");
+  }
+  const exchange = join(smokeDir, PAIRED_V2_EXCHANGE_DIR);
+  if (pathExistsWithoutFollowing(exchange)) {
+    throw new HarnessStateError("paired-v2 exchange must be absent before fixture preparation");
+  }
+  mkdirSync(exchange, { mode: 0o700 });
+  chmodSync(exchange, 0o700);
+  const baseline = join(exchange, PAIRED_V2_BASELINE_NAME);
+  writeFileSync(baseline, fixture.bytes, { flag: "wx", mode: 0o600 });
+  chmodSync(baseline, 0o600);
+  assertOwnerRegularFile(baseline, "paired-v2 baseline source");
+  for (const name of PAIRED_V2_DESTINATION_NAMES) {
+    if (pathExistsWithoutFollowing(join(exchange, name))) {
+      throw new HarnessStateError("paired-v2 destination must be absent before launch");
+    }
+  }
+}
+
 /** Prepares the scenario fixtures inside the smoke directory; returns the fixture roots to observe. */
 export function prepareFixtures(scenario, checkout, smokeDir) {
   const fixtures = join(smokeDir, "fixtures");
   mkdirSync(fixtures, { mode: 0o700 });
-  if (scenario === "paired-v2") return { observed: {} };
+  if (scenario === "paired-v2") {
+    preparePairedV2Exchange(smokeDir);
+    return { observed: {} };
+  }
   if (SCENARIOS[scenario].caseSensitive && !caseSensitive(fixtures)) {
     throw new HarnessStateError(`scenario ${scenario} requires a case-sensitive filesystem`);
   }
