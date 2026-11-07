@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,8 @@ const RUNTIME_BASELINES_PREFIX = "/** Generated from the shared paired profiles;
 const RUNTIME_BASELINES_SUFFIX = ";\n";
 const RUNTIME_BASELINES_PURE_PREFIX = "/*#__PURE__*/ ";
 const COMMITTED_CLEANUP_FAILED = "committed-cleanup-failed";
+const MAX_MEMBER_BYTES = 8 * 1024 * 1024;
+const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 
 class AppearanceCommittedCleanupError extends Error {
   constructor() {
@@ -51,15 +53,73 @@ const exactKeys = (value, keys, label) => {
   assert(JSON.stringify(actual) === JSON.stringify(expected), `${label} has unexpected fields`);
 };
 
+function descriptorIdentity(stat) {
+  return { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs };
+}
+
+function sameDescriptorIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.size === right.size &&
+    left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error) {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
 function readRegularFile(path, label) {
-  let stat;
+  assert(Number.isInteger(constants.O_NOFOLLOW) && constants.O_NOFOLLOW > 0, `${label} descriptor no-follow reads are unavailable`);
+  let fd;
   try {
-    stat = lstatSync(path);
+    fd = openSync(path, READ_FLAGS);
   } catch (error) {
-    throw new Error(`${label} is unavailable: ${error.message}`);
+    if (errorCode(error) === "ELOOP" || errorCode(error) === "EMLINK") throw new Error(`${label} must be a regular file`);
+    throw new Error(`${label} is unavailable: ${errorMessage(error)}`);
   }
-  assert(stat.isFile() && !stat.isSymbolicLink(), `${label} must be a regular file`);
-  return { stat, bytes: readFileSync(path) };
+  try {
+    let stat;
+    try {
+      stat = fstatSync(fd);
+    } catch (error) {
+      throw new Error(`${label} is unavailable: ${errorMessage(error)}`);
+    }
+    assert(stat.isFile() && !stat.isSymbolicLink(), `${label} must be a regular file`);
+    assert(Number.isSafeInteger(stat.size) && stat.size >= 0, `${label} has an invalid size`);
+    assert(stat.size <= MAX_MEMBER_BYTES, `${label} exceeds ${MAX_MEMBER_BYTES} bytes`);
+    const opened = descriptorIdentity(stat);
+    const bytes = Buffer.allocUnsafe(stat.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      let count;
+      try {
+        count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      } catch (error) {
+        throw new Error(`${label} is unavailable: ${errorMessage(error)}`);
+      }
+      assert(count > 0, `${label} changed while it was read`);
+      offset += count;
+    }
+    let extraCount;
+    try {
+      extraCount = readSync(fd, Buffer.alloc(1), 0, 1, bytes.length);
+    } catch (error) {
+      throw new Error(`${label} is unavailable: ${errorMessage(error)}`);
+    }
+    assert(extraCount === 0, `${label} changed while it was read`);
+    let after;
+    try {
+      after = fstatSync(fd);
+    } catch (error) {
+      throw new Error(`${label} changed while it was read`);
+    }
+    assert(sameDescriptorIdentity(opened, descriptorIdentity(after)), `${label} changed while it was read`);
+    return { stat, bytes };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function readDirectory(path, label) {

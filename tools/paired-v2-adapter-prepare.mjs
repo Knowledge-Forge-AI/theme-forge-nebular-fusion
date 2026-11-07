@@ -98,20 +98,13 @@ async function verifyRealAncestors(directory) {
 async function readExpectedMember(filePath, expected) {
   if (expected.bytes <= 0 || expected.bytes > MAX_MEMBER_BYTES) fail("CONTRACT_REJECTED");
 
-  let before;
-  try {
-    before = await lstat(filePath);
-  } catch {
-    fail("MEMBER_MISSING");
-  }
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size !== expected.bytes) {
-    fail("MEMBER_REJECTED");
-  }
-
   let handle;
   try {
     handle = await open(filePath, REAL_FILE_FLAGS);
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      fail("MEMBER_MISSING");
+    }
     fail("MEMBER_REJECTED");
   }
 
@@ -122,8 +115,8 @@ async function readExpectedMember(filePath, expected) {
     } catch {
       fail("MEMBER_READ_FAILED");
     }
-    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1 || !sameIdentity(before, opened)) {
-      fail("MEMBER_CHANGED");
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.nlink !== 1 || opened.size !== expected.bytes) {
+      fail("MEMBER_REJECTED");
     }
 
     const bytes = Buffer.alloc(expected.bytes);
@@ -150,7 +143,7 @@ async function readExpectedMember(filePath, expected) {
 
     let after;
     try {
-      after = await lstat(filePath);
+      after = await handle.stat();
     } catch {
       fail("MEMBER_CHANGED");
     }

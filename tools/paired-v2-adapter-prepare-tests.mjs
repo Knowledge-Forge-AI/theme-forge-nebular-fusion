@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { test, describe, beforeEach, afterEach } from "node:test";
-import { cp, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, link, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,6 +139,23 @@ describe("paired-v2 adapter closure", () => {
       /\[PAIRED_V2_ADAPTER_ROOT_REJECTED\]/,
     );
     assert.equal((await readFile(join(realDirectory, "paired-v2-binding.json"))).length, 1_494);
+  });
+
+  test("rejects a hard-linked member from the opened descriptor", async () => {
+    if (process.platform === "win32") return;
+
+    const directory = await copyFixture("hard-link");
+    assert.ok(scratch);
+    await link(
+      join(directory, "paired-v2-adapter.mjs"),
+      join(scratch, "paired-v2-adapter-shared.mjs"),
+    );
+
+    await assert.rejects(
+      () => verifyPairedV2AdapterDirectory(directory),
+      /\[PAIRED_V2_ADAPTER_MEMBER_REJECTED\]/,
+    );
+    assert.equal((await readFile(join(directory, "paired-v2-adapter.mjs"))).length, 5_601);
   });
 
   test("keeps prepared and packed inventories identical for all three target labels", async () => {

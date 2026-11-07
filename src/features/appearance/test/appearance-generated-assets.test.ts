@@ -1,20 +1,26 @@
 import { createHash } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-const cleanupFault = { failBackupCleanup: false, failStageCreation: false };
+const cleanupFault = {
+  failBackupCleanup: false,
+  failStageCreation: false,
+  swapSourceAfterLstat: null as {path: string; backupPath: string; replacement: Buffer} | null,
+};
 let syncAppearanceAssets: (inputRoot: string, studioRoot: string) => unknown;
 let originalRmSync: typeof rmSync;
 let originalMkdtempSync: typeof mkdtempSync;
+let originalLstatSync: typeof lstatSync;
 let appearanceSyncFailureDisposition: (error: unknown) => {label: string; exitCode: number};
 
 beforeAll(async () => {
   const fs = (await import("node:fs")).default;
   originalRmSync = fs.rmSync;
   originalMkdtempSync = fs.mkdtempSync;
+  originalLstatSync = fs.lstatSync;
   fs.mkdtempSync = ((prefix: Parameters<typeof mkdtempSync>[0], options?: Parameters<typeof mkdtempSync>[1]) => {
     if (cleanupFault.failStageCreation && String(prefix).includes(".generated-appearance-stage-")) {
       throw new Error("fault-injected staging unavailable");
@@ -27,6 +33,16 @@ beforeAll(async () => {
     }
     return originalRmSync(path, options);
   }) as typeof rmSync;
+  expect(Reflect.set(fs, "lstatSync", ((path: Parameters<typeof lstatSync>[0], options?: unknown) => {
+    const result = originalLstatSync(path, options as never);
+    const race = cleanupFault.swapSourceAfterLstat;
+    if (race !== null && String(path) === race.path) {
+      cleanupFault.swapSourceAfterLstat = null;
+      renameSync(race.path, race.backupPath);
+      writeFileSync(race.path, race.replacement);
+    }
+    return result;
+  }) as typeof lstatSync)).toBe(true);
   syncBuiltinESMExports();
   // @ts-expect-error The focused fixture intentionally consumes the build-owned ESM helper directly.
   ({ syncAppearanceAssets, appearanceSyncFailureDisposition } = await import("../../../../tools/sync-appearance-assets.mjs?appearance-sync-test"));
@@ -36,6 +52,7 @@ afterAll(async () => {
   const fs = (await import("node:fs")).default;
   fs.rmSync = originalRmSync;
   fs.mkdtempSync = originalMkdtempSync;
+  expect(Reflect.set(fs, "lstatSync", originalLstatSync)).toBe(true);
   syncBuiltinESMExports();
 });
 
@@ -84,6 +101,7 @@ const outputMode = (studioRoot: string) => lstatSync(outputDirectory(studioRoot)
 
 afterEach(() => {
   cleanupFault.failBackupCleanup = false;
+  cleanupFault.swapSourceAfterLstat = null;
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -180,6 +198,20 @@ describe("bundled appearance provenance", () => {
       expect(() => syncAppearanceAssets(inputRoot, studioRoot)).toThrow(/must be a regular file/);
       expect(lstatSync(target).isSymbolicLink() || lstatSync(target).isDirectory()).toBe(true);
     }
+  });
+
+  it("opens each input member before any pathname race can replace it", () => {
+    const { inputRoot } = makeSyncInput();
+    const studioRoot = makeTemporaryDirectory("appearance-sync-studio-");
+    const sourcePath = join(inputRoot, "terminal-nova/application.css");
+    cleanupFault.swapSourceAfterLstat = {
+      path: sourcePath,
+      backupPath: join(inputRoot, "terminal-nova/application.css.original"),
+      replacement: Buffer.from("race replacement\n"),
+    };
+
+    expect(() => syncAppearanceAssets(inputRoot, studioRoot)).not.toThrow();
+    expect(cleanupFault.swapSourceAfterLstat).not.toBeNull();
   });
 
   it("preserves the prior tree when staging cannot start", () => {
