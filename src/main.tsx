@@ -28,6 +28,10 @@ if (rootElement === null) {
 const settingsBridge = explicitFixtureMode ? null : new TauriAppearanceSettingsBridge();
 const startupSession = await createAppearanceStartupSession(bundledAppearanceCatalog, settingsBridge, { documentValue: document });
 const { startup, appearance: appearanceController, persistence: appearancePersistence } = startupSession;
+const startupMedia = typeof window.matchMedia === "function"
+  ? window.matchMedia("(prefers-color-scheme: dark)")
+  : null;
+appearanceController.attach(document, startupMedia?.matches ? "dark" : "light");
 
 const reactRoot = createRoot(rootElement);
 reactRoot.render(
