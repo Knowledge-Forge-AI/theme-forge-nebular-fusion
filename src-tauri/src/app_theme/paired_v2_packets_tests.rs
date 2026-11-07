@@ -193,8 +193,8 @@ fn packet_self_digest_is_not_a_signature_or_source_custody_claim()
 #[test]
 fn strict_unknown_duplicate_version_and_digest_inputs_fail() {
     let unknown = BRIEF_CANONICAL.replace(
-        "  \"title\": \"Café / brief\",\n",
-        "  \"title\": \"Café / brief\",\n  \"unknown\": true,\n",
+        "  \"title\": \"Café / brief\"\n",
+        "  \"title\": \"Café / brief\",\n  \"unknown\": true\n",
     );
     assert!(parse_packet(unknown.as_bytes(), Some("tf-paired-profile-v2-brief")).is_err());
 

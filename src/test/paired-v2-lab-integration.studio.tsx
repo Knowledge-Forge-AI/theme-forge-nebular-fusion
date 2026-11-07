@@ -26,6 +26,7 @@ const FULL_APPLICATION_CSS = ":root { --full-application-appearance: #123456; }"
 vi.mock("../features/application-theme/PairedV2AuthoringPanel", () => ({
   PairedV2AuthoringPanel: (props: PairedV2AuthoringPanelProps) => {
     const [adoptionMessage, setAdoptionMessage] = useState<string | undefined>(undefined);
+    const [authoringReady, setAuthoringReady] = useState(false);
     const detached = props.input.mode === "detached";
     const detachedProfile = eligibleV2Document().v2Profile!;
     const sessionId = props.input.capability.sessionId ?? "missing-session";
@@ -93,6 +94,7 @@ vi.mock("../features/application-theme/PairedV2AuthoringPanel", () => ({
           },
         },
       } as unknown as PairedV2WorkflowState);
+      setAuthoringReady(true);
     }, [props.input, props.onWorkflowState]);
     const mismatchedCandidate: PairedV2ApplicationAppearanceCandidate = {
       ...candidate,
@@ -137,6 +139,7 @@ vi.mock("../features/application-theme/PairedV2AuthoringPanel", () => ({
     } satisfies PairedV2SaveResponse;
     return (
       <section data-testid="paired-v2-authoring-panel">
+        {authoringReady ? <span data-testid="paired-v2-authoring-ready">Ready to edit</span> : null}
         <span data-testid="paired-v2-session">{props.input.capability.sessionId}</span>
         <span data-testid="paired-v2-input-mode">{detached ? "detached" : "custody"}</span>
         {props.sessionUnavailableReason ? <span data-testid="paired-v2-session-unavailable">{props.sessionUnavailableReason}</span> : null}
@@ -406,6 +409,7 @@ describe("ApplicationThemeLab paired v2 integration boundary", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Open Profile…" }));
     const panel = await screen.findByTestId("paired-v2-authoring-panel");
+    await screen.findByTestId("paired-v2-authoring-ready");
     expect(screen.getByTestId("paired-v2-session").textContent).toBe(SESSION_ID);
 
     fireEvent.click(screen.getByRole("button", { name: "Simulate v2 edit" }));
