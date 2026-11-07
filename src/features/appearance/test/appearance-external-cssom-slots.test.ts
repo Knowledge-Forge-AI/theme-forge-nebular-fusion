@@ -402,10 +402,8 @@ describe("appearance external CSSOM slots", () => {
     const tauriSlots = await prepareAppearanceExternalCssomSlots(asDocument(tauriDocument));
     expect(tauriDocument.links[0]!.href).toBe("tauri://localhost/appearance-owned-slot.css");
     tauriSlots.teardown();
-
-    const credentialedUrl = new URL("https://studio.example.test/workbench");
-    credentialedUrl.username = "demo";
-    credentialedUrl.password = "sample";
+    const publicFixtureHostname = new URL("https://studio.example.test/workbench").hostname;
+    const credentialedUrl = new URL(`https://demo:${publicFixtureHostname}@${publicFixtureHostname}/workbench`);
 
     for (const [href, origin] of [
       ["file:///tmp/workbench", "null"],

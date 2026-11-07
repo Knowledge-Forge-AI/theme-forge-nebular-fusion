@@ -88,7 +88,8 @@ mod tests {
     use serde_json::value::Value as JsonNode;
 
     #[test]
-    fn sorted_encoder_is_independent_of_insertion_order_and_recursive() {
+    fn sorted_encoder_is_independent_of_insertion_order_and_recursive()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut nested = serde_json::Map::new();
         nested.insert("z".to_owned(), JsonNode::String("slash/".to_owned()));
         nested.insert("a".to_owned(), JsonNode::String("Café".to_owned()));
@@ -101,21 +102,23 @@ mod tests {
             JsonNode::String("line\n\u{001f}".to_owned()),
         );
 
-        let actual = canonical_sorted_pretty(&JsonNode::Object(object)).expect("canonical bytes");
+        let actual = canonical_sorted_pretty(&JsonNode::Object(object))?;
         let expected = "{\n  \"a\": [],\n  \"m\": \"line\\n\\u001f\",\n  \"z\": {\n    \"a\": \"Café\",\n    \"z\": \"slash/\"\n  }\n}\n"
             .as_bytes();
         assert_eq!(actual, expected);
+        Ok(())
     }
 
     #[test]
-    fn sorted_projection_removes_only_the_requested_top_level_field() {
+    fn sorted_projection_removes_only_the_requested_top_level_field()
+    -> Result<(), Box<dyn std::error::Error>> {
         let mut object = serde_json::Map::new();
         object.insert("z".to_owned(), JsonNode::String("z".to_owned()));
         object.insert("digest".to_owned(), JsonNode::String("ignored".to_owned()));
         object.insert("a".to_owned(), JsonNode::String("a".to_owned()));
 
-        let actual = canonical_sorted_projection(&JsonNode::Object(object), "digest")
-            .expect("projection bytes");
+        let actual = canonical_sorted_projection(&JsonNode::Object(object), "digest")?;
         assert_eq!(actual, b"{\n  \"a\": \"a\",\n  \"z\": \"z\"\n}\n");
+        Ok(())
     }
 }
