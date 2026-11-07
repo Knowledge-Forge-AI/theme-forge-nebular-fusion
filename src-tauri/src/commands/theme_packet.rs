@@ -595,17 +595,16 @@ mod tests {
     }
 
     #[test]
-    fn paired_create_import_export_uses_pure_paths_without_loom_runner() {
+    fn paired_create_import_export_uses_pure_paths_without_loom_runner() -> Result<(), &'static str>
+    {
         let Some(directory) = owned_directory("round-trip") else {
-            assert!(false, "could not create exclusive test directory");
-            return;
+            return Err("could not create exclusive test directory");
         };
         let Some(envelope) = studio_app_theme_paired_packet_create_v2(
             PairedV2PacketCreateRequest::Brief(brief_input()),
         )
         .ok() else {
-            assert!(false, "paired create was rejected");
-            return;
+            return Err("paired create was rejected");
         };
         let source = directory.join("brief.json");
         assert!(std::fs::write(&source, envelope.canonical_json.as_bytes()).is_ok());
@@ -633,13 +632,13 @@ mod tests {
             assert!(exported.paired_v2.is_some());
         }
         assert!(std::fs::remove_dir_all(directory).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn all_paired_kinds_round_trip_and_use_fixed_names() {
+    fn all_paired_kinds_round_trip_and_use_fixed_names() -> Result<(), &'static str> {
         let Some(directory) = owned_directory("kinds") else {
-            assert!(false, "could not create exclusive test directory");
-            return;
+            return Err("could not create exclusive test directory");
         };
         for (index, kind) in [
             PairedV2PacketKind::Brief,
@@ -650,8 +649,7 @@ mod tests {
         .enumerate()
         {
             let Some(envelope) = create_envelope(kind) else {
-                assert!(false, "paired packet creation failed");
-                return;
+                return Err("paired packet creation failed");
             };
             assert_eq!(
                 paired_default_name(kind),
@@ -678,17 +676,17 @@ mod tests {
             }
         }
         assert!(std::fs::remove_dir_all(directory).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn paired_wrong_kind_never_falls_through_generic_and_refusals_omit_envelope() {
+    fn paired_wrong_kind_never_falls_through_generic_and_refusals_omit_envelope()
+    -> Result<(), &'static str> {
         let Some(directory) = owned_directory("refusal") else {
-            assert!(false, "could not create exclusive test directory");
-            return;
+            return Err("could not create exclusive test directory");
         };
         let Some(envelope) = create_envelope(PairedV2PacketKind::Brief) else {
-            assert!(false, "paired packet creation failed");
-            return;
+            return Err("paired packet creation failed");
         };
         let path = directory.join("brief.json");
         assert!(std::fs::write(&path, envelope.canonical_json.as_bytes()).is_ok());
@@ -731,6 +729,7 @@ mod tests {
             assert!(cancelled_export.paired_v2.is_none());
         }
         assert!(std::fs::remove_dir_all(directory).is_ok());
+        Ok(())
     }
 
     #[test]
@@ -747,10 +746,10 @@ mod tests {
     }
 
     #[test]
-    fn oversized_paired_packets_are_fenced_before_generic_import_or_export() {
+    fn oversized_paired_packets_are_fenced_before_generic_import_or_export()
+    -> Result<(), &'static str> {
         let Some(directory) = owned_directory("oversized") else {
-            assert!(false, "could not create exclusive test directory");
-            return;
+            return Err("could not create exclusive test directory");
         };
         let packet = oversized_paired_packet_text();
         assert!(matches!(
@@ -789,13 +788,13 @@ mod tests {
             Err(error) if error.reason_code() == StudioReasonCode::ProtocolInvalid
         ));
         assert!(std::fs::remove_dir_all(directory).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn paired_export_requires_native_canonical_request_bytes() {
+    fn paired_export_requires_native_canonical_request_bytes() -> Result<(), &'static str> {
         let Some(envelope) = create_envelope(PairedV2PacketKind::Brief) else {
-            assert!(false, "paired packet creation failed");
-            return;
+            return Err("paired packet creation failed");
         };
         assert!(validate_paired_export_canonical(&envelope.canonical_json, &envelope).is_ok());
         let noncanonical = format!(" {} ", envelope.canonical_json);
@@ -803,17 +802,18 @@ mod tests {
             validate_paired_export_canonical(&noncanonical, &envelope),
             Err(error) if error.reason_code() == StudioReasonCode::ProtocolInvalid
         ));
+        Ok(())
     }
 
     #[test]
-    fn generic_packet_authority_fences_known_paired_family_only() {
+    fn generic_packet_authority_fences_known_paired_family_only() -> Result<(), &'static str> {
         let Some(envelope) = create_envelope(PairedV2PacketKind::Brief) else {
-            assert!(false, "paired packet creation failed");
-            return;
+            return Err("paired packet creation failed");
         };
         assert!(reject_paired_packet_text(&envelope.canonical_json).is_err());
         assert!(
             reject_paired_packet_text(r#"{"schema":"tfsl.theme-brief","schemaVersion":1}"#).is_ok()
         );
+        Ok(())
     }
 }

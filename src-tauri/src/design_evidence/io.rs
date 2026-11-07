@@ -384,12 +384,8 @@ mod tests {
             publish_paired_selected_bytes(&target, bytes).is_ok_and(|count| count == bytes.len())
         );
         assert_eq!(fs::read(&target).ok().as_deref(), Some(bytes.as_slice()));
-        let mode = fs::metadata(&target)
-            .expect("paired output metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600);
+        let mode = fs::metadata(&target).map(|metadata| metadata.permissions().mode() & 0o777);
+        assert_eq!(mode.ok(), Some(0o600));
         assert!(publish_paired_selected_bytes(&target, bytes).is_err());
         assert!(fs::read_dir(&directory).is_ok_and(|entries| {
             entries.filter_map(Result::ok).all(|entry| {

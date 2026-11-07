@@ -119,7 +119,7 @@ fn paired_v2_compile_error(
             },
         ))
     });
-    let response = match status {
+    match status {
         "stale" => AppThemePairedCompileV2Response::Stale {
             valid: false,
             ui_revision: ui_revision.min(PAIRED_V2_MAX_REVISION),
@@ -156,8 +156,7 @@ fn paired_v2_compile_error(
             diagnostics: vec![],
             error,
         },
-    };
-    response
+    }
 }
 
 fn paired_v2_save_response_for_session(
@@ -1138,7 +1137,7 @@ impl AppThemeState {
         let paired_v2_authoring =
             runner
                 .is_paired_v2_available()
-                .then(|| PairedV2AuthoringCapability {
+                .then_some(PairedV2AuthoringCapability {
                     session_id: v2_session_id,
                     supported: true,
                 });
@@ -1507,9 +1506,7 @@ impl AppThemeState {
                     && draft
                         .parent_source_sha256
                         .as_deref()
-                        .map_or(true, |parent| {
-                            parent == claim.baseline_raw_source_sha256.as_str()
-                        });
+                        .is_none_or(|parent| parent == claim.baseline_raw_source_sha256.as_str());
                 if !draft_lineage_matches {
                     return Ok(paired_v2_compile_error(
                         "error",
@@ -2453,12 +2450,8 @@ mod writer_mode_tests {
             atomic_write_paired_v2_profile(&target, bytes, PairedV2SaveMode::NewDocument,).is_ok()
         );
         assert_eq!(fs::read(&target).ok().as_deref(), Some(bytes.as_slice()));
-        let mode = fs::metadata(&target)
-            .expect("paired v2 output metadata")
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(mode, 0o600);
+        let mode = fs::metadata(&target).map(|metadata| metadata.permissions().mode() & 0o777);
+        assert_eq!(mode.ok(), Some(0o600));
         assert!(fs::read_dir(&directory).is_ok_and(|entries| {
             entries.filter_map(Result::ok).all(|entry| {
                 !entry

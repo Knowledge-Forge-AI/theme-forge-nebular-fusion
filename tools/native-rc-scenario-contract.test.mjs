@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SCENARIOS } from "./native-rc-smoke.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const proposalNative = path.resolve(here, "..");
@@ -27,7 +28,9 @@ function test(name, run) {
 
 test("scenario and platform vocabulary is closed", () => {
   for (const value of ["P-save", "P-restart", "paired-v2"]) assert.match(mod, new RegExp(`\\"${value}\\"`));
-  assert.match(mod, /\[\"darwin-arm64\", \"linux-arm64\", \"linux-x64\"\]/);
+  for (const scenario of ["P-save", "P-restart", "paired-v2"]) {
+    assert.deepEqual(SCENARIOS[scenario].platforms, ["darwin-arm64", "linux-arm64", "linux-x64"]);
+  }
   assert.match(mod, /TFNF_RELEASE_SMOKE_PREFERENCES_DIR/);
   assert.match(mod, /appearance preference parent requires an appearance pair scenario/);
 });

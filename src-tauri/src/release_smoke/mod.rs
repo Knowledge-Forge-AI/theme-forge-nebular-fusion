@@ -262,19 +262,6 @@ impl Scenario {
         }
     }
 
-    /// Exact harness platform keys. `macos-arm64` is a workflow/evidence
-    /// label, not a source scenario key.
-    pub(crate) fn platforms(self) -> &'static [&'static str] {
-        match self {
-            Self::HostFirst => &["darwin-arm64"],
-            Self::CompileFirst => &["linux-arm64"],
-            Self::RestartCancel | Self::RestartCancelSignal => &["linux-x64"],
-            Self::AppearancePairSave | Self::AppearancePairRestart | Self::PairedV2 => {
-                &["darwin-arm64", "linux-arm64", "linux-x64"]
-            }
-        }
-    }
-
     pub(crate) fn is_appearance_pair(self) -> bool {
         matches!(self, Self::AppearancePairSave | Self::AppearancePairRestart)
     }
@@ -734,26 +721,29 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[test]
-    fn generated_appearance_rows_are_accepted_in_light_then_dark_order() {
+    fn generated_appearance_rows_are_accepted_in_light_then_dark_order() -> Result<(), &'static str>
+    {
         let value = serde_json::from_str::<AppearanceExpectations>(APPEARANCE_EXPECTATIONS_JSON)
-            .expect("generated appearance expectations must decode");
+            .map_err(|_| "generated appearance expectations must decode")?;
         assert_eq!(validate_appearance_expectations(&value), Ok(()));
         assert_eq!(value.rows[1].family, "nebular");
         assert_eq!(value.rows[1].mode, "light");
         assert_eq!(value.rows[6].family, "terminal-nova");
         assert_eq!(value.rows[6].mode, "dark");
+        Ok(())
     }
 
     #[test]
-    fn reordered_generated_appearance_rows_are_rejected() {
+    fn reordered_generated_appearance_rows_are_rejected() -> Result<(), &'static str> {
         let mut value =
             serde_json::from_str::<AppearanceExpectations>(APPEARANCE_EXPECTATIONS_JSON)
-                .expect("generated appearance expectations must decode");
+                .map_err(|_| "generated appearance expectations must decode")?;
         value.rows.swap(1, 6);
         assert_eq!(
             validate_appearance_expectations(&value),
             Err("appearance expectations row order is invalid")
         );
+        Ok(())
     }
 
     fn args(values: &[&str]) -> Vec<OsString> {

@@ -89,37 +89,36 @@ fn paired_v2_display_name_is_bounded_at_utf8_boundary() {
 }
 
 #[test]
-fn deleted_custody_path_is_rejected_by_regular_nofollow_read() {
+fn deleted_custody_path_is_rejected_by_regular_nofollow_read() -> Result<(), &'static str> {
     let Some(directory) = owned_directory("deleted") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let path = directory.join("custody.json");
     assert!(read_bounded_profile_bytes(&path).is_err());
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[cfg(unix)]
 #[test]
-fn dangling_custody_symlink_is_rejected_by_regular_nofollow_read() {
+fn dangling_custody_symlink_is_rejected_by_regular_nofollow_read() -> Result<(), &'static str> {
     use std::os::unix::fs::symlink;
 
     let Some(directory) = owned_directory("dangling") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let target = directory.join("missing-target.json");
     let link = directory.join("dangling-link.json");
     assert!(symlink(&target, &link).is_ok());
     assert!(read_bounded_profile_bytes(&link).is_err());
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[test]
-fn live_custody_snapshot_change_is_rejected_by_identity_fence() {
+fn live_custody_snapshot_change_is_rejected_by_identity_fence() -> Result<(), &'static str> {
     let Some(directory) = owned_directory("snapshot") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let path = directory.join("custody.json");
     let original = v2_custody(path, b"original".to_vec(), "doc-snapshot");
@@ -128,13 +127,13 @@ fn live_custody_snapshot_change_is_rejected_by_identity_fence() {
     changed.raw_source_sha256 = sha256_hex(&changed.raw_bytes);
     assert!(!same_custody_identity(&original, &changed));
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[test]
-fn detached_latest_compile_does_not_require_custody_lineage() {
+fn detached_latest_compile_does_not_require_custody_lineage() -> Result<(), &'static str> {
     let Some(directory) = owned_directory("detached-lineage") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let custody = v2_custody(
         directory.join("current.json"),
@@ -152,16 +151,16 @@ fn detached_latest_compile_does_not_require_custody_lineage() {
         Some(&custody)
     ));
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[cfg(unix)]
 #[test]
-fn custody_alias_uses_parent_identity_and_existing_leaf_inode() {
+fn custody_alias_uses_parent_identity_and_existing_leaf_inode() -> Result<(), &'static str> {
     use std::os::unix::fs::symlink;
 
     let Some(directory) = owned_directory("alias-inode") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let custody_path = directory.join("current.json");
     let alias_path = directory.join("alias.json");
@@ -174,6 +173,7 @@ fn custody_alias_uses_parent_identity_and_existing_leaf_inode() {
     let firmlink_alias = linked_parent.join("current.json");
     assert!(destination_aliases_custody(&firmlink_alias, &custody_path).is_ok_and(|same| same));
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 fn brief_envelope(source_hash: &str) -> Option<super::PairedV2PacketEnvelope> {
@@ -198,25 +198,22 @@ fn brief_envelope(source_hash: &str) -> Option<super::PairedV2PacketEnvelope> {
 }
 
 #[test]
-fn paired_packet_guard_protects_missing_current_custody_destination() {
+fn paired_packet_guard_protects_missing_current_custody_destination() -> Result<(), &'static str> {
     let Some(directory) = owned_directory("packet-custody") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let custody_path = directory.join("current.json");
     let raw = b"current-source".to_vec();
     let raw_hash = sha256_hex(&raw);
     let Some(envelope) = brief_envelope(&raw_hash) else {
-        assert!(false, "could not construct packet envelope");
-        return;
+        return Err("could not construct packet envelope");
     };
     let state = super::AppThemeState::new(AppThemeRunner::new(
         PathBuf::from("/nonexistent/node"),
         PathBuf::from("/nonexistent/adapter"),
     ));
     let Ok(mut session) = state.lock() else {
-        assert!(false, "could not lock app theme state");
-        return;
+        return Err("could not lock app theme state");
     };
     session.active_document = Some(v2_custody(custody_path.clone(), raw, "doc-custody"));
     drop(session);
@@ -229,29 +226,28 @@ fn paired_packet_guard_protects_missing_current_custody_destination() {
     ));
     assert!(!custody_path.exists());
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[test]
-fn paired_packet_guard_refuses_any_same_parent_when_custody_is_missing() {
+fn paired_packet_guard_refuses_any_same_parent_when_custody_is_missing() -> Result<(), &'static str>
+{
     let Some(directory) = owned_directory("packet-missing-parent") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let custody_path = directory.join("current.json");
     let destination = directory.join("different-name.json");
     let raw = b"current-source".to_vec();
     let raw_hash = sha256_hex(&raw);
     let Some(envelope) = brief_envelope(&raw_hash) else {
-        assert!(false, "could not construct packet envelope");
-        return;
+        return Err("could not construct packet envelope");
     };
     let state = super::AppThemeState::new(AppThemeRunner::new(
         PathBuf::from("/nonexistent/node"),
         PathBuf::from("/nonexistent/adapter"),
     ));
     let Ok(mut session) = state.lock() else {
-        assert!(false, "could not lock app theme state");
-        return;
+        return Err("could not lock app theme state");
     };
     session.active_document = Some(v2_custody(custody_path, raw, "doc-custody"));
     drop(session);
@@ -264,21 +260,21 @@ fn paired_packet_guard_refuses_any_same_parent_when_custody_is_missing() {
     ));
     assert!(!destination.exists());
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }
 
 #[test]
-fn paired_packet_guard_preserves_foreign_existing_destination_and_allows_new_sibling() {
+fn paired_packet_guard_preserves_foreign_existing_destination_and_allows_new_sibling()
+-> Result<(), &'static str> {
     let Some(directory) = owned_directory("packet-foreign") else {
-        assert!(false, "could not create exclusive test directory");
-        return;
+        return Err("could not create exclusive test directory");
     };
     let custody_path = directory.join("current.json");
     let foreign_path = directory.join("foreign.json");
     let raw = b"current-source".to_vec();
     let raw_hash = sha256_hex(&raw);
     let Some(envelope) = brief_envelope(&raw_hash) else {
-        assert!(false, "could not construct packet envelope");
-        return;
+        return Err("could not construct packet envelope");
     };
     assert!(std::fs::write(&custody_path, &raw).is_ok());
     assert!(std::fs::write(&foreign_path, b"owned").is_ok());
@@ -287,8 +283,7 @@ fn paired_packet_guard_preserves_foreign_existing_destination_and_allows_new_sib
         PathBuf::from("/nonexistent/adapter"),
     ));
     let Ok(mut session) = state.lock() else {
-        assert!(false, "could not lock app theme state");
-        return;
+        return Err("could not lock app theme state");
     };
     session.active_document = Some(v2_custody(custody_path, raw, "doc-custody"));
     drop(session);
@@ -313,4 +308,5 @@ fn paired_packet_guard_preserves_foreign_existing_destination_and_allows_new_sib
         Some(envelope.canonical_json.as_bytes())
     );
     assert!(std::fs::remove_dir_all(directory).is_ok());
+    Ok(())
 }

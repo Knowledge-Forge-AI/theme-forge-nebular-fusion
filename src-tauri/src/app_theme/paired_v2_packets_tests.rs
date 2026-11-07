@@ -121,69 +121,73 @@ fn review_input(brief_digest: &str, candidate_digest: &str) -> PairedV2ReviewCre
     }
 }
 
-fn create_brief() -> PairedV2PacketEnvelope {
-    create_packet(PairedV2PacketCreateRequest::Brief(brief_input())).expect("brief packet")
+fn create_brief() -> Result<PairedV2PacketEnvelope, Box<dyn std::error::Error>> {
+    Ok(create_packet(PairedV2PacketCreateRequest::Brief(
+        brief_input(),
+    ))?)
 }
 
-fn create_candidate() -> PairedV2PacketEnvelope {
-    create_packet(PairedV2PacketCreateRequest::Candidate(candidate_input(
-        BRIEF_DIGEST,
-    )))
-    .expect("candidate packet")
+fn create_candidate() -> Result<PairedV2PacketEnvelope, Box<dyn std::error::Error>> {
+    Ok(create_packet(PairedV2PacketCreateRequest::Candidate(
+        candidate_input(BRIEF_DIGEST),
+    ))?)
 }
 
-fn create_review() -> PairedV2PacketEnvelope {
-    create_packet(PairedV2PacketCreateRequest::Review(review_input(
-        BRIEF_DIGEST,
-        CANDIDATE_DIGEST,
-    )))
-    .expect("review packet")
+fn create_review() -> Result<PairedV2PacketEnvelope, Box<dyn std::error::Error>> {
+    Ok(create_packet(PairedV2PacketCreateRequest::Review(
+        review_input(BRIEF_DIGEST, CANDIDATE_DIGEST),
+    ))?)
 }
 
 #[test]
-fn exact_golden_vectors_cover_brief_candidate_and_review() {
-    let brief = create_brief();
+fn exact_golden_vectors_cover_brief_candidate_and_review() -> Result<(), Box<dyn std::error::Error>>
+{
+    let brief = create_brief()?;
     assert_eq!(brief.kind, "tf-paired-profile-v2-brief");
     assert_eq!(brief.digest, BRIEF_DIGEST);
     assert!(brief.packet_digest_verified);
     assert_eq!(brief.canonical_json, BRIEF_CANONICAL);
 
-    let candidate = create_candidate();
+    let candidate = create_candidate()?;
     assert_eq!(candidate.kind, "tf-paired-profile-v2-candidate");
     assert_eq!(candidate.digest, CANDIDATE_DIGEST);
     assert!(candidate.packet_digest_verified);
     assert_eq!(candidate.canonical_json, CANDIDATE_CANONICAL);
 
-    let review = create_review();
+    let review = create_review()?;
     assert_eq!(review.kind, "tf-paired-profile-v2-review");
     assert_eq!(review.digest, REVIEW_DIGEST);
     assert!(review.packet_digest_verified);
     assert_eq!(review.canonical_json, REVIEW_CANONICAL);
+    Ok(())
 }
 
 #[test]
-fn canonical_goldens_round_trip_with_native_identity() {
+fn canonical_goldens_round_trip_with_native_identity() -> Result<(), Box<dyn std::error::Error>> {
     for (json, kind) in [
         (BRIEF_CANONICAL, "tf-paired-profile-v2-brief"),
         (CANDIDATE_CANONICAL, "tf-paired-profile-v2-candidate"),
         (REVIEW_CANONICAL, "tf-paired-profile-v2-review"),
     ] {
-        let parsed = parse_packet(json.as_bytes(), Some(kind)).expect("canonical packet");
+        let parsed = parse_packet(json.as_bytes(), Some(kind))?;
         assert_eq!(parsed.kind, kind);
         assert_eq!(parsed.canonical_json, json);
         assert!(parsed.packet_digest_verified);
     }
+    Ok(())
 }
 
 #[test]
-fn packet_self_digest_is_not_a_signature_or_source_custody_claim() {
-    let candidate = create_candidate();
+fn packet_self_digest_is_not_a_signature_or_source_custody_claim()
+-> Result<(), Box<dyn std::error::Error>> {
+    let candidate = create_candidate()?;
     let PairedV2Packet::Candidate(packet) = candidate.packet else {
-        panic!("candidate kind");
+        return Err("candidate packet kind mismatch".into());
     };
     assert_eq!(packet.source_profile_sha256, SOURCE_SHA256);
     assert_eq!(packet.source_canonical_digest, SOURCE_CANONICAL_DIGEST);
     assert_eq!(candidate.digest, CANDIDATE_DIGEST);
+    Ok(())
 }
 
 #[test]
@@ -265,7 +269,8 @@ fn bounds_and_association_shape_are_closed() {
 }
 
 #[test]
-fn tri_state_family_fence_preserves_generic_and_rejects_paired_fallbacks() {
+fn tri_state_family_fence_preserves_generic_and_rejects_paired_fallbacks()
+-> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         classify_packet(br#"{"schema":"tfsl.theme-candidate","schemaVersion":2}"#),
         PairedV2PacketClassification::NonPaired
@@ -310,13 +315,17 @@ fn tri_state_family_fence_preserves_generic_and_rejects_paired_fallbacks() {
     );
 
     let too_large = vec![b' '; PAIRED_V2_PACKET_MAX_BYTES + 1];
-    let error =
-        parse_packet(&too_large, Some("tf-paired-profile-v2-brief")).expect_err("size refusal");
+    let error = match parse_packet(&too_large, Some("tf-paired-profile-v2-brief")) {
+        Ok(_) => return Err("oversized packet was accepted".into()),
+        Err(error) => error,
+    };
     assert_eq!(error.reason_code(), StudioReasonCode::ResultTooLarge);
+    Ok(())
 }
 
 #[test]
-fn transport_bounded_probe_fences_oversized_paired_packets_before_parse() {
+fn transport_bounded_probe_fences_oversized_paired_packets_before_parse()
+-> Result<(), Box<dyn std::error::Error>> {
     let mut oversized = Vec::with_capacity(PAIRED_V2_PACKET_MAX_BYTES + 64);
     oversized.extend_from_slice(br#"{"schema":"tf-paired-profile-v2-brief","padding":""#);
     oversized.extend(std::iter::repeat_n(b'x', PAIRED_V2_PACKET_MAX_BYTES));
@@ -330,20 +339,22 @@ fn transport_bounded_probe_fences_oversized_paired_packets_before_parse() {
             schema: "tf-paired-profile-v2-brief".to_owned()
         }
     );
-    let error = parse_packet(&oversized, Some("tf-paired-profile-v2-brief"))
-        .expect_err("paired size cap must run after family classification");
+    let error = match parse_packet(&oversized, Some("tf-paired-profile-v2-brief")) {
+        Ok(_) => return Err("paired size cap was bypassed".into()),
+        Err(error) => error,
+    };
     assert_eq!(error.reason_code(), StudioReasonCode::ResultTooLarge);
+    Ok(())
 }
 
 #[test]
-fn create_request_is_adjacent_and_closed() {
+fn create_request_is_adjacent_and_closed() -> Result<(), Box<dyn std::error::Error>> {
     let request = PairedV2PacketCreateRequest::Brief(brief_input());
-    let encoded = serde_json::to_string(&request).expect("create request");
+    let encoded = serde_json::to_string(&request)?;
     assert!(encoded.starts_with(
         r#"{"kind":"tf-paired-profile-v2-brief","input":{"schema":"tf-paired-profile-v2-brief""#
     ));
-    let decoded: PairedV2PacketCreateRequest =
-        serde_json::from_str(&encoded).expect("adjacent request");
+    let decoded: PairedV2PacketCreateRequest = serde_json::from_str(&encoded)?;
     assert_eq!(decoded, request);
 
     let unknown = encoded.trim_end_matches('}').to_owned() + ",\"extra\":true}";
@@ -369,4 +380,5 @@ fn create_request_is_adjacent_and_closed() {
         1,
     );
     assert!(serde_json::from_str::<PairedV2PacketCreateRequest>(&duplicate_nested).is_err());
+    Ok(())
 }

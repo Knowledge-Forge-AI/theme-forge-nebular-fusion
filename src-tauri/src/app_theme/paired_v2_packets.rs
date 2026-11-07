@@ -536,7 +536,7 @@ fn validate_editable_path(value: &str) -> StudioResult<()> {
     if !chars
         .next()
         .is_some_and(|character| character.is_ascii_alphabetic())
-        || leaf.bytes().count() > 221
+        || leaf.len() > 221
         || !chars.all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
         })

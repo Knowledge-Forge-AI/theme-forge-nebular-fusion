@@ -1042,16 +1042,20 @@ fn is_clear_optional_path(path: &str) -> bool {
         return true;
     }
     let mut parts = path.split('.');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some("color"), Some("light" | "dark"), Some("hover" | "active"), None)
-        | (
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (
+            Some("color"),
+            Some("light" | "dark"),
+            Some("hover" | "active"),
+            None
+        ) | (
             Some("typography"),
             Some("body" | "heading" | "ui" | "code"),
             Some("size" | "lineHeight"),
             None,
-        ) => true,
-        _ => false,
-    }
+        )
+    )
 }
 
 fn validate_edit_path(path: &str, field: &str) -> PairedV2ContractResult<()> {
@@ -2840,14 +2844,12 @@ mod tests {
     }
 
     #[test]
-    fn serde_is_closed_for_requests_and_edits() {
+    fn serde_is_closed_for_requests_and_edits() -> Result<(), Box<dyn std::error::Error>> {
         let request = sample_request();
-        let encoded = serde_json::to_string(&request).expect("request serializes");
-        let mut object: BTreeMap<String, PairedV2JsonValue> =
-            serde_json::from_str(&encoded).expect("request is a JSON object");
+        let encoded = serde_json::to_string(&request)?;
+        let mut object: BTreeMap<String, PairedV2JsonValue> = serde_json::from_str(&encoded)?;
         object.insert("unexpected".to_owned(), PairedV2JsonValue::Bool(true));
-        let with_unknown = serde_json::to_string(&PairedV2JsonValue::Object(object))
-            .expect("request with unknown field serializes");
+        let with_unknown = serde_json::to_string(&PairedV2JsonValue::Object(object))?;
         assert!(serde_json::from_str::<AppThemePairedCompileV2Request>(&with_unknown).is_err());
         let edit = r##"{
             "kind": "set-color",
@@ -2859,10 +2861,12 @@ mod tests {
 
         let duplicate_json = r#"{"key": 1, "key": 2}"#;
         assert!(serde_json::from_str::<PairedV2JsonValue>(duplicate_json).is_err());
+        Ok(())
     }
 
     #[test]
-    fn literal_adapter_response_uses_wire_enum_names_and_optional_reason() {
+    fn literal_adapter_response_uses_wire_enum_names_and_optional_reason()
+    -> Result<(), Box<dyn std::error::Error>> {
         let json = r##"
         {
           "status": "partial",
@@ -2976,19 +2980,20 @@ mod tests {
           "diagnostics": []
         }
         "##;
-        let response: AppThemePairedCompileV2Response =
-            serde_json::from_str(json).expect("literal adapter response deserializes");
+        let response: AppThemePairedCompileV2Response = serde_json::from_str(json)?;
         assert!(validate_compile_response_for_session(&response, "v2-session", 3).is_ok());
-        let encoded = serde_json::to_string(&response).expect("response serializes");
+        let encoded = serde_json::to_string(&response)?;
         assert!(encoded.contains("\"verificationStatus\":\"verified\""));
         assert!(encoded.contains("\"sourceVerification\":\"source-bytes\""));
         assert!(encoded.contains("\"schema\":\"tf-paired-mapping-report-v2\""));
         assert!(encoded.contains("\"schema\":\"theme-forge.application-appearance-extension.v1\""));
         assert!(!encoded.contains("\"reason\""));
+        Ok(())
     }
 
     #[test]
-    fn shared_edit_fixture_matches_rust_grammar_and_semantic_boundary() {
+    fn shared_edit_fixture_matches_rust_grammar_and_semantic_boundary()
+    -> Result<(), Box<dyn std::error::Error>> {
         #[derive(Deserialize)]
         struct EditFixture {
             schema: String,
@@ -3005,30 +3010,32 @@ mod tests {
 
         let fixture: EditFixture = serde_json::from_str(include_str!(
             "../../../src/features/application-theme/test/fixtures/paired-v2-edit-contract.json"
-        ))
-        .expect("shared edit fixture is valid JSON");
+        ))?;
         assert_eq!(fixture.schema, "tf-paired-v2-edit-contract-fixture-v1");
         for case in fixture.cases {
             let allowed = validate_edits(std::slice::from_ref(&case.edit)).is_ok();
             assert_eq!(allowed, case.expected_allowed, "{}", case.name);
         }
+        Ok(())
     }
 
     #[test]
-    fn untrusted_text_rejects_legacy_bidi_controls() {
+    fn untrusted_text_rejects_legacy_bidi_controls() -> Result<(), Box<dyn std::error::Error>> {
         for codepoint in [
             0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068,
             0x2069,
         ] {
-            let value = char::from_u32(codepoint)
-                .expect("known bidi control")
-                .to_string();
+            let Some(character) = char::from_u32(codepoint) else {
+                return Err(format!("invalid bidi control codepoint: {codepoint:04X}").into());
+            };
+            let value = character.to_string();
             assert!(
                 validate_text(&value, 32, "test", false).is_err(),
                 "U+{codepoint:04X}"
             );
         }
         assert!(validate_text("plain text", 32, "test", false).is_ok());
+        Ok(())
     }
 
     #[test]
@@ -3076,7 +3083,8 @@ mod tests {
     }
 
     #[test]
-    fn response_union_requires_real_results_only_on_success_or_partial() {
+    fn response_union_requires_real_results_only_on_success_or_partial()
+    -> Result<(), Box<dyn std::error::Error>> {
         let response = sample_success_response();
         assert!(validate_compile_response_for_session(&response, "v2-session", 3).is_ok());
 
@@ -3109,9 +3117,9 @@ mod tests {
             }),
         };
         assert!(validate_compile_response_transport(&failure).is_ok());
-        let failure_json = serde_json::to_string(&failure).expect("failure serializes");
+        let failure_json = serde_json::to_string(&failure)?;
         let failure_object: BTreeMap<String, PairedV2JsonValue> =
-            serde_json::from_str(&failure_json).expect("failure is a JSON object");
+            serde_json::from_str(&failure_json)?;
         assert!(!failure_object.contains_key("draft"));
         for key in [
             "solarSail",
@@ -3121,27 +3129,25 @@ mod tests {
         ] {
             assert_eq!(failure_object.get(key), Some(&PairedV2JsonValue::Null));
         }
-        let failure_roundtrip = serde_json::to_string(&PairedV2JsonValue::Object(failure_object))
-            .expect("failure JSON re-serializes");
-        let _: AppThemePairedCompileV2Response =
-            serde_json::from_str(&failure_roundtrip).expect("failure round-trips");
+        let failure_roundtrip = serde_json::to_string(&PairedV2JsonValue::Object(failure_object))?;
+        let _: AppThemePairedCompileV2Response = serde_json::from_str(&failure_roundtrip)?;
 
         let mut oversized = response;
         if let AppThemePairedCompileV2Response::Partial { solar_sail, .. } = &mut oversized {
             solar_sail.compiled_css = Some("x".repeat(PAIRED_V2_MAX_SOLAR_CSS_BYTES + 1));
         }
         assert!(validate_compile_response_transport(&oversized).is_err());
+        Ok(())
     }
 
     #[test]
-    fn response_and_capability_unknown_fields_are_rejected() {
+    fn response_and_capability_unknown_fields_are_rejected()
+    -> Result<(), Box<dyn std::error::Error>> {
         let response = sample_success_response();
-        let encoded = serde_json::to_string(&response).expect("response serializes");
-        let mut value: BTreeMap<String, PairedV2JsonValue> =
-            serde_json::from_str(&encoded).expect("response is a JSON object");
+        let encoded = serde_json::to_string(&response)?;
+        let mut value: BTreeMap<String, PairedV2JsonValue> = serde_json::from_str(&encoded)?;
         value.insert("extra".to_owned(), PairedV2JsonValue::Bool(true));
-        let with_unknown = serde_json::to_string(&PairedV2JsonValue::Object(value))
-            .expect("response with unknown field serializes");
+        let with_unknown = serde_json::to_string(&PairedV2JsonValue::Object(value))?;
         assert!(serde_json::from_str::<AppThemePairedCompileV2Response>(&with_unknown).is_err());
         let capability = r#"{
             "sessionId": "v2-session",
@@ -3149,16 +3155,19 @@ mod tests {
             "extra": false
         }"#;
         assert!(serde_json::from_str::<PairedV2AuthoringCapability>(capability).is_err());
+        Ok(())
     }
 
     #[test]
-    fn transformed_drafts_cannot_self_parent_the_baseline() {
+    fn transformed_drafts_cannot_self_parent_the_baseline() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut response = sample_success_response();
         let AppThemePairedCompileV2Response::Partial { draft, .. } = &mut response else {
-            panic!("sample response must be partial");
+            return Err("sample response must be partial".into());
         };
         draft.raw_source_sha256 = hash('a');
         assert!(validate_draft(draft).is_err());
+        Ok(())
     }
 
     #[test]

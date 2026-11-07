@@ -190,10 +190,10 @@ pub(crate) fn studio_app_theme_save_profile_v2(
         Err(error) => return state.paired_v2_save_rejected(&request, &error.code, &error.message),
     };
 
-    if let Some(key) = paired_save_path_key(request.save_mode) {
-        if let Some(dest) = paired_path(&app, key)? {
-            return state.save_profile_v2_path_with_ticket(request, dest, ticket);
-        }
+    if let Some(key) = paired_save_path_key(request.save_mode)
+        && let Some(dest) = paired_path(&app, key)?
+    {
+        return state.save_profile_v2_path_with_ticket(request, dest, ticket);
     }
 
     #[cfg(feature = "native-smoke")]

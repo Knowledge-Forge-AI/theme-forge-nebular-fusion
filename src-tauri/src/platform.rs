@@ -292,8 +292,7 @@ mod tests {
             .open(root.join("link"));
         let error = match linked {
             Ok(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "O_NOFOLLOW must reject the symlink at open",
                 ));
             }
