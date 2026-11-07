@@ -181,6 +181,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 // Payload closure owner: bounded read-only, no-follow verification of the
                 // compiled Solar Sail package closure; it has no process or write authority.
                 Path::new("src/app_theme/payload_authentication.rs"),
+                Path::new("src/app_theme/paired_v2_authentication.rs"),
                 Path::new("src/design_evidence/io.rs"),
                 Path::new("src/scene/io.rs"),
                 Path::new("src/sidecar/scene_artifact.rs"),
@@ -188,6 +189,7 @@ fn scan_production(root: &Path) -> io::Result<()> {
                 Path::new("src/sidecar/process.rs"),
                 Path::new("src/sidecar/supervisor.rs"),
                 Path::new("src/sidecar/supervisor/tests.rs"),
+                Path::new("src/appearance_preferences/storage.rs"),
                 Path::new("src/state/app_theme.rs"),
                 Path::new("src/state/theme_lab.rs"),
                 // Release smoke filesystem owner: validates the harness smoke directory, resolves
@@ -321,6 +323,48 @@ fn recursive_scanner_detects_a_synthetic_forbidden_module() -> io::Result<()> {
 }
 
 #[test]
+fn paired_v2_authentication_filesystem_authority_is_confined_to_its_owner() -> io::Result<()> {
+    let root = fixture_root("paired-v2-auth-owner");
+    write_fixture(&root, None, false)?;
+    let paired = root.join("src/app_theme/paired_v2_authentication.rs");
+    fs::write(&paired, "use std::fs;\n")?;
+    assert!(scan_production(&root).is_ok());
+    fs::write(
+        &paired,
+        "use std::fs;\nfn spawn() { std::process::Command::new(\"sh\"); }\n",
+    )?;
+    assert!(scan_production(&root).is_err());
+    fs::write(&paired, "use std::fs;\n")?;
+    fs::write(root.join("src/app_theme/mod.rs"), "use std::fs;\n")?;
+    assert!(scan_production(&root).is_err());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn appearance_preferences_storage_filesystem_authority_is_confined_to_its_owner() -> io::Result<()>
+{
+    let root = fixture_root("appearance-preferences-owner");
+    write_fixture(&root, None, false)?;
+    let storage = root.join("src/appearance_preferences/storage.rs");
+    fs::write(&storage, "use std::fs;\n")?;
+    assert!(scan_production(&root).is_ok());
+    fs::write(
+        &storage,
+        "use std::fs;\nfn spawn() { std::process::Command::new(\"sh\"); }\n",
+    )?;
+    assert!(scan_production(&root).is_err());
+    fs::write(&storage, "use std::fs;\n")?;
+    fs::write(
+        root.join("src/appearance_preferences/mod.rs"),
+        "use std::fs;\n",
+    )?;
+    assert!(scan_production(&root).is_err());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn recursive_scanner_detects_a_missing_expected_file() -> io::Result<()> {
     let root = fixture_root("missing");
     write_fixture(&root, Some("src/sidecar/protocol.rs"), false)?;
@@ -356,7 +400,7 @@ fn scene_runner_test_fields_do_not_truncate_production_scan() -> io::Result<()> 
 fn single_maintained_native_source_inventory_is_exact_and_complete() -> io::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let inventory_files = load_maintained_source_inventory(root)?;
-    assert_eq!(inventory_files.len(), 73);
+    assert_eq!(inventory_files.len(), 90);
     let files = maintained_rust_files(root)?;
     for expected in &inventory_files {
         let expected_path = root.join("src").join(expected);
