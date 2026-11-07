@@ -1,0 +1,291 @@
+.paired-v2-authoring-panel {
+  display: grid;
+  gap: 1rem;
+  max-width: 72rem;
+  padding: 1.25rem;
+  color: #e7edf5;
+  background: #111821;
+  border: 1px solid #2a3848;
+  border-radius: 0.9rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-panel-header,
+.paired-v2-authoring-panel .paired-v2-section-heading,
+.paired-v2-authoring-panel .paired-v2-source-summary,
+.paired-v2-authoring-panel .paired-v2-actions,
+.paired-v2-authoring-panel .paired-v2-previews {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.paired-v2-authoring-panel .paired-v2-eyebrow,
+.paired-v2-authoring-panel .paired-v2-source-name,
+.paired-v2-authoring-panel .paired-v2-muted,
+.paired-v2-authoring-panel .paired-v2-field-hint,
+.paired-v2-authoring-panel .paired-v2-preview-empty p {
+  margin: 0.2rem 0 0;
+  color: #9aabbd;
+  font-size: 0.85rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-eyebrow {
+  margin-top: 0;
+  color: #82c7ff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.paired-v2-authoring-panel h2,
+.paired-v2-authoring-panel h3,
+.paired-v2-authoring-panel p {
+  margin-bottom: 0;
+}
+
+.paired-v2-authoring-panel h2 {
+  margin-top: 0.15rem;
+  font-size: 1.45rem;
+}
+
+.paired-v2-authoring-panel h3 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-source-name {
+  color: #f3f6fb;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.paired-v2-authoring-panel .paired-v2-status-pill {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  color: #111821;
+  background: #9aabbd;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.paired-v2-authoring-panel .paired-v2-status-pill.ready {
+  background: #9ee6bd;
+}
+
+.paired-v2-authoring-panel .paired-v2-status-pill.unavailable {
+  background: #f5bd9d;
+}
+
+.paired-v2-authoring-panel .paired-v2-message,
+.paired-v2-authoring-panel .paired-v2-empty-state,
+.paired-v2-authoring-panel .paired-v2-saved-lock,
+.paired-v2-authoring-panel .paired-v2-source-summary,
+.paired-v2-authoring-panel .paired-v2-controls,
+.paired-v2-authoring-panel .paired-v2-compile-review,
+.paired-v2-authoring-panel .paired-v2-preview-empty {
+  padding: 0.85rem;
+  border: 1px solid #2a3848;
+  border-radius: 0.65rem;
+  background: #151f2b;
+}
+
+.paired-v2-authoring-panel .paired-v2-message.error {
+  border-color: #a75f5f;
+  color: #ffc3b8;
+}
+
+.paired-v2-authoring-panel .paired-v2-empty-state {
+  color: #d7e0ea;
+}
+
+.paired-v2-authoring-panel .paired-v2-empty-state p {
+  margin-top: 0.45rem;
+  color: #9aabbd;
+}
+
+.paired-v2-authoring-panel .paired-v2-source-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.paired-v2-authoring-panel .paired-v2-source-summary div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-source-summary span {
+  color: #9aabbd;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.paired-v2-authoring-panel .paired-v2-source-summary strong {
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-control-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-control-grid label {
+  display: grid;
+  gap: 0.4rem;
+  color: #d7e0ea;
+  font-size: 0.86rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-control-grid label small {
+  color: #9aabbd;
+}
+
+.paired-v2-authoring-panel input {
+  min-width: 0;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid #43566b;
+  border-radius: 0.4rem;
+  color: #f3f6fb;
+  background: #0e151e;
+}
+
+.paired-v2-authoring-panel input:focus-visible,
+.paired-v2-authoring-panel button:focus-visible,
+.paired-v2-authoring-panel summary:focus-visible {
+  outline: 2px solid #82c7ff;
+  outline-offset: 2px;
+}
+
+.paired-v2-authoring-panel .paired-v2-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.paired-v2-authoring-panel .paired-v2-mode-buttons,
+.paired-v2-authoring-panel .paired-v2-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.paired-v2-authoring-panel button {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #52718d;
+  border-radius: 0.4rem;
+  color: #eff7ff;
+  background: #1e3850;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.paired-v2-authoring-panel button.secondary {
+  color: #d7e0ea;
+  background: transparent;
+}
+
+.paired-v2-authoring-panel button.selected {
+  border-color: #9ee6bd;
+  color: #0d2018;
+  background: #9ee6bd;
+}
+
+.paired-v2-authoring-panel button:disabled,
+.paired-v2-authoring-panel input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.paired-v2-authoring-panel .paired-v2-saved-lock {
+  margin-top: 0.85rem;
+  border-color: #a9854b;
+  color: #ffdca0;
+}
+
+.paired-v2-authoring-panel .paired-v2-compile-review,
+.paired-v2-authoring-panel .paired-v2-previews {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-review-identity {
+  color: #9ee6bd;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.paired-v2-authoring-panel .paired-v2-details-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-target-details {
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #2a3848;
+  border-radius: 0.5rem;
+  background: #101923;
+}
+
+.paired-v2-authoring-panel .paired-v2-target-details summary {
+  cursor: pointer;
+  color: #d7e0ea;
+  font-weight: 600;
+}
+
+.paired-v2-authoring-panel .paired-v2-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0.8rem 0 0;
+}
+
+.paired-v2-authoring-panel .paired-v2-summary-grid div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-summary-grid dt {
+  color: #9aabbd;
+  font-size: 0.72rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-summary-grid dd {
+  margin: 0;
+  color: #f3f6fb;
+  font-weight: 700;
+}
+
+.paired-v2-authoring-panel .paired-v2-diagnostics,
+.paired-v2-authoring-panel .paired-v2-mapping-list {
+  margin: 0.7rem 0 0;
+  padding-left: 1.1rem;
+  color: #f3c9ad;
+  font-size: 0.82rem;
+}
+
+.paired-v2-authoring-panel .paired-v2-diagnostics span {
+  color: #f5bd9d;
+  font-weight: 700;
+}
+
+.paired-v2-authoring-panel .paired-v2-previews > * {
+  min-width: 0;
+}
+
+@media (max-width: 48rem) {
+  .paired-v2-authoring-panel .paired-v2-source-summary,
+  .paired-v2-authoring-panel .paired-v2-control-grid,
+  .paired-v2-authoring-panel .paired-v2-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .paired-v2-authoring-panel .paired-v2-panel-header,
+  .paired-v2-authoring-panel .paired-v2-section-heading {
+    display: grid;
+  }
+}

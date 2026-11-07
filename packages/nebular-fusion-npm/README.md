@@ -1,6 +1,6 @@
 # Theme Forge Nebular Fusion
 
-Theme Forge Nebular Fusion 0.7.1 is a native desktop GUI distributed through a
+Theme Forge Nebular Fusion 0.8.0 is a native desktop GUI distributed through a
 small npm wrapper. The wrapper selects exactly one optional platform package:
 `darwin-arm64` (Apple Silicon), `linux-arm64`, or `linux-x64` (AMD64). The
 wrapper owns the `tfnf` command; platform packages do not install competing
@@ -12,11 +12,11 @@ Install the wrapper with npm. npm selects the optional native package for the
 host when the matching package is available:
 
 ```console
-$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.7.1
+$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.8.0
 $ tfnf --version
-theme-forge-nebular-fusion 0.7.1 (<host-target>)
+theme-forge-nebular-fusion 0.8.0 (<host-target>)
 $ tfnf --help
-Theme Forge Nebular Fusion 0.7.1
+Theme Forge Nebular Fusion 0.8.0
 Usage: tfnf [--version|--help|--path]
 Normal invocation launches the installed GUI.
 ```
@@ -35,12 +35,16 @@ The measured compatibility floors are glibc 2.36 for Linux AMD64 and glibc
 2.35 for Linux ARM64. See the release receipts for target-specific native
 GUI qualification; optional-package presence alone does not establish it.
 
-This package does not assert a macOS minimum version. Use a separately
-qualified Darwin ARM64 artifact and its release instructions. The Darwin
-developer app archive is ad-hoc-signed; it is not Developer ID signed and no
-notarization is claimed. The Homebrew cask remains withheld pending those
-distribution gates. Do not bypass Gatekeeper or remove quarantine as an
-installation workaround.
+Nebular 0.8 targets macOS 13.3 or later on the Darwin ARM64 path. This is a
+candidate deployment policy, not a claim that a 0.8 artifact has been built,
+signed, notarized, or natively qualified. Use only a separately qualified
+Darwin ARM64 artifact and its release instructions. The native qualification
+gate must still prove the shipped Tauri WebView behavior, including the Solar
+Sail constructable-sheet preview and Starlight under the effective CSP.
+
+Darwin distribution remains withheld pending those build, signing,
+notarization, and native qualification gates. Do not bypass Gatekeeper or
+remove quarantine as an installation workaround.
 
 ## Payload verification
 

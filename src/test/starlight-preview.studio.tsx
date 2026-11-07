@@ -3,6 +3,7 @@ import { StarlightPreview } from "../features/theme-lab/StarlightPreview";
 import { SAMPLE_THEME_V2, type ThemeSpecificationV2 } from "../features/theme-lab/v2-model";
 import { BRIDGE_CONTRACT, GALLERY_BRIDGE_CSS_BYTE_CEILING, GALLERY_COVERAGE, GALLERY_SCENARIOS,
   isThemeAppliedBridgeAck, normalizeCommandAttemptResult, resolveDraftGallerySelection, validatePreSendCss } from "../features/theme-lab/gallery-contract";
+import type { PreviewApplicationState } from "../features/application-theme/preview-application-state";
 
 function draft(): ThemeSpecificationV2 {
   const spec = structuredClone(SAMPLE_THEME_V2);
@@ -120,8 +121,34 @@ describe("preview application lifecycle", () => {
   });
 
   it("preserves the explicit legacy-v1 acknowledgement path", () => {
-    render(<StarlightPreview css="body {}" revision={2} mode="dark" />);
+    const states: PreviewApplicationState[] = [];
+    render(<StarlightPreview css="body {}" revision={2} mode="dark" onPreviewState={state => states.push(state)} />);
     const {frame, post} = load(); reply(frame, post.mock.calls.at(-1)![0]);
     expect(screen.getByText("Rev: 2")).toBeTruthy();
+    expect(states.at(-1)).toMatchObject({ state: "applied", revision: 2 });
+    expect(states.at(-1)).not.toHaveProperty("applicationId");
+  });
+
+  it("opts neutral preview into the existing v2 correlation contract", () => {
+    const states: PreviewApplicationState[] = [];
+    render(<StarlightPreview css="body {}" revision={5} mode="dark" requireCorrelatedAck onPreviewState={state => states.push(state)} />);
+    const {frame, post} = load();
+    const sent = post.mock.calls.at(-1)![0] as Record<string, unknown>;
+    expect(sent.frameGeneration).toEqual(expect.any(Number));
+    expect(sent.scenarioId).toEqual(expect.any(String));
+    expect(sent.applicationId).toEqual(expect.any(String));
+    reply(frame, sent);
+    expect(screen.getByText("Rev: 5")).toBeTruthy();
+    expect(states.at(-1)).toMatchObject({ state: "applied", revision: 5, computedToken: "#123456", applicationId: sent.applicationId });
+  });
+
+  it("rejects a correlated neutral acknowledgement without a computed accent", () => {
+    const states: PreviewApplicationState[] = [];
+    render(<StarlightPreview css="body {}" revision={6} mode="dark" requireCorrelatedAck onPreviewState={state => states.push(state)} />);
+    const {frame, post} = load();
+    const sent = post.mock.calls.at(-1)![0] as Record<string, unknown>;
+    reply(frame, sent, { computedAccent: "" });
+    expect(screen.getByRole("alert").textContent).toContain("no bounded accent token");
+    expect(states.at(-1)).toMatchObject({ state: "failed", revision: 6, applicationId: sent.applicationId });
   });
 });

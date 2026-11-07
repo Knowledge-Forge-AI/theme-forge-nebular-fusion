@@ -5,7 +5,7 @@
  *
  * Responsibilities:
  * 1. Collect reachable Cargo runtime and build dependencies (including proc-macros, excluding dev-only).
- * 2. Collect root legal notices (LICENSE, NOTICE, COMMERCIAL-LICENSE.md, node-LICENSE.txt).
+ * 2. Collect root legal notices plus the authenticated first-party paired-v2 source notice packet.
  * 3. Collect shipped frontend distributed npm dependency notices (react, react-dom, scheduler, @tauri-apps/api).
  * 4. Copy license and notice materials into package-name-version paths under output directory.
  * 5. Record SPDX license expressions and source checksums from Cargo.lock / package-lock.json.
@@ -90,6 +90,21 @@ const DEFAULT_UI_BUNDLED_DEPENDENCIES = Object.freeze([
     noticeFile: "is-decimal-2.0.1-license",
   },
 ]);
+const PAIRED_V2_NOTICE_MANIFEST_RELATIVE = "legal/paired-v2-sources/manifest.json";
+const PAIRED_V2_NOTICE_OUTPUT_PREFIX = "first-party/paired-v2-sources";
+const PAIRED_V2_NOTICE_NAMES = Object.freeze(["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md"]);
+const PAIRED_V2_PROJECTED_PATHS = Object.freeze([
+  "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs",
+  "src-tauri/solar-sail-adapter/common-sttn-template.json",
+]);
+const PAIRED_V2_PROJECTED_HASHES = Object.freeze({
+  "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs": "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06",
+  "src-tauri/solar-sail-adapter/common-sttn-template.json": "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324",
+});
+const PAIRED_V2_PROJECTED_SOURCES = Object.freeze({
+  "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs": "tools/appearance-catalog-lib.mjs",
+  "src-tauri/solar-sail-adapter/common-sttn-template.json": "tools/source/sttn/v0.4/terminal-nova.theme.json",
+});
 
 /** @typedef {{pkg: string, dep_kinds?: Array<{kind: string | null}>}} CargoDependency */
 /** @typedef {{id: string, deps: CargoDependency[]}} CargoResolveNode */
@@ -111,6 +126,9 @@ const DEFAULT_UI_BUNDLED_DEPENDENCIES = Object.freeze([
 /** @typedef {{schema?: string, packages: SupplementalPackage[], frontendFixture?: SupplementalFrontendFixture, frontendPackages?: SupplementalFrontendPackage[]}} SupplementalManifest */
 /** @typedef {{fileName: string, sourcePath: string | null, relativePath: string, bytes?: Buffer}} NoticeFile */
 /** @typedef {{name: string, sourcePath: string, relativePath: string}} RootNotice */
+/** @typedef {{name: string, sourcePath: string, relativePath: string, sha256: string}} PairedV2NoticeFile */
+/** @typedef {{id: string, project: string, repository: string, repositoryPath?: string, noticeDirectory: string, noticeFiles: PairedV2NoticeFile[], projectedFiles: Array<{sourcePath: string, outputPath: string, sha256: string, present: boolean}>}} PairedV2NoticeGroup */
+/** @typedef {{status: string, manifestPath: string, manifestRelativePath: string, manifestBytes: Buffer, manifestSha256: string, groups: PairedV2NoticeGroup[]}} PairedV2Notices */
 /** @typedef {{name: string, version: string, license: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} NpmNoticePackage */
 /** @typedef {{name: string, version: string, license: string | null, isProcMacro: boolean, checksum: string | null, dirName: string, files: NoticeFile[], hasLicenseText: boolean}} CrateNoticePackage */
 /** @typedef {{name: string, version: string, license: string | null, failureReason: string | null}} MissingMaterial */
@@ -122,7 +140,7 @@ const DEFAULT_UI_BUNDLED_DEPENDENCIES = Object.freeze([
 /** @typedef {{name?: string, version?: string, license?: string, files?: ManifestFile[]}} ManifestRoot */
 /** @typedef {{status?: string, missingRequiredMaterial?: MissingMaterial[]}} ManifestValidation */
 /** @typedef {{name: string, version: string, license: string, role: string, files: ManifestFile[], hasLicenseText: boolean, lockPackagePath: string, packageManifestSha256: string, fixtureLockSha256: string, licenseSourcePackage?: string, embeddedProvenance?: SupplementalFrontendProvenance}} ManifestFrontendPackage */
-/** @typedef {{root?: ManifestRoot, npm?: ManifestNpmPackage[], frontend?: ManifestFrontendPackage[], crates?: ManifestCrate[], validation?: ManifestValidation}} ManifestData */
+/** @typedef {{root?: ManifestRoot, npm?: ManifestNpmPackage[], frontend?: ManifestFrontendPackage[], crates?: ManifestCrate[], pairedV2Sources?: {status: string, manifest: string, manifestSha256?: string, groups: Array<{id: string, project: string, repository: string, repositoryPath?: string, sourceFiles: Array<{sourcePath: string, outputPath: string, sha256: string, present: boolean}>, noticeFiles: string[]}>}, validation?: ManifestValidation}} ManifestData */
 
 /**
  * Validates and normalizes a relative path string.
@@ -457,6 +475,220 @@ export function collectRootNotices(studioRoot = STUDIO_ROOT, options = {}) {
   return rootNotices;
 }
 
+function exactPairedV2Object(value, keys, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Invalid paired-v2 notice ${label}`);
+  }
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`Invalid paired-v2 notice ${label} keys`);
+  }
+  return value;
+}
+
+function pairedV2Text(value, label, maximum = 512) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum || /[\r\n]/u.test(value)) {
+    throw new Error(`Invalid paired-v2 notice ${label}`);
+  }
+  return value;
+}
+
+function pairedV2Sha256(value, label) {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new Error(`Invalid paired-v2 notice ${label} digest`);
+  }
+  return value;
+}
+
+function pairedV2PublicRepository(value, label) {
+  const repository = pairedV2Text(value, label, 256);
+  if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+    throw new Error(`Invalid paired-v2 public repository reference: ${label}`);
+  }
+  return repository;
+}
+
+function pairedV2Path(value, label) {
+  return normalizeSafeRelativePath(pairedV2Text(value, label, MAX_PATH_BYTES));
+}
+
+/** @param {unknown} value @returns {Array<Record<string, unknown>>} */
+function validatePairedV2Manifest(value) {
+  const root = exactPairedV2Object(value, ["groups", "schema", "status"], "manifest");
+  if (root.schema !== "theme-forge.first-party-v2-notice-manifest.v1") {
+    throw new Error("Invalid paired-v2 notice manifest schema");
+  }
+  if (root.status !== "firstparty-unreleased-source-projection") {
+    throw new Error("Invalid paired-v2 notice manifest status");
+  }
+  if (!Array.isArray(root.groups) || root.groups.length !== 2) {
+    throw new Error("Paired-v2 notice manifest must contain exactly two project groups");
+  }
+
+  const groups = root.groups.map((rawGroup, groupIndex) => {
+    if (typeof rawGroup !== "object" || rawGroup === null || Array.isArray(rawGroup)) {
+      throw new Error(`Invalid paired-v2 notice group ${groupIndex}`);
+    }
+    const hasRepositoryPath = Object.prototype.hasOwnProperty.call(rawGroup, "repositoryPath");
+    const group = exactPairedV2Object(
+      rawGroup,
+      ["id", "project", "repository", "noticeDirectory", "noticeFiles", "projectedFiles", ...(hasRepositoryPath ? ["repositoryPath"] : [])],
+      `group ${groupIndex}`,
+    );
+    const id = pairedV2Text(group.id, `group ${groupIndex} id`, 64);
+    if (!/^[a-z0-9-]+$/u.test(id)) throw new Error(`Invalid paired-v2 notice group id: ${id}`);
+    const project = pairedV2Text(group.project, `group ${id} project`, 200);
+    const repository = pairedV2PublicRepository(group.repository, `group ${id} repository`);
+    const repositoryPath = hasRepositoryPath ? pairedV2Path(group.repositoryPath, `group ${id} repositoryPath`) : undefined;
+    const noticeDirectory = pairedV2Path(group.noticeDirectory, `group ${id} noticeDirectory`);
+    if (noticeDirectory !== id) throw new Error(`Paired-v2 notice directory must equal group id: ${id}`);
+    if (!Array.isArray(group.noticeFiles) || group.noticeFiles.length !== PAIRED_V2_NOTICE_NAMES.length) {
+      throw new Error(`Paired-v2 notice group ${id} must declare its complete notice set`);
+    }
+    const noticeNames = group.noticeFiles.map((rawFile, fileIndex) => {
+      const file = exactPairedV2Object(rawFile, ["name", "sha256"], `group ${id} notice ${fileIndex}`);
+      const name = pairedV2Text(file.name, `group ${id} notice ${fileIndex} name`, 128);
+      if (!PAIRED_V2_NOTICE_NAMES.includes(name)) throw new Error(`Unknown paired-v2 notice file: ${id}/${name}`);
+      return { name, sha256: pairedV2Sha256(file.sha256, `group ${id}/${name}`) };
+    });
+    if (new Set(noticeNames.map(({ name }) => name)).size !== PAIRED_V2_NOTICE_NAMES.length
+      || !PAIRED_V2_NOTICE_NAMES.every((name) => noticeNames.some((file) => file.name === name))) {
+      throw new Error(`Paired-v2 notice group ${id} must declare LICENSE, NOTICE, and COMMERCIAL-LICENSE.md exactly once`);
+    }
+    if (!Array.isArray(group.projectedFiles)) throw new Error(`Invalid paired-v2 projected file list: ${id}`);
+    const projectedFiles = group.projectedFiles.map((rawFile, fileIndex) => {
+      const file = exactPairedV2Object(rawFile, ["sourcePath", "outputPath", "sha256"], `group ${id} projected ${fileIndex}`);
+      return {
+        sourcePath: pairedV2Path(file.sourcePath, `group ${id} projected ${fileIndex} sourcePath`),
+        outputPath: pairedV2Path(file.outputPath, `group ${id} projected ${fileIndex} outputPath`),
+        sha256: pairedV2Sha256(file.sha256, `group ${id} projected ${fileIndex}`),
+      };
+    });
+    return { id, project, repository, ...(repositoryPath ? { repositoryPath } : {}), noticeDirectory, noticeNames, projectedFiles };
+  });
+
+  if (new Set(groups.map(({ id }) => id)).size !== groups.length || !groups.some(({ id }) => id === "cttn") || !groups.some(({ id }) => id === "sttn")) {
+    throw new Error("Paired-v2 notice manifest must contain cttn and sttn groups exactly once");
+  }
+  const projected = groups.flatMap(({ projectedFiles }) => projectedFiles);
+  const projectedPaths = projected.map(({ outputPath }) => outputPath).sort();
+  const expectedPaths = [...PAIRED_V2_PROJECTED_PATHS].sort();
+  if (projectedPaths.length !== expectedPaths.length || projectedPaths.some((path, index) => path !== expectedPaths[index])) {
+    throw new Error("Paired-v2 projected source inventory is not the closed two-file set");
+  }
+  for (const file of projected) {
+    if (PAIRED_V2_PROJECTED_HASHES[file.outputPath] !== file.sha256) {
+      throw new Error(`Paired-v2 projected source digest is not the admitted digest: ${file.outputPath}`);
+    }
+    if (PAIRED_V2_PROJECTED_SOURCES[file.outputPath] !== file.sourcePath) {
+      throw new Error(`Paired-v2 projected source path is not the admitted path: ${file.outputPath}`);
+    }
+  }
+  return groups;
+}
+
+function pathIsPresent(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Authenticates the bounded first-party paired-v2 notice packet and its source
+ * projection. The manifest is optional for legacy/partial fixtures, but any
+ * projected paired-v2 source member without that manifest fails closed.
+ * @param {string} studioRoot
+ * @returns {PairedV2Notices | null}
+ */
+export function collectPairedV2SourceNotices(studioRoot = STUDIO_ROOT) {
+  const manifestPath = resolve(studioRoot, PAIRED_V2_NOTICE_MANIFEST_RELATIVE);
+  const manifestSnapshot = readRegularSnapshot(manifestPath, {
+    bindPath: true,
+    missingOk: true,
+    label: "Paired-v2 source notice manifest",
+    maxBytes: 256 * 1024,
+  });
+  const projectedPresentWithoutManifest = PAIRED_V2_PROJECTED_PATHS.filter((path) => pathIsPresent(resolve(studioRoot, path)));
+  if (!manifestSnapshot) {
+    if (projectedPresentWithoutManifest.length > 0) {
+      throw new Error("Paired-v2 source code is present but its legal notice manifest is absent");
+    }
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(manifestSnapshot.bytes.toString("utf8"));
+  } catch {
+    throw new Error("Paired-v2 source notice manifest is not valid JSON");
+  }
+  const groups = validatePairedV2Manifest(parsed);
+  /** @type {PairedV2NoticeGroup[]} */
+  const outputGroups = [];
+  for (const group of groups) {
+    const projectedFiles = [];
+    for (const source of group.projectedFiles) {
+      const outputPath = resolve(studioRoot, source.outputPath);
+      const snapshot = readRegularSnapshot(outputPath, {
+        bindPath: true,
+        missingOk: true,
+        label: `Paired-v2 projected source ${source.outputPath}`,
+        maxBytes: 16 * 1024 * 1024,
+      });
+      if (snapshot && snapshot.sha256 !== source.sha256) {
+        throw new Error(`Paired-v2 projected source digest mismatch: ${source.outputPath}`);
+      }
+      projectedFiles.push({ ...source, present: snapshot !== null });
+    }
+    const presentCount = projectedFiles.filter(({ present }) => present).length;
+    if (presentCount > 0 && presentCount !== projectedFiles.length) {
+      throw new Error(`Paired-v2 projected source inventory is partial: ${group.id}`);
+    }
+
+    const noticeFiles = [];
+    for (const declared of group.noticeNames) {
+      const sourcePath = resolve(manifestPath, "..", group.noticeDirectory, declared.name);
+      const snapshot = readRegularSnapshot(sourcePath, {
+        bindPath: true,
+        label: `Paired-v2 ${group.id}/${declared.name}`,
+        maxBytes: 256 * 1024,
+      });
+      if (!snapshot || snapshot.sha256 !== declared.sha256) {
+        throw new Error(`Paired-v2 notice bytes mismatch: ${group.id}/${declared.name}`);
+      }
+      noticeFiles.push({
+        name: declared.name,
+        sourcePath,
+        sha256: snapshot.sha256,
+        relativePath: normalizeSafeRelativePath(`${PAIRED_V2_NOTICE_OUTPUT_PREFIX}/${group.id}/${declared.name}`),
+      });
+    }
+    outputGroups.push({
+      id: group.id,
+      project: group.project,
+      repository: group.repository,
+      ...(group.repositoryPath ? { repositoryPath: group.repositoryPath } : {}),
+      noticeDirectory: group.noticeDirectory,
+      noticeFiles,
+      projectedFiles,
+    });
+  }
+
+  return {
+    status: parsed.status,
+    manifestPath,
+    manifestRelativePath: normalizeSafeRelativePath(`${PAIRED_V2_NOTICE_OUTPUT_PREFIX}/manifest.json`),
+    manifestBytes: manifestSnapshot.bytes,
+    manifestSha256: manifestSnapshot.sha256,
+    groups: outputGroups,
+  };
+}
+
 /**
  * Normalizes npm package names for directory paths (e.g. '@tauri-apps/api' -> 'tauri-apps-api').
  */
@@ -601,6 +833,29 @@ export function renderThirdPartyNoticesJson(manifestData) {
     })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
+  if (manifestData.pairedV2Sources) {
+    cleanManifest.pairedV2Sources = {
+      status: manifestData.pairedV2Sources.status,
+      manifest: normalizeSafeRelativePath(manifestData.pairedV2Sources.manifest),
+      ...(typeof manifestData.pairedV2Sources.manifestSha256 === "string"
+        ? { manifestSha256: pairedV2Sha256(manifestData.pairedV2Sources.manifestSha256, "rendered manifest") }
+        : {}),
+      groups: [...manifestData.pairedV2Sources.groups].map((group) => ({
+        id: group.id,
+        project: group.project,
+        repository: group.repository,
+        ...(group.repositoryPath ? { repositoryPath: normalizeSafeRelativePath(group.repositoryPath) } : {}),
+        sourceFiles: [...group.sourceFiles].map((file) => ({
+          sourcePath: normalizeSafeRelativePath(file.sourcePath),
+          outputPath: normalizeSafeRelativePath(file.outputPath),
+          sha256: pairedV2Sha256(file.sha256, `rendered ${group.id} source`),
+          present: Boolean(file.present),
+        })).sort((a, b) => (a.outputPath < b.outputPath ? -1 : a.outputPath > b.outputPath ? 1 : 0)),
+        noticeFiles: [...group.noticeFiles].map((file) => normalizeSafeRelativePath(file)).sort(),
+      })).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    };
+  }
+
   return `${JSON.stringify(cleanManifest, null, 2)}\n`;
 }
 
@@ -636,6 +891,33 @@ export function renderThirdPartyNoticesMarkdown(manifestData) {
     lines.push(`- \`${rf}\``);
   }
   lines.push("");
+
+  const pairedV2Sources = manifestData.pairedV2Sources;
+  if (pairedV2Sources) {
+    lines.push("---");
+    lines.push("");
+    lines.push("## First-Party Paired v2 Source Attribution");
+    lines.push("");
+    lines.push(`- **Status:** ${pairedV2Sources.status}`);
+    lines.push(`- **Manifest:** \`${pairedV2Sources.manifest}\``);
+    lines.push("");
+    for (const group of [...pairedV2Sources.groups].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+      lines.push(`### ${group.project}`);
+      lines.push("");
+      lines.push(`- **Repository reference:** ${group.repository}`);
+      if (group.repositoryPath) lines.push(`- **Repository-relative source:** \`${group.repositoryPath}\``);
+      const sourceFiles = [...group.sourceFiles].sort((a, b) => (a.outputPath < b.outputPath ? -1 : a.outputPath > b.outputPath ? 1 : 0));
+      if (sourceFiles.length > 0) {
+        lines.push("- **Projected source members:**");
+        for (const source of sourceFiles) {
+          lines.push(`  - \`${source.sourcePath}\` → \`${source.outputPath}\` (${source.present ? "present" : "not present in this fixture"})`);
+        }
+      }
+      lines.push("- **Preserved notice files:**");
+      for (const file of [...group.noticeFiles].sort()) lines.push(`  - \`${file}\``);
+      lines.push("");
+    }
+  }
 
   lines.push("---");
   lines.push("");
@@ -1027,6 +1309,7 @@ export function collectFrontendSupplementalNotices(studioRoot, repoRoot, supplem
  * Main generator function.
  * Deterministically generates release-notices directory containing:
  * - root/ (copied first-party notices)
+ * - first-party/paired-v2-sources/ (authenticated shared first-party source notices and manifest)
  * - npm/ (copied frontend notices)
  * - crates/ (copied crate notices)
  * - THIRD-PARTY-NOTICES.json
@@ -1158,6 +1441,7 @@ export async function generateReleaseNotices(options = {}) {
 
   // 4. Collect root notices
   const rootNotices = collectRootNotices(studioRoot, options);
+  const pairedV2Sources = collectPairedV2SourceNotices(studioRoot);
 
   // 5. Collect npm notices
   const npmNotices = collectNpmDistributedNotices(studioRoot, options);
@@ -1192,6 +1476,21 @@ export async function generateReleaseNotices(options = {}) {
       license: "AGPL-3.0-or-later",
       files: rootNotices.map((n) => n.relativePath),
     },
+    ...(pairedV2Sources ? {
+      pairedV2Sources: {
+        status: pairedV2Sources.status,
+        manifest: pairedV2Sources.manifestRelativePath,
+        manifestSha256: pairedV2Sources.manifestSha256,
+        groups: pairedV2Sources.groups.map((group) => ({
+          id: group.id,
+          project: group.project,
+          repository: group.repository,
+          ...(group.repositoryPath ? { repositoryPath: group.repositoryPath } : {}),
+          sourceFiles: group.projectedFiles.map(({ sourcePath, outputPath, sha256: digest, present }) => ({ sourcePath, outputPath, sha256: digest, present })),
+          noticeFiles: group.noticeFiles.map(({ relativePath }) => relativePath),
+        })),
+      },
+    } : {}),
     npm: npmNotices.map((pkg) => ({
       name: pkg.name,
       version: pkg.version,
@@ -1240,6 +1539,7 @@ export async function generateReleaseNotices(options = {}) {
     // never silently retain or overwrite unrelated files in the output tree.
     const expectedPaths = new Set([
       ...rootNotices.map(item => item.relativePath),
+      ...(pairedV2Sources ? [pairedV2Sources.manifestRelativePath, ...pairedV2Sources.groups.flatMap((group) => group.noticeFiles.map((file) => file.relativePath))] : []),
       ...npmNotices.flatMap(item => item.files.map(file => file.relativePath)),
       ...frontendNotices.flatMap(item => item.files.map(file => file.relativePath)),
       ...crateInventory.flatMap(item => item.files.map(file => file.relativePath)),
@@ -1291,6 +1591,31 @@ export async function generateReleaseNotices(options = {}) {
         await cp(notice.sourcePath, dest);
         await chmod(dest, 0o644);
         writtenFiles.push(notice.relativePath);
+      }
+    }
+
+    if (pairedV2Sources) {
+      const pairedDir = joinSafeRelative(outDir, PAIRED_V2_NOTICE_OUTPUT_PREFIX);
+      await mkdir(pairedDir, { recursive: true });
+      await writeFile(joinSafeRelative(outDir, pairedV2Sources.manifestRelativePath), pairedV2Sources.manifestBytes);
+      await chmod(joinSafeRelative(outDir, pairedV2Sources.manifestRelativePath), 0o644);
+      writtenFiles.push(pairedV2Sources.manifestRelativePath);
+      for (const group of pairedV2Sources.groups) {
+        for (const file of group.noticeFiles) {
+          const dest = joinSafeRelative(outDir, file.relativePath);
+          await mkdir(dirname(dest), { recursive: true });
+          const snapshot = readRegularSnapshot(file.sourcePath, {
+            bindPath: true,
+            label: `Paired-v2 output notice ${group.id}/${file.name}`,
+            maxBytes: 256 * 1024,
+          });
+          if (!snapshot || snapshot.sha256 !== file.sha256) {
+            throw new Error(`Paired-v2 notice bytes changed before copy: ${group.id}/${file.name}`);
+          }
+          await writeFile(dest, snapshot.bytes);
+          await chmod(dest, 0o644);
+          writtenFiles.push(file.relativePath);
+        }
       }
     }
 

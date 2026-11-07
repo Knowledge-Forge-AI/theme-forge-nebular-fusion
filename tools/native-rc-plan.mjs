@@ -9,6 +9,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export const APPEARANCE_SCENARIOS = Object.freeze(["appearance-pair", "paired-v2"]);
 export const LANES = Object.freeze({
   "macos-arm64": Object.freeze({ platform: "darwin-arm64", runner: "macos-15", input: "macos_arm64", scenarios: Object.freeze(["A"]), manualConfirmation: true }),
   "linux-arm64": Object.freeze({ platform: "linux-arm64", runner: "ubuntu-24.04-arm", input: "linux_arm64", scenarios: Object.freeze(["B"]), manualConfirmation: false }),
@@ -17,6 +18,28 @@ export const LANES = Object.freeze({
 export const RETENTION = Object.freeze({ routine: 14, releaseCandidate: 90, diagnostics: 7, maximumPublic: 90 });
 
 const truthy = (value) => value === true || value === "true";
+
+function validateAppearanceScenarios(value) {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.some((scenario) => !APPEARANCE_SCENARIOS.includes(scenario))
+      || new Set(value).size !== value.length) {
+    throw new Error(`appearanceScenarios must be a non-empty subset of ${APPEARANCE_SCENARIOS.join(", ")}`);
+  }
+  return Object.freeze([...value]);
+}
+
+/**
+ * Reads the per-lane appearance declaration without making legacy plans opt in
+ * accidentally. An absent declaration is the maintained ordinary scenario set;
+ * a malformed declaration is rejected by the consuming evidence/index gate.
+ */
+export function appearanceScenariosForPlan(plan, laneName) {
+  const value = plan?.lanes?.[laneName]?.appearanceScenarios ?? plan?.appearanceScenarios;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length === 0 || value.some((scenario) => !APPEARANCE_SCENARIOS.includes(scenario))
+      || new Set(value).size !== value.length) return null;
+  return value;
+}
 
 function checkedIdentity({ sha, runId, runAttempt, version }) {
   if (!/^[a-f0-9]{40}$/.test(sha ?? "")) throw new Error("A full source commit SHA is required");
@@ -34,6 +57,7 @@ export function artifactName(kind, { lane, version, sha, runId, runAttempt }) {
  */
 export function planLanes(options) {
   const { eventName, inputs = {} } = options;
+  const appearanceScenarios = validateAppearanceScenarios(options.appearanceScenarios);
   checkedIdentity(options);
   let selected;
   let releaseCandidate = false;
@@ -49,6 +73,7 @@ export function planLanes(options) {
   const retentionDays = releaseCandidate ? RETENTION.releaseCandidate : RETENTION.routine;
   const lanes = Object.fromEntries(Object.entries(LANES).map(([name, lane]) => [name, {
     ...lane,
+    ...(appearanceScenarios === null ? {} : { appearanceScenarios }),
     selected: selected.includes(name),
     candidateArtifact: artifactName("candidate", { ...options, lane: name }),
     diagnosticsArtifact: artifactName("diagnostics", { ...options, lane: name }),
@@ -59,6 +84,7 @@ export function planLanes(options) {
     releaseCandidate,
     retentionDays,
     diagnosticsRetentionDays: RETENTION.diagnostics,
+    ...(appearanceScenarios === null ? {} : { appearanceScenarios }),
     source: { sha: options.sha, runId: String(options.runId), runAttempt: String(options.runAttempt), version: options.version },
     selected,
     lanes,
@@ -89,6 +115,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       runId: process.env.GITHUB_RUN_ID,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT,
       version,
+      appearanceScenarios: APPEARANCE_SCENARIOS,
     });
     const outputs = workflowOutputs(plan);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));

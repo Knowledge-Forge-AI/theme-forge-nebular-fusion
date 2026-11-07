@@ -4,6 +4,9 @@ import { FixtureStudioHostBridge } from "../host/studio-host-bridge";
 import { MockThemeLabBridge } from "../features/theme-lab/test/mock-bridge";
 import { MockAppThemeBridge } from "../features/application-theme/app-theme-bridge";
 import type { StudioHostBridge, StudioHostStatus } from "../protocol/contracts";
+import { createAppearanceController } from "../features/appearance/appearance-controller";
+import { bundledAppearanceCatalog } from "../features/appearance/bundled-appearance-catalog";
+import { StrictMode } from "react";
 
 const fixtureHostBridge = new FixtureStudioHostBridge();
 
@@ -32,6 +35,76 @@ function lifecycleBridge(
 }
 
 describe("TFSB47I sidecar host workbench", () => {
+  it("changes installed appearance without changing an edited profile, preview mode, or compile count", async () => {
+    const bridge = new MockAppThemeBridge();
+    const compile = vi.spyOn(bridge, "pairedCompile");
+    const reset = vi.spyOn(bridge, "reset");
+    const save = vi.spyOn(bridge, "saveProfile");
+    render(<App hostBridge={fixtureHostBridge} appThemeBridge={bridge} />);
+    fireEvent.click(screen.getByRole("button", { name: "Application Theme" }));
+    await screen.findByText("Paired theme compilation succeeded.");
+    fireEvent.change(screen.getByLabelText("Primary", { exact: true }), { target: { value: "#123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Edit Light Palette" }));
+    const inputs = () => [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(".application-theme-lab input, .application-theme-lab select")].map(input => input.value);
+    const before = inputs();
+    const count = compile.mock.calls.length;
+    fireEvent.change(screen.getByLabelText("Application appearance", { selector: "select" }), { target: { value: "terminal-nova" } });
+    fireEvent.change(screen.getByLabelText("Application display mode"), { target: { value: "dark" } });
+    expect(inputs()).toEqual(before);
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(screen.getByRole("heading", { name: "Design Tokens (light)" })).toBeTruthy();
+    expect(screen.getByText("Unsaved Changes")).toBeTruthy();
+    expect(compile).toHaveBeenCalledTimes(count);
+    expect(reset).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Save Profile…" }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(save.mock.calls[0]![0].profile?.palette.dark.primary).toBe("#123456");
+  });
+
+  it("keeps an adopted draft while its editor is hidden and releases it when appearance resets", async () => {
+    const appearance = createAppearanceController(bundledAppearanceCatalog);
+    const bridge = new MockAppThemeBridge();
+    const { unmount } = render(<StrictMode><App hostBridge={fixtureHostBridge} appThemeBridge={bridge} appearanceController={appearance} /></StrictMode>);
+    fireEvent.click(screen.getByRole("button", { name: "Application Theme" }));
+    await screen.findByText("Paired theme compilation succeeded.");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "My retained draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Compile Theme" }));
+    await screen.findByText("Paired theme compilation succeeded.");
+    fireEvent.click(screen.getByRole("button", { name: "Adopt as Draft" }));
+    expect(appearance.getSnapshot().hasDraft).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Brand / System" }));
+    expect(appearance.getSnapshot().hasDraft).toBe(true);
+    expect(document.querySelector(".work-area-application-theme")?.hasAttribute("inert")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Reset appearance" }));
+    expect(appearance.getSnapshot().hasDraft).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Application Theme" }));
+    expect(screen.getByLabelText("Name")).toHaveProperty("value", "My retained draft");
+    expect(screen.getByText("Unsaved Changes")).toBeTruthy();
+    unmount();
+    expect(appearance.getSnapshot().attached).toBe(false);
+  });
+
+  it("updates the editor after a late compile while retaining the selected appearance and baseline", async () => {
+    const appearance = createAppearanceController(bundledAppearanceCatalog);
+    const bridge = new MockAppThemeBridge();
+    const original = bridge.pairedCompile.bind(bridge);
+    let finish!: () => void;
+    bridge.pairedCompile = async (profile, revision) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return original(profile, revision);
+    };
+    render(<App hostBridge={fixtureHostBridge} appThemeBridge={bridge} appearanceController={appearance} />);
+    fireEvent.click(screen.getByRole("button", { name: "Application Theme" }));
+    fireEvent.change(screen.getByLabelText("Application appearance", { selector: "select" }), { target: { value: "terminal-nova" } });
+    const baseline = [...document.head.querySelectorAll("style")];
+    await act(async () => { finish(); });
+    await screen.findByText("Paired theme compilation succeeded.");
+    expect(appearance.getSnapshot().selection).toEqual({ kind: "pair-override", id: "terminal-nova" });
+    expect(appearance.getSnapshot().hasDraft).toBe(false);
+    expect([...document.head.querySelectorAll("style")]).toEqual(baseline);
+    expect(screen.queryByText(/Adopted theme candidate as unsaved draft/)).toBeNull();
+  });
+
   it("renders bounded diagnostics and the closed design exchange", async () => {
     render(<App hostBridge={fixtureHostBridge} />);
 

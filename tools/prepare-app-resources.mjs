@@ -10,6 +10,7 @@ import { targetForHost } from "./platform-targets.mjs";
 import { repositoryRootForStudio, preparationOptions, prepareSidecar } from "./sidecar-common.mjs";
 import { prepareLoom } from "./loom-prepare.mjs";
 import { prepareSolarSail, validateSolarSailBuildPin } from "./solar-sail-prepare.mjs";
+import { verifyPairedV2AdapterDirectory } from "./paired-v2-adapter-prepare.mjs";
 import { prepareScenePayload, sceneBinding, validateStructuredSceneBinding } from "./scene-prepare.mjs";
 import { generateReleaseNotices } from "./release-notices.mjs";
 import { loadBuildInputs, validateBuildInputs } from "./build-inputs.mjs";
@@ -131,6 +132,7 @@ const DEFAULT_STUDIO_ROOT = resolve(__dirname, "..");
  * @property {ResourceReceipt | undefined} [sidecar]
  * @property {ResourceReceipt | undefined} [loom]
  * @property {(ResourceReceipt & {version?: string, runtimeMemberCount?: number}) | undefined} [solarSail]
+ * @property {ResourceReceipt | undefined} [pairedV2Adapter]
  * @property {ResourceReceipt | undefined} [scene]
  * @property {ResourceReceipt | undefined} [releaseNotices]
  */
@@ -739,6 +741,9 @@ export async function prepareAppResources(options = {}) {
       throw new Error("[SOURCE_BUILD_PIN_INVARIANT_FAIL] Missing required solar build pin from prepareSolarSail");
     }
     receipts.solarSail = solarResult.binding ?? solarResult;
+    receipts.pairedV2Adapter = await verifyPairedV2AdapterDirectory(
+      join(studioRoot, "src-tauri", "solar-sail-adapter"),
+    );
     const sceneReceipt = await doPrepareScene({ studioRoot, burstRoot: authority.roots.burst,
       node: packagedRuntimeNodePath, destination: join(studioRoot, "src-tauri/scene-payload"), sourceIdentity: authority.inputs.source.identity });
     receipts.scene = sceneReceipt;
@@ -853,6 +858,15 @@ export async function prepareAppResources(options = {}) {
       ...(expectedSceneSha256 !== undefined ? { expectedSha256: expectedSceneSha256 } : {}),
     };
     receipts.scene = await prepareScenePayload(scenePreparationOptions);
+  }
+
+  // The adapter is a maintained source resource rather than a Solar package
+  // output.  Verify it only for a complete preparation; partial step runs are
+  // intentionally reported as partial and must not claim a closed resource set.
+  if (PREPARATION_STEPS.every(shouldRun)) {
+    receipts.pairedV2Adapter = await verifyPairedV2AdapterDirectory(
+      join(studioRoot, "src-tauri", "solar-sail-adapter"),
+    );
   }
 
   // 5. Release Notices Step

@@ -37,6 +37,7 @@ import {
   stagePreparedNeutralPreviewInput,
   verifyPreparedNeutralPreviewPostbuild,
 } from "./prepare-app-resources.mjs";
+import { PAIRED_V2_ADAPTER_INVENTORY } from "./paired-v2-adapter-prepare.mjs";
 
 import {
   PREPARED_PREVIEW_HANDOFF_SCHEMA,
@@ -629,6 +630,7 @@ describe("prepareAppResources orchestrator integration and CLI parsing", () => {
     assert.ok(receipt.receipts.solarSail);
     assert.equal(receipt.receipts.solarSail.version, EXPECTED_SOLAR_SAIL_VERSION);
     assert.ok(receipt.receipts.solarSail.runtimeMemberCount >= 42);
+    assert.equal(receipt.receipts.pairedV2Adapter, undefined, "partial preparation must not claim adapter closure");
     assert.ok(receipt.receipts.scene);
     assert.equal(receipt.receipts.scene.schema, "tfsb.scene-payload-receipt-v1");
 
@@ -661,6 +663,11 @@ describe("Declared build inputs resource preparation and TDZ regression", () => 
     await mkdir(join(studioRoot, "legal"), { recursive: true });
     await cp(join(REPO_ROOT, "apps/studio/legal/node-LICENSE.txt"), join(studioRoot, "legal/node-LICENSE.txt"));
     await mkdir(join(studioRoot, "src-tauri"), { recursive: true });
+    await cp(
+      join(STUDIO_ROOT, "src-tauri/solar-sail-adapter"),
+      join(studioRoot, "src-tauri/solar-sail-adapter"),
+      { recursive: true },
+    );
     await writeFile(join(studioRoot, "package.json"), JSON.stringify({ name: "theme-forge-nebular-fusion", version: CANDIDATE_VERSION }));
 
     const sourceRoot = join(fixtureDir, "source");
@@ -1186,6 +1193,7 @@ describe("Declared build inputs resource preparation and TDZ regression", () => 
 
       const result = await prepareAppResources({ buildInputs, studioRoot, _testOverrides: testOverrides });
       assert.equal(result.status, "pass");
+      assert.equal(result.receipts.pairedV2Adapter.files.length, PAIRED_V2_ADAPTER_INVENTORY.length);
       assert.equal(loomBuildNodeReceived, nodeStub, "Loom build step MUST use build-time Node A");
       assert.equal(scenePrepNodeReceived, embeddedPath, "Scene prep MUST use packaged Node B");
       assert.equal(sidecarPrepNodeReceived, embeddedPath, "Sidecar prep MUST use packaged Node B");

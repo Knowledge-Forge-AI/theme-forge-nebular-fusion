@@ -1,0 +1,295 @@
+{
+  "schema": "tf-paired-v2-edit-contract-fixture-v1",
+  "cases": [
+    {
+      "name": "clear-color-hover",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "color.dark.hover"
+      }
+    },
+    {
+      "name": "clear-color-active",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "color.light.active"
+      }
+    },
+    {
+      "name": "clear-radius-control",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "radius.control"
+      }
+    },
+    {
+      "name": "clear-radius-overlay",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "radius.overlay"
+      }
+    },
+    {
+      "name": "clear-selection-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "color.dark.selection"
+      }
+    },
+    {
+      "name": "clear-selection-text-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "color.light.selectionText"
+      }
+    },
+    {
+      "name": "clear-surface-radius-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "clear-optional",
+        "path": "radius.surface"
+      }
+    },
+    {
+      "name": "selection-opaque-hex",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-color",
+        "path": "color.dark.selection",
+        "value": "#123456"
+      }
+    },
+    {
+      "name": "selection-transparent-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-color",
+        "path": "color.dark.selection",
+        "value": "transparent"
+      }
+    },
+    {
+      "name": "selection-short-hex-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-color",
+        "path": "color.light.selectionText",
+        "value": "#12345"
+      }
+    },
+    {
+      "name": "typography-control-character-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "sans-serif\u0003"
+      }
+    },
+    {
+      "name": "typography-del-character-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "sans-serif\u007f"
+      }
+    },
+    {
+      "name": "ui-family-system",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.ui.family",
+        "value": "system-ui"
+      }
+    },
+    {
+      "name": "ui-family-monospace",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.ui.family",
+        "value": "monospace"
+      }
+    },
+    {
+      "name": "ui-family-custom-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.ui.family",
+        "value": "Inter"
+      }
+    },
+    {
+      "name": "surface-radius-rem",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-radius",
+        "path": "radius.surface",
+        "value": "0.5rem"
+      }
+    },
+    {
+      "name": "surface-radius-unitless-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-radius",
+        "path": "radius.surface",
+        "value": "8"
+      }
+    },
+    {
+      "name": "typography-size-number-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.size",
+        "value": 18
+      }
+    },
+    {
+      "name": "typography-family-number-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": 18
+      }
+    },
+    {
+      "name": "typography-size-string",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.size",
+        "value": "18px"
+      }
+    },
+    {
+      "name": "typography-line-height-string-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.lineHeight",
+        "value": "1.5"
+      }
+    },
+    {
+      "name": "typography-line-height-number",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.lineHeight",
+        "value": 1.5
+      }
+    },
+    {
+      "name": "typography-line-height-zero-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.lineHeight",
+        "value": 0
+      }
+    },
+    {
+      "name": "typography-line-height-over-ten-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.lineHeight",
+        "value": 10.1
+      }
+    },
+    {
+      "name": "font-item-99-utf8-bytes",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57"
+      }
+    },
+    {
+      "name": "font-item-102-utf8-bytes-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57\u5b57"
+      }
+    },
+    {
+      "name": "font-stack-499-bytes",
+      "expectedAllowed": true,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "font-stack-504-bytes-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "font-css-delimiter-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "sans;serif"
+      }
+    },
+    {
+      "name": "font-bidi-control-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.family",
+        "value": "sans\u202e"
+      }
+    },
+    {
+      "name": "typography-size-over-64-bytes-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-typography",
+        "path": "typography.body.size",
+        "value": "11111111111111111111111111111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "name": "color-over-nine-bytes-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-color",
+        "path": "color.dark.primaryAction",
+        "value": "#123456789"
+      }
+    },
+    {
+      "name": "radius-over-64-bytes-rejected",
+      "expectedAllowed": false,
+      "edit": {
+        "kind": "set-radius",
+        "path": "radius.control",
+        "value": "11111111111111111111111111111111111111111111111111111111111111111"
+      }
+    }
+  ]
+}

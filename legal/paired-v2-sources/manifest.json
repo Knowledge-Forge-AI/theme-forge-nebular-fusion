@@ -1,0 +1,60 @@
+{
+  "schema": "theme-forge.first-party-v2-notice-manifest.v1",
+  "status": "firstparty-unreleased-source-projection",
+  "groups": [
+    {
+      "id": "cttn",
+      "project": "Shadcn Theme Terminal Nova",
+      "repository": "https://github.com/Knowledge-Forge-AI/shadcn-theme-terminal-nova",
+      "noticeDirectory": "cttn",
+      "noticeFiles": [
+        {
+          "name": "LICENSE",
+          "sha256": "62eef07fc3ad238dd889ff98cf9ed87b3ef0f421579b6945f87ec37c608afb62"
+        },
+        {
+          "name": "NOTICE",
+          "sha256": "4b8edccf001fdfd460718d88d42ea0870110bfa2f4d9827c113b862694a79402"
+        },
+        {
+          "name": "COMMERCIAL-LICENSE.md",
+          "sha256": "9af80d5377cf29f76fda55b7ec8b5f16965366420639d2f81653a7d685dd073b"
+        }
+      ],
+      "projectedFiles": [
+        {
+          "sourcePath": "tools/appearance-catalog-lib.mjs",
+          "outputPath": "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs",
+          "sha256": "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06"
+        },
+        {
+          "sourcePath": "tools/source/sttn/v0.4/terminal-nova.theme.json",
+          "outputPath": "src-tauri/solar-sail-adapter/common-sttn-template.json",
+          "sha256": "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324"
+        }
+      ]
+    },
+    {
+      "id": "sttn",
+      "project": "Starlight Theme Terminal Nova",
+      "repository": "https://github.com/Knowledge-Forge-AI/starlight-theme-terminal-nova",
+      "repositoryPath": "terminal-nova.theme.json",
+      "noticeDirectory": "sttn",
+      "noticeFiles": [
+        {
+          "name": "LICENSE",
+          "sha256": "62eef07fc3ad238dd889ff98cf9ed87b3ef0f421579b6945f87ec37c608afb62"
+        },
+        {
+          "name": "NOTICE",
+          "sha256": "9955272d1e180019a90511b3edd5bebe38fb1cef1329f3c108924c16bab98ca8"
+        },
+        {
+          "name": "COMMERCIAL-LICENSE.md",
+          "sha256": "96b2d9ba30604c9724b6471cfe528e0805af96cd7bb67feb0a23b3793012f6eb"
+        }
+      ],
+      "projectedFiles": []
+    }
+  ]
+}

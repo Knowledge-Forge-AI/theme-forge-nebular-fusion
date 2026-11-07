@@ -1,0 +1,58 @@
+{
+  "name": "@knowledge-forge-ai/theme-forge-solar-sail",
+  "version": "0.3.0",
+  "description": "Tailwind v4 and shadcn/ui application theme compiler, library, and tfss CLI",
+  "private": false,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Knowledge-Forge-AI/theme-forge-solar-sail.git"
+  },
+  "homepage": "https://github.com/Knowledge-Forge-AI/theme-forge-solar-sail#readme",
+  "bugs": {
+    "url": "https://github.com/Knowledge-Forge-AI/theme-forge-solar-sail/issues"
+  },
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "bin": {
+    "tfss": "./bin/tfss.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "examples",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE",
+    "COMMERCIAL-LICENSE.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "22.20.1",
+    "playwright": "1.62.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  }
+}

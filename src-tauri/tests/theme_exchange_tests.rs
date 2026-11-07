@@ -539,6 +539,7 @@ fn theme_packet_export_absent_only_and_import_roundtrip() -> Result<(), Box<dyn 
     let export_req = ThemePacketExportRequest {
         packet_json: brief_json.clone(),
         default_name: None,
+        expected_kind: None,
     };
     let export_res = export_theme_packet_to_path(
         Some(target_file.clone()),

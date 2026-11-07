@@ -1,3 +1,7 @@
+import type {
+  PairedV2NativePacketEnvelope,
+} from "../application-theme/paired-v2-packets";
+
 export interface ThemePaletteAccent {
   base: string;
   low: string;
@@ -364,12 +368,14 @@ export interface ThemePacketImportResponse {
   canonicalJson?: string | undefined;
   kind?: string | undefined;
   digest?: string | undefined;
+  pairedV2?: PairedV2NativePacketEnvelope | undefined;
   error?: ThemeLabError | string | undefined;
 }
 
 export interface ThemePacketExportRequest {
   packetJson: string;
   defaultName?: string | undefined;
+  expectedKind?: string | undefined;
 }
 
 export interface ThemePacketExportResponse {
@@ -377,6 +383,7 @@ export interface ThemePacketExportResponse {
   cancelled: boolean;
   saved: boolean;
   digest?: string | undefined;
+  pairedV2?: PairedV2NativePacketEnvelope | undefined;
   error?: ThemeLabError | string | undefined;
 }
 

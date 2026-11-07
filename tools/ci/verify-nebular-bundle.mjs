@@ -8,6 +8,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { DEFAULT_TARGET, OPTIONAL_SCENE_RESOURCE, SOLAR_SAIL_RESOURCE } from "./verify-tauri-resource-closure.mjs";
+import { verifyPairedV2AdapterDirectory } from "../paired-v2-adapter-prepare.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
 
@@ -389,6 +390,30 @@ export async function verifyNebularBundle(options) {
     }
   }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
+  const configuredPairedV2AdapterResource = Array.isArray(tauri.bundle?.resources)
+    && tauri.bundle.resources.includes("solar-sail-adapter/**/*");
+  if (!configuredPairedV2AdapterResource) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] solar-sail-adapter/**/* is not declared in the bundle resources.");
+  }
+  const preparedPairedV2AdapterPath = join(STUDIO_ROOT, "src-tauri", "solar-sail-adapter");
+  const packedPairedV2AdapterPath = join(resources, "solar-sail-adapter");
+  if (!existsSync(preparedPairedV2AdapterPath) || !existsSync(packedPairedV2AdapterPath)) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Prepared and packed paired-v2 adapter directories are required.");
+  }
+  let preparedPairedV2Adapter;
+  let packedPairedV2Adapter;
+  try {
+    preparedPairedV2Adapter = await verifyPairedV2AdapterDirectory(preparedPairedV2AdapterPath);
+    packedPairedV2Adapter = await verifyPairedV2AdapterDirectory(packedPairedV2AdapterPath);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Adapter closure failed: ${detail}`);
+  }
+  if (preparedPairedV2Adapter.sha256 !== packedPairedV2Adapter.sha256
+    || preparedPairedV2Adapter.bytes !== packedPairedV2Adapter.bytes
+    || JSON.stringify(preparedPairedV2Adapter.files) !== JSON.stringify(packedPairedV2Adapter.files)) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Packed paired-v2 adapter differs from the prepared adapter closure.");
+  }
   const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(OPTIONAL_SCENE_RESOURCE);
   const configuredSolarSailResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(SOLAR_SAIL_RESOURCE);
   const sceneRoute = options.sceneRoute ?? "published-archive";
@@ -507,6 +532,12 @@ export async function verifyNebularBundle(options) {
       sourceCandidate: solarSailBuildPin?.sourceCandidate ?? null,
       binding: solarSailBinding,
     } : null,
+    pairedV2Adapter: {
+      files: packedPairedV2Adapter.files.length,
+      bytes: packedPairedV2Adapter.bytes,
+      identity: packedPairedV2Adapter.sha256,
+      preparedEqual: true,
+    },
     scenePayload: sceneInventory ? {
       payloadFiles: sceneInventory.length,
       batchExecutable: true,

@@ -270,6 +270,523 @@ function formatPlanObservation(announcement, progress) {
     return `${status.compilerVersion || "compiler"} · revision ${status.latestRevision}`;
   });
 
+  // ---- fixed appearance restart pair -------------------------------------------------------
+
+  const APPEARANCE_RECORD = Object.freeze({ version: 1, mode: "dark", light: "developer", dark: "developer" });
+  const APPEARANCE_RECORD_SHA256 = "11ed5c176d7725adcb7911ceb7a9a11943af63197dbee5d2e4317dc1df8c7540";
+  const APPEARANCE_FAILURE_CATEGORIES = Object.freeze([
+    "pair-root-missing", "pair-marker-missing", "pair-marker-invalid", "pair-layout-mismatch",
+    "preferences-root-symlink", "preferences-root-not-owner-only", "preferences-root-equals-smoke-root",
+    "receipt-collision", "pair-leaf-inventory-mismatch", "appearance-startup-backend-unsupported",
+    "appearance-startup-load-rejected", "appearance-load-rejected", "appearance-save-failed",
+    "appearance-saved-status-timeout", "appearance-selection-mismatch", "appearance-computed-mismatch",
+    "appearance-record-mismatch", "restart-not-persisted", "process-orphan",
+    "persistent-user-state-changed", "pair-cleanup-unowned",
+  ]);
+
+  function setControlledValue(control, value) {
+    const prototype = Object.getPrototypeOf(control);
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (typeof setter !== "function") throw new Error("controlled input setter unavailable");
+    setter.call(control, value);
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+    control.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function appearanceSection() {
+    return document.querySelector('section[aria-label="Application appearance"]');
+  }
+
+  async function chooseAppearance(label, value, deadline) {
+    const remaining = () => deadline === undefined ? 30000 : Math.max(0, deadline - Date.now());
+    const control = await waitFor(() => {
+      const section = appearanceSection();
+      return section && section.querySelector(`select[aria-label="${label}"]`);
+    }, `${label} appearance select`, remaining());
+    setControlledValue(control, value);
+    await waitFor(() => control.value === value, `${label} selection ${value}`, remaining());
+    return control.value;
+  }
+
+  function appearanceValues() {
+    const section = appearanceSection();
+    const family = section?.querySelector('select[aria-label="Application appearance"]');
+    const mode = section?.querySelector('select[aria-label="Application display mode"]');
+    const computed = getComputedStyle(document.documentElement);
+    return {
+      family: family ? family.value : "",
+      mode: mode ? mode.value : "",
+      theme: document.documentElement.getAttribute("data-theme") || "",
+      background: computed.getPropertyValue("--background").trim(),
+      primary: computed.getPropertyValue("--primary").trim(),
+      fontUi: computed.getPropertyValue("--tf-appearance-font-ui").trim(),
+      radius: computed.getPropertyValue("--tf-appearance-radius-surface").trim(),
+      selection: computed.getPropertyValue("--tf-appearance-selection").trim(),
+      selectionText: computed.getPropertyValue("--tf-appearance-selection-text").trim(),
+    };
+  }
+
+  function exactAppearanceRecord(record) {
+    return record && record.version === APPEARANCE_RECORD.version
+      && record.mode === APPEARANCE_RECORD.mode
+      && record.light === APPEARANCE_RECORD.light
+      && record.dark === APPEARANCE_RECORD.dark
+      && Object.keys(record).length === 4;
+  }
+
+  async function readAppearanceRecord() {
+    const reply = await invoke("studio_appearance_preferences_load");
+    if (reply.status === "rejected") throw new Error(`appearance-startup-load-rejected:${reply.reason}`);
+    return reply;
+  }
+
+  const appearanceShell = (id) => step(id, "dom", async () => {
+    await waitFor(() => text(document.querySelector("h1")) === "Theme Forge Nebular Fusion", "application heading", 60000);
+    await waitFor(() => described("Sidecar state"), "host diagnostics", 60000);
+    if (!internals() || typeof internals().invoke !== "function") throw new Error("Tauri command bridge unavailable");
+    facts.push(["appearanceFailureCategories", APPEARANCE_FAILURE_CATEGORIES.join(",")]);
+    return text(document.querySelector("footer"));
+  });
+
+  const pSaveLoadMissing = () => step("p-save-load-missing", "invoke-read-only", async () => {
+    const reply = await readAppearanceRecord();
+    if (reply.status !== "missing") throw new Error(`appearance-load-rejected:${reply.status}`);
+    return "missing before selection";
+  });
+
+  const pSaveSelectFamily = () => step("p-save-select-family", "dom", async () => chooseAppearance("Application appearance", "developer"));
+  const pSaveSelectMode = () => step("p-save-select-mode", "dom", async () => chooseAppearance("Application display mode", "dark"));
+
+  const pSaveApply = () => step("p-save-apply", "dom+status", async () => {
+    await waitFor(() => Array.from(document.querySelectorAll('[role="status"]')).some((node) => text(node) === "Appearance saved on this device."), "appearance saved status", 60000,
+      () => `status="${text(document.querySelector('section[aria-label="Application appearance"]'))}"`);
+    if (document.querySelector('[role="alert"]')) throw new Error("appearance-save-failed");
+    const reply = await readAppearanceRecord();
+    if (reply.status !== "loaded" || !exactAppearanceRecord(reply.preferences)) throw new Error("appearance-record-mismatch");
+    return "saved through controlled appearance UI";
+  });
+
+  const pSaveLoadSaved = () => step("p-save-load-saved", "invoke-read-only+computed", async () => {
+    const reply = await readAppearanceRecord();
+    const values = appearanceValues();
+    if (reply.status !== "loaded" || !exactAppearanceRecord(reply.preferences)) throw new Error("appearance-record-mismatch");
+    if (values.family !== "developer" || values.mode !== "dark" || values.primary !== "#65b4d7") {
+      throw new Error(`appearance-computed-mismatch:${JSON.stringify(values)}`);
+    }
+    facts.push(["appearanceRecordSha256", APPEARANCE_RECORD_SHA256], ["appearanceMode", values.mode], ["appearanceFamily", values.family]);
+    return `${values.family}/${values.mode} · ${values.primary}`;
+  });
+
+  const pRestartStartup = () => step("p-restart-startup", "dom+computed", async () => {
+    const values = await waitFor(() => {
+      const current = appearanceValues();
+      return current.family === "developer" && current.mode === "dark" && current.theme === "dark" && current.primary === "#65b4d7" ? current : null;
+    }, "appearance preference startup state", 60000, () => JSON.stringify(appearanceValues()));
+    return `${values.family}/${values.mode} · ${values.primary}`;
+  });
+
+  const pRestartLoadExact = () => step("p-restart-load-exact", "invoke-read-only+computed", async () => {
+    const reply = await readAppearanceRecord();
+    const values = appearanceValues();
+    if (reply.status !== "loaded" || !exactAppearanceRecord(reply.preferences)) throw new Error("restart-not-persisted");
+    if (values.family !== reply.preferences.light || values.mode !== reply.preferences.mode || values.primary !== "#65b4d7") {
+      throw new Error("appearance-selection-mismatch");
+    }
+    return "byte-identical V1 record observed after fresh startup";
+  });
+
+  // ---- fixed paired-v2 WebKit branch -------------------------------------------------------
+
+  const pairedPanel = () => document.querySelector('[data-testid="paired-v2-authoring-panel"]');
+  const pairedSurface = () => document.querySelector('[data-testid="paired-v2-lab-surface"]');
+  const applicationThemeArea = () => document.querySelector('[data-destination="application-theme"]:not([hidden])');
+  const setLabelled = async (labelPrefix, value) => {
+    const control = await waitFor(() => Array.from(document.querySelectorAll("label"))
+      .find((candidate) => text(candidate).startsWith(labelPrefix))?.querySelector("input,textarea"), `${labelPrefix} field`);
+    setControlledValue(control, value);
+    await waitFor(() => control.value === value, `${labelPrefix} value`);
+  };
+
+  const setSelectLabelled = async (labelPrefix, value) => {
+    const control = await waitFor(() => Array.from(document.querySelectorAll("label"))
+      .find((candidate) => text(candidate).startsWith(labelPrefix))?.querySelector("select"), `${labelPrefix} select`);
+    setControlledValue(control, value);
+    await waitFor(() => control.value === value, `${labelPrefix} selection ${value}`);
+  };
+
+  const pairedAppTheme = () => step("paired-app-theme", "dom+status", async () => {
+    await click("Application Theme");
+    const area = await waitFor(() => applicationThemeArea(), "Application Theme area", 60000);
+    const status = await invoke("studio_app_theme_status");
+    const capability = status.pairedV2Authoring;
+    if (!status.available || !capability || capability.supported !== true || !capability.sessionId) throw new Error("paired-v2-status-unavailable");
+    // The real Lab creates the paired surface only after its existing Open
+    // Profile… control establishes the v2 input. Keep this first UI action in
+    // the fixed app-theme step; the following step observes the opened result.
+    await click("Open Profile…", { root: area });
+    await waitFor(() => pairedSurface() && pairedPanel(), "paired-v2 surface after profile open", 90000);
+    return `session ${capability.sessionId}`;
+  });
+
+  const pairedOpenDeveloper = () => step("paired-open-developer", "dom+status", async () => {
+    await waitFor(() => bodyIncludes("Read-Only Profile Inspection (tf-paired-profile-v2)"), "verified Developer profile", 90000);
+    if (!bodyIncludes("Studio history: original source")) throw new Error("source-profile-identity-mismatch");
+    return "baseline.theme.json · developer@0.1.0";
+  });
+
+  const pairedBrief = () => step("paired-brief", "dom", async () => {
+    // These values match the deterministic proof4 packet creator. The native
+    // campaign may replace them only with an independently sealed packet
+    // fixture; it must not silently invent another candidate identity.
+    await setLabelled("Brief ID", "brief-1");
+    await setLabelled("Title", "Developer application appearance");
+    await setLabelled("Goal", "Apply three approved v2 focused edits to the Developer profile.");
+    await setLabelled("Acceptance criteria", "The dark primary action is #7a4fa3\nThe surface radius is 10px\nThe interface family is system-ui");
+    await setLabelled("Prohibited changes", "No native qualification or release adoption.");
+    await click("Create brief", { root: document });
+    await waitFor(() => bodyIncludes("Retained canonical JSON"), "retained brief", 60000);
+    return "brief self-integrity verified";
+  });
+
+  const pairedThreeEdits = () => step("paired-three-edits", "dom", async () => {
+    await setLabelled("Primary action color", "#7a4fa3");
+    await setLabelled("Interface font family", "system-ui");
+    await setLabelled("Surface radius", "10px");
+    if (!pairedPanel() || !bodyIncludes("#7a4fa3") || !bodyIncludes("system-ui") || !bodyIncludes("10px")) throw new Error("paired-selection-mismatch");
+    return "color.dark.primaryAction=#7a4fa3 · typography.ui.family=system-ui · radius.surface=10px";
+  });
+
+  const pairedCompileBoth = () => step("paired-compile-both", "dom+status", async () => {
+    await click("Compile", { root: pairedPanel() || document, timeout: 60000 });
+    await waitFor(() => {
+      const apply = button("Apply to application", pairedPanel() || document);
+      return apply && apply.disabled === false ? apply : null;
+    }, "paired compile and preview ACK", 120000);
+    if (!bodyIncludes("Solar Sail") || !bodyIncludes("Stellar Loom")) throw new Error("paired-compile-response-mismatch");
+    return "both target sections acknowledged";
+  });
+
+  const pairedPreviewAcks = () => step("paired-preview-acks", "frame-ack", async () => {
+    const observe = () => {
+      const root = pairedPanel() || document;
+      const frameFor = (title) => Array.from(root.querySelectorAll("iframe"))
+        .find((frame) => frame.getAttribute("title") === title);
+      const previewFor = (frame) => frame?.closest(".preview-container");
+      const hasStatus = (preview, expected) => Boolean(preview
+        && Array.from(preview.querySelectorAll('[role="status"]'), text).some((value) => value === expected));
+      const revisionFor = (preview) => {
+        const value = Array.from(preview?.querySelectorAll(".preview-meta") || [], text)
+          .find((candidate) => /^Rev:\s*\d+$/.test(candidate));
+        const match = value?.match(/^Rev:\s*(\d+)$/);
+        return match ? Number(match[1]) : null;
+      };
+      const acceptedValue = text(root.querySelector(".paired-v2-review-identity"));
+      const acceptedMatch = acceptedValue.match(/^Revision\s+(\d+)$/);
+      const applicationFrame = frameFor("Application Theme Live Preview");
+      const starlightFrame = frameFor("Starlight Theme Preview");
+      const applicationPreview = previewFor(applicationFrame);
+      const starlightPreview = previewFor(starlightFrame);
+      const apply = button("Apply to application", root);
+      return {
+        applicationFrame,
+        starlightFrame,
+        applicationAck: hasStatus(applicationPreview, "Live CSS applied to shadcn-style component adaptations"),
+        starlightAck: hasStatus(starlightPreview, "Exact current CSS preview"),
+        applicationRevision: revisionFor(applicationPreview),
+        starlightRevision: revisionFor(starlightPreview),
+        acceptedRevision: acceptedMatch ? Number(acceptedMatch[1]) : null,
+        apply: apply && apply.disabled === false ? apply : null,
+        applyEnabled: apply !== undefined && apply.disabled === false,
+      };
+    };
+    const observed = await waitFor(() => {
+      const current = observe();
+      const revisionsMatch = current.applicationRevision !== null
+        && current.applicationRevision === current.starlightRevision
+        && current.applicationRevision === current.acceptedRevision;
+      return current.applicationFrame && current.starlightFrame && current.applicationAck
+        && current.starlightAck && revisionsMatch && current.apply && current.applyEnabled ? current : null;
+    }, "paired preview ACKs and current revision", 60000, () => {
+      const current = observe();
+      return JSON.stringify({
+        applicationAck: current.applicationAck,
+        starlightAck: current.starlightAck,
+        applicationRevision: current.applicationRevision,
+        starlightRevision: current.starlightRevision,
+        acceptedRevision: current.acceptedRevision,
+        applyEnabled: current.applyEnabled,
+      });
+    });
+    facts.push(["previewApplication", "applied"], ["previewStarlight", "applied"]);
+    return `Application Theme Live Preview and Starlight Theme Preview ACKs correlated at revision ${observed.applicationRevision}`;
+  });
+
+  const pairedCandidateCreate = () => step("paired-create-candidate", "dom", async () => {
+    await setLabelled("Candidate ID", "candidate-4");
+    await setLabelled("Rationale", "Three focused edits are precomputed from the verified Developer root.");
+    await click("Create candidate");
+    await waitFor(() => bodyIncludes("packet self-integrity: verified"), "candidate packet", 60000);
+    return "candidate packet self-integrity verified";
+  });
+
+  const pairedReviewAssociation = () => step("paired-review-association", "dom+picker", async () => {
+    await click("Export candidate");
+    await waitFor(() => bodyIncludes("Candidate exported without adopting or saving the current source."), "candidate export", 60000);
+    await click("Import candidate");
+    await waitFor(() => bodyIncludes("Candidate imported for inspection; source verification remains parent-controlled."), "candidate import", 60000);
+    // The candidate is staged automatically by the closed packet bridge. Make
+    // the review association explicit through the existing UI fields and the
+    // same deterministic proof4 review input; no generic picker or command is
+    // introduced by this driver.
+    await setSelectLabelled("Disposition", "approve");
+    await setLabelled("Review ID", "review-4");
+    await setSelectLabelled("Overall disposition", "approve");
+    await setLabelled("Summary", "The scripted candidate matches all three requested edits.");
+    await click("Create review");
+    await waitFor(() => bodyIncludes("Review created with explicit human dispositions"), "review packet", 60000);
+    await click("Export review");
+    await waitFor(() => bodyIncludes("Review exported without adopting or saving the current source."), "review export", 60000);
+    await click("Import review");
+    await waitFor(() => bodyIncludes("Review imported for inspection; associations and disposition remain separate.")
+      && bodyIncludes("Imported review references the exact staged brief and candidate subset."), "review association", 60000);
+    return "candidate-v2.json and review-v2.json export/import association verified";
+  });
+
+  const pairedSelectCandidate = () => step("paired-select-candidate", "dom+status+confirm", async () => {
+    const expected = "Discard the current unsaved editor or appearance draft and verify this candidate?";
+    const original = window.confirm;
+    let calls = 0;
+    window.confirm = (message) => {
+      calls += 1;
+      if (message !== expected) throw new Error(`unexpected candidate confirmation: ${message}`);
+      return true;
+    };
+    try {
+      const candidates = buttons(pairedPanel() || document).filter((candidate) => text(candidate) === "Select candidate");
+      const select = candidates[candidates.length - 1];
+      if (!select) throw new Error("candidate-select-button-missing");
+      select.click();
+      await waitFor(() => text(document.querySelector('[data-testid="paired-v2-editor-revision"]')).includes("Editor revision 0"), "detached revision zero", 90000);
+    } finally {
+      window.confirm = original;
+    }
+    if (calls !== 1) throw new Error(`candidateDiscardConfirm=${calls}`);
+    facts.push(["candidateDiscardConfirm", "accepted"], ["detachedRevision", "0"]);
+    return "candidate-v2.json · detached verified session";
+  });
+
+  const pairedAppearanceDark = () => step("paired-appearance-dark", "dom+appearance", async () => {
+    await chooseAppearance("Application display mode", "dark");
+    await waitFor(() => document.documentElement.getAttribute("data-theme") === "dark", "dark appearance mode", 60000);
+    facts.push(["appearanceMode", "dark"]);
+    return "controlled display mode dark";
+  });
+
+  const pairedApplyDetached = () => step("paired-apply-detached", "dom+computed", async () => {
+    await click("Apply to application", { root: pairedPanel() || document });
+    await waitFor(() => appearanceValues().primary === "#7a4fa3", "detached application primary", 60000, () => JSON.stringify(appearanceValues()));
+    if (!bodyIncludes("Unsaved theme draft is active.")) throw new Error("appearance-draft-not-active");
+    const before = Array.from((pairedPanel() || document).querySelectorAll("input"), (input) => [input.getAttribute("aria-label"), input.value]);
+    await click("Reset appearance");
+    await waitFor(() => !bodyIncludes("Unsaved theme draft is active."), "application draft release", 60000);
+    const after = Array.from((pairedPanel() || document).querySelectorAll("input"), (input) => [input.getAttribute("aria-label"), input.value]);
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("editor-changed-on-appearance-reset");
+    facts.push(["appearanceResetPreferenceWrite", "recorded"]);
+    return "application --primary #7a4fa3; application draft released; editor unchanged";
+  });
+
+  const pairedSaveAsFreeze = () => step("paired-save-as", "dom+picker", async () => {
+    await click("Save as…", { root: pairedPanel() || document });
+    await waitFor(() => bodyIncludes("This saved source is held unchanged."), "saved source freeze", 90000);
+    return "v2-saved.theme.json · saved and frozen";
+  });
+
+  const pairedReopenSaved = () => step("paired-reopen", "dom+status+confirm", async () => {
+    const panel = () => pairedPanel() || document;
+    const beforeStatus = await invoke("studio_app_theme_status");
+    const beforeSession = beforeStatus.pairedV2Authoring?.sessionId;
+    if (typeof beforeSession !== "string" || beforeSession.length === 0) throw new Error("reopen-before-session-unavailable");
+    const expected = "Discard the current unsaved editor or application draft and reopen the source?";
+    const original = window.confirm;
+    let calls = 0;
+    window.confirm = (message) => {
+      calls += 1;
+      if (message !== expected) throw new Error(`unexpected reopen confirmation: ${message}`);
+      return false;
+    };
+    try {
+      await click("Reopen", { root: panel() });
+      const reopened = await waitFor(async () => {
+        if (calls !== 0) return { confirmationRefused: true };
+        const status = await invoke("studio_app_theme_status");
+        const currentSession = status.pairedV2Authoring?.sessionId;
+        const sourceName = text(panel().querySelector(".paired-v2-source-name"));
+        const revision = text(document.querySelector('[data-testid="paired-v2-editor-revision"]'));
+        const sourceSummary = text(panel().querySelector(".paired-v2-source-summary"));
+        const frozen = text(panel()).includes("This saved source is held unchanged.");
+        if (currentSession !== beforeSession
+          && sourceName === "v2-saved.theme.json"
+          && /^Editor revision 0$/.test(revision)
+          && sourceSummary.includes("Verified source bytes")
+          && !sourceSummary.includes("Detached verified bytes")
+          && !frozen) {
+          return { status, currentSession };
+        }
+        return null;
+      }, "reopened saved source with new session", 90000, () => {
+        const sourceName = text(panel().querySelector(".paired-v2-source-name"));
+        const revision = text(document.querySelector('[data-testid="paired-v2-editor-revision"]'));
+        const sourceSummary = text(panel().querySelector(".paired-v2-source-summary"));
+        return JSON.stringify({
+          sourceName,
+          revision,
+          custody: sourceSummary.includes("Verified source bytes") ? "attached" : sourceSummary.includes("Detached verified bytes") ? "detached" : "unknown",
+          frozen: text(panel()).includes("This saved source is held unchanged."),
+        });
+      });
+      if (calls !== 0) throw new Error(`reopenConfirmCalls=${calls}`);
+      const status = reopened.status;
+      if (Object.prototype.hasOwnProperty.call(status, "activeDocumentId")) throw new Error("activeDocumentId-exposed");
+      if (!bodyIncludes("Studio history: original source")) throw new Error("reopened-history-mismatch");
+      facts.push(["reopenConfirmCalls", "0"], ["activeDocumentId", "absent"]);
+      return "v2-saved.theme.json · reopened attached editor · new session · zero confirm calls";
+    } finally {
+      window.confirm = original;
+    }
+  });
+
+  const APPEARANCE_MATRIX_ROLES = Object.freeze([
+    "--background", "--primary", "--tf-appearance-font-ui", "--tf-appearance-radius-surface",
+    "--tf-appearance-selection", "--tf-appearance-selection-text",
+  ]);
+  const APPEARANCE_MATRIX_FAMILIES = Object.freeze([
+    "terminal-nova", "nebular", "developer", "graphic-designer", "anime", "gamer",
+  ]);
+  const APPEARANCE_MATRIX_MODES = Object.freeze(["light", "dark"]);
+
+  function closedAppearanceExpectations() {
+    const expectations = config.appearanceExpectations;
+    if (!expectations || typeof expectations !== "object" || Array.isArray(expectations)) {
+      throw new Error("appearance-matrix-expectations-missing");
+    }
+    if (expectations.schema !== "theme-forge.appearance-role-expectations.v1") {
+      throw new Error("appearance-matrix-schema-mismatch");
+    }
+    if (!Array.isArray(expectations.roles) || expectations.roles.length !== APPEARANCE_MATRIX_ROLES.length
+      || expectations.roles.some((role, index) => role !== APPEARANCE_MATRIX_ROLES[index])) {
+      throw new Error("appearance-matrix-roles-mismatch");
+    }
+    if (!Array.isArray(expectations.rows) || expectations.rows.length !== APPEARANCE_MATRIX_FAMILIES.length * APPEARANCE_MATRIX_MODES.length) {
+      throw new Error("appearance-matrix-row-count-mismatch");
+    }
+    const rows = expectations.rows.map((row, index) => {
+      const expectedMode = index < APPEARANCE_MATRIX_FAMILIES.length ? "light" : "dark";
+      const expectedFamily = APPEARANCE_MATRIX_FAMILIES[index % APPEARANCE_MATRIX_FAMILIES.length];
+      if (!row || typeof row !== "object" || Array.isArray(row)
+        || row.family !== expectedFamily
+        || row.mode !== expectedMode
+        || !row.roles || typeof row.roles !== "object" || Array.isArray(row.roles)) {
+        throw new Error("appearance-matrix-row-order-mismatch");
+      }
+      const roleKeys = Object.keys(row.roles);
+      if (roleKeys.length !== APPEARANCE_MATRIX_ROLES.length
+        || APPEARANCE_MATRIX_ROLES.some((role) => !roleKeys.includes(role))
+        || APPEARANCE_MATRIX_ROLES.some((role) => typeof row.roles[role] !== "string" || row.roles[role].length === 0)) {
+        throw new Error("appearance-matrix-row-roles-mismatch");
+      }
+      return row;
+    });
+    return rows;
+  }
+
+  function appearanceRoleMatch(values, expectedRoles) {
+    return APPEARANCE_MATRIX_ROLES.every((role) => {
+      const valueKey = role === "--background" ? "background"
+        : role === "--primary" ? "primary"
+          : role === "--tf-appearance-font-ui" ? "fontUi"
+            : role === "--tf-appearance-radius-surface" ? "radius"
+              : role === "--tf-appearance-selection" ? "selection"
+                : "selectionText";
+      return values[valueKey] === expectedRoles[role];
+    });
+  }
+
+  const pairedAppearanceMatrix = () => step("paired-appearance-matrix", "dom+computed", async () => {
+    const rows = closedAppearanceExpectations();
+    if (!pairedSurface() || !pairedPanel()) throw new Error("paired-editor-not-open");
+    const frameIdentity = () => {
+      const panel = pairedPanel();
+      if (!panel) throw new Error("paired-editor-not-open");
+      const read = (title, expectedSrc) => {
+        const frame = Array.from(panel.querySelectorAll("iframe")).find((candidate) => candidate.getAttribute("title") === title);
+        const src = frame?.getAttribute("src");
+        if (!frame || src !== expectedSrc || frame.hasAttribute("srcdoc")) throw new Error(`paired-preview-frame-mismatch:${title}`);
+        return { frame, src };
+      };
+      return {
+        application: read("Application Theme Live Preview", "/preview/app/index.html"),
+        starlight: read("Starlight Theme Preview", "/preview/index.html"),
+      };
+    };
+    const beforeFrames = frameIdentity();
+    const editorSnapshot = () => {
+      const panel = pairedPanel();
+      if (!panel) throw new Error("paired-editor-not-open");
+      const controls = Array.from(panel.querySelectorAll("input,textarea,select"));
+      if (controls.length > 64 || controls.some((control) => control.value.length > 65536)) {
+        throw new Error("paired-editor-snapshot-exceeds-bound");
+      }
+      return JSON.stringify({
+        revision: text(document.querySelector('[data-testid="paired-v2-editor-revision"]')),
+        fields: controls.map((control) => [control.tagName, control.getAttribute("aria-label"), control.value, Boolean(control.checked)]),
+      });
+    };
+    const beforeEditor = editorSnapshot();
+    const beforeStatus = await invoke("studio_app_theme_status");
+    const beforeSession = beforeStatus.pairedV2Authoring?.sessionId;
+    if (typeof beforeSession !== "string" || !beforeSession) throw new Error("paired-v2-status-unavailable");
+    for (const row of rows) {
+      const deadline = Date.now() + 10000;
+      await chooseAppearance("Application appearance", row.family, deadline);
+      await chooseAppearance("Application display mode", row.mode, deadline);
+      const values = await waitFor(() => {
+        const current = appearanceValues();
+        return current.family === row.family && current.mode === row.mode && appearanceRoleMatch(current, row.roles)
+          && pairedSurface() && pairedPanel()
+          ? current
+          : null;
+      }, `${row.family}/${row.mode} appearance roles`, Math.max(0, deadline - Date.now()), () => JSON.stringify(appearanceValues()));
+      const rolesMatch = appearanceRoleMatch(values, row.roles);
+      if (!rolesMatch) throw new Error(`appearance-matrix-role-mismatch:${row.family}/${row.mode}`);
+      const currentFrames = frameIdentity();
+      if (currentFrames.application.frame !== beforeFrames.application.frame
+        || currentFrames.application.src !== beforeFrames.application.src
+        || currentFrames.starlight.frame !== beforeFrames.starlight.frame
+        || currentFrames.starlight.src !== beforeFrames.starlight.src) {
+        throw new Error(`paired-preview-frame-identity-changed:${row.family}/${row.mode}`);
+      }
+      facts.push(["appearanceMatrixCell", JSON.stringify({
+        family: row.family,
+        mode: values.mode,
+        background: values.background,
+        primary: values.primary,
+        fontUi: values.fontUi,
+        radius: values.radius,
+        selection: values.selection,
+        selectionText: values.selectionText,
+        rolesMatch: true,
+      })]);
+    }
+    const afterStatus = await invoke("studio_app_theme_status");
+    if (!pairedSurface() || !pairedPanel() || editorSnapshot() !== beforeEditor
+      || afterStatus.pairedV2Authoring?.sessionId !== beforeSession
+      || !text(document.querySelector('[data-testid="paired-v2-editor-revision"]')).includes("Editor revision 0")) {
+      throw new Error("paired-editor-not-preserved");
+    }
+    facts.push(["appearanceMatrixEditorPreserved", "true"]);
+    return "12 generated appearance matrix cells matched; paired preview iframe src and DOM identity preserved; editor session preserved";
+  });
+
   const brandSystem = () => step("brand-system-view", "dom", async () => {
     await click("Brand / System");
     await waitFor(() => document.querySelector('[data-destination="brand-system"]:not([hidden])'), "Brand / System area");
@@ -343,6 +860,11 @@ function formatPlanObservation(announcement, progress) {
     // and start again), then cancel and apply derive plans on the case-exact project; normal quit.
     C: [shell, () => hostStart(), hostStartIdempotent, hostStop, () => hostStart("host-start-again"), () => hostStatus(),
       () => projectOpen("project-open-case", "nebular-derive-upper"), deriveCancel, deriveApply, () => hostStatus("host-status-final")],
+    "P-save": [() => appearanceShell("p-save-shell"), pSaveLoadMissing, pSaveSelectFamily, pSaveSelectMode, pSaveApply, pSaveLoadSaved],
+    "P-restart": [() => appearanceShell("p-restart-shell"), pRestartStartup, pRestartLoadExact],
+    "paired-v2": [shell, pairedAppTheme, pairedOpenDeveloper, pairedBrief, pairedThreeEdits, pairedCompileBoth,
+      pairedPreviewAcks, pairedCandidateCreate, pairedReviewAssociation, pairedSelectCandidate,
+      pairedAppearanceDark, pairedApplyDetached, pairedSaveAsFreeze, pairedReopenSaved, pairedAppearanceMatrix],
   };
   // C-signal leaves the sidecar running so the harness can prove it exits when the application is killed.
   scenarios["C-signal"] = scenarios.C;
@@ -365,3 +887,4 @@ function formatPlanObservation(announcement, progress) {
     window.__NEBULAR_RELEASE_SMOKE__ = { status: "fail", scenario, steps, facts };
   });
 })();
+

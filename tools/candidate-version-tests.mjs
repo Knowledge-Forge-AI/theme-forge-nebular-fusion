@@ -66,11 +66,11 @@ test("repository discovery fails on unknown live version text outside known proj
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("Candidate version constant is projected at 0.7.1", () => {
-  assert.equal(CANDIDATE_VERSION, "0.7.1");
+test("Candidate version constant is projected at 0.8.0", () => {
+  assert.equal(CANDIDATE_VERSION, "0.8.0");
 });
 
-test("Cargo, Tauri and application lock project the maintained candidate version 0.7.1", () => {
+test("Cargo, Tauri and application lock project the maintained candidate version 0.8.0", () => {
   assert.equal(verifyApplicationVersion(studioRoot), CANDIDATE_VERSION);
 });
 

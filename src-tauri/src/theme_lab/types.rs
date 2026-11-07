@@ -1,3 +1,5 @@
+use crate::app_theme::paired_v2_packets::PairedV2PacketEnvelope;
+
 pub use super::v2_types::*;
 use serde::{Deserialize, Serialize};
 
@@ -454,7 +456,7 @@ pub struct ThemePacketImportRequest {
     pub expected_kind: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemePacketImportResponse {
     pub cancelled: bool,
@@ -467,6 +469,8 @@ pub struct ThemePacketImportResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub paired_v2: Option<PairedV2PacketEnvelope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ThemeLabError>,
 }
 
@@ -476,9 +480,11 @@ pub struct ThemePacketExportRequest {
     pub packet_json: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_kind: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThemePacketExportResponse {
     pub cancelled: bool,
@@ -487,6 +493,8 @@ pub struct ThemePacketExportResponse {
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paired_v2: Option<PairedV2PacketEnvelope>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ThemeLabError>,
 }

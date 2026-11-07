@@ -17,8 +17,8 @@ import { identity, inventoryTree } from "./candidate-provenance.mjs";
 import { inventoryNativePayload } from "./native-runtime.mjs";
 import { readRegularSnapshot } from "./fs-snapshot.mjs";
 import { PLATFORMS } from "./native-rc-package.mjs";
-import { LANES } from "./native-rc-plan.mjs";
-import { PLATFORM_SCENARIOS, SCENARIOS } from "./native-rc-smoke.mjs";
+import { appearanceScenariosForPlan, LANES } from "./native-rc-plan.mjs";
+import { APPEARANCE_PREFERENCE_SHA256, PLATFORM_SCENARIOS, SCENARIOS, SEAL_ONLY_SCENARIOS } from "./native-rc-smoke.mjs";
 
 const json = (path) => JSON.parse(readRegularSnapshot(path, { label: path, maxBytes: 16 * 1024 * 1024 }).bytes.toString("utf8"));
 const digestOf = (path) => readRegularSnapshot(path, { label: path, maxBytes: 2 * 1024 * 1024 * 1024 }).sha256;
@@ -205,6 +205,8 @@ export function seal(options) {
   const manifest = json(options.packageManifest);
   const problems = [];
   const expect = (condition, message) => { if (!condition) problems.push(message); };
+  const appearanceScenarios = appearanceScenariosForPlan(plan, options.lane);
+  expect(appearanceScenarios !== null, "appearance scenario declaration is malformed");
 
   expect(record.platform === lane.platform && build.platform === lane.platform && qualification.platform === lane.platform, "platform mismatch between package, build and qualification");
   expect(qualification.status === "pass", "machine qualification did not pass");
@@ -249,6 +251,9 @@ export function seal(options) {
   expect(files.find((file) => file.name === record.raw.filename)?.sha256 === record.raw.sha256, "raw candidate changed after packaging");
 
   // One executable across payload, package manifest, raw archive and every smoke run.
+  // The strict format predicate belongs to the newly declared appearance lanes;
+  // ordinary v1 lanes retain their existing exact-identity comparisons.
+  if ((appearanceScenarios ?? []).length > 0) expect(/^[a-f0-9]{64}$/u.test(qualification.executableSha256 ?? ""), "qualification executable identity is malformed");
   const manifestExecutable = manifest.members.find((member) => member.path === platform.executable);
   expect(manifestExecutable?.sha256 === qualification.executableSha256, "the package manifest executable is not the qualified executable");
   expect(record.raw.executableSha256 === qualification.executableSha256, "the raw archive executable is not the qualified executable");
@@ -259,10 +264,35 @@ export function seal(options) {
     const matching = runs.filter((run) => run.scenario === scenario);
     expect(matching.length >= 1, `scenario ${scenario} did not run`);
   }
+  for (const scenario of appearanceScenarios ?? []) {
+    const matching = runs.filter((run) => run.scenario === scenario);
+    expect(matching.length === 1, `appearance scenario ${scenario} must run exactly once from the raw archive`);
+    expect(matching[0]?.source === "raw-archive", `appearance scenario ${scenario} must use the raw archive`);
+    if (scenario === "appearance-pair") expect(matching[0]?.appearancePair?.status === "pass", `appearance pair ${scenario} did not pass its fixed gate`);
+    if (scenario === "paired-v2") {
+      expect(matching[0]?.appearanceMatrix?.status === "pass" && matching[0]?.appearanceMatrix?.cells === 12,
+        "paired-v2 appearance matrix did not pass its fixed 12-cell gate");
+      expect(matching[0]?.appearanceMatrixEditorPreserved === true,
+        "paired-v2 appearance matrix editor-preservation fact did not pass its fixed gate");
+    }
+    if (scenario === "appearance-pair") {
+      for (const [phase, phaseScenario] of [["save", "P-save"], ["restart", "P-restart"]]) {
+        const actualSteps = matching[0]?.phases?.[phase]?.receipt?.steps ?? [];
+        const expectedSteps = SCENARIOS[phaseScenario].steps;
+        expect(JSON.stringify(actualSteps.map((step) => step?.id ?? null)) === JSON.stringify(expectedSteps), `${phaseScenario} steps are not the exact ordered sequence`);
+        for (const [index, stepId] of expectedSteps.entries()) expect(actualSteps[index]?.ok === true, `${phaseScenario} step ${stepId} is missing or failed in the sealed pair`);
+      }
+      expect(matching[0]?.pairIdentity?.rawExecutableSha256 === qualification.executableSha256, "appearance pair raw executable identity differs from qualification");
+      expect(matching[0]?.pairIdentity?.npmExecutableSha256 === qualification.executableSha256, "appearance pair npm executable identity differs from qualification");
+      expect(matching[0]?.observedPreference?.sha256 === APPEARANCE_PREFERENCE_SHA256,
+        "appearance pair observed preference digest is not the fixed dark Developer record");
+    }
+  }
   for (const run of runs) {
     expect(run.status === "pass", `smoke run ${run.label} failed: ${(run.problems ?? []).join("; ")}`);
     expect(run.executable?.sha256 === qualification.executableSha256, `smoke run ${run.label} did not execute the candidate executable`);
-    expect(SCENARIOS[run.scenario]?.platforms.includes(lane.platform), `smoke run ${run.label} used a foreign scenario`);
+    const scenario = SCENARIOS[run.scenario] ?? SEAL_ONLY_SCENARIOS[run.scenario];
+    expect(scenario?.platforms.includes(lane.platform), `smoke run ${run.label} used a foreign scenario`);
   }
   const sources = new Set(runs.map((run) => run.source));
   expect(sources.has("raw-archive") && sources.has("npm-package"), "smoke did not run from both the raw archive and the npm package extraction");
@@ -298,8 +328,13 @@ export function seal(options) {
       build: build.nativePayload ?? null,
       package: packagePayload,
     },
-    smoke: runs.map((run) => ({ label: run.label, scenario: run.scenario, source: run.source, status: run.status, receiptSha256: run.receipt?.sha256 ?? null,
-      steps: run.receipt?.steps ?? [], exit: run.exit, orphans: run.checks?.orphans?.length ?? null, persistentUserStateChanged: run.checks?.persistentUserState?.changed?.length ?? null })),
+    smoke: runs.map((run) => {
+      const summary = { label: run.label, scenario: run.scenario, source: run.source, status: run.status, receiptSha256: run.receipt?.sha256 ?? null,
+        steps: run.receipt?.steps ?? [], exit: run.exit, orphans: run.checks?.orphans?.length ?? null, persistentUserStateChanged: run.checks?.persistentUserState?.changed?.length ?? null };
+      if (run.scenario === "appearance-pair") return { ...summary, pairIdentity: run.pairIdentity, appearancePair: run.appearancePair, observedPreference: run.observedPreference };
+      if (run.scenario === "paired-v2") return { ...summary, appearanceMatrix: run.appearanceMatrix, appearanceMatrixEditorPreserved: run.appearanceMatrixEditorPreserved };
+      return summary;
+    }),
     manualConfirmationRequired: lane.manualConfirmation,
   };
 }

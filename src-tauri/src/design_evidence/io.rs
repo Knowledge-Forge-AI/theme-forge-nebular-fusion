@@ -1,6 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
@@ -194,6 +194,18 @@ pub(crate) fn export_packet(path: &Path, packet: &DesignEvidencePacket) -> Studi
 }
 
 pub(crate) fn publish_selected_bytes(path: &Path, bytes: &[u8]) -> StudioResult<usize> {
+    publish_selected_bytes_with_mode(path, bytes, None)
+}
+
+pub(crate) fn publish_paired_selected_bytes(path: &Path, bytes: &[u8]) -> StudioResult<usize> {
+    publish_selected_bytes_with_mode(path, bytes, Some(0o600))
+}
+
+fn publish_selected_bytes_with_mode(
+    path: &Path,
+    bytes: &[u8],
+    fresh_mode: Option<u32>,
+) -> StudioResult<usize> {
     let parent = path
         .parent()
         .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SelectionRejected))?;
@@ -238,11 +250,12 @@ pub(crate) fn publish_selected_bytes(path: &Path, bytes: &[u8]) -> StudioResult<
             return rejected();
         }
         let candidate = stage_path(&canonical_parent, attempt);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        if let Some(mode) = fresh_mode {
+            options.mode(mode);
+        }
+        match options.open(&candidate) {
             Ok(file) => {
                 stage = Some((candidate, file));
                 break;
@@ -353,6 +366,39 @@ mod tests {
             assert!(export_packet(&target, &imported.packet).is_ok());
             assert!(export_packet(&target, &imported.packet).is_err());
         }
+        assert!(fs::remove_dir_all(directory).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_selected_export_is_private_and_absent_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = fixture_path("paired-private");
+        let _ = fs::remove_dir_all(&directory);
+        assert!(fs::create_dir(&directory).is_ok());
+        let target = directory.join("paired.json");
+        let bytes = b"paired-packet";
+
+        assert!(
+            publish_paired_selected_bytes(&target, bytes).is_ok_and(|count| count == bytes.len())
+        );
+        assert_eq!(fs::read(&target).ok().as_deref(), Some(bytes.as_slice()));
+        let mode = fs::metadata(&target)
+            .expect("paired output metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(publish_paired_selected_bytes(&target, bytes).is_err());
+        assert!(fs::read_dir(&directory).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).all(|entry| {
+                !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tfsb-packet-stage-")
+            })
+        }));
         assert!(fs::remove_dir_all(directory).is_ok());
     }
 

@@ -1,0 +1,50 @@
+{
+  "schema": "nebular.paired-v2-binding.v1",
+  "members": [
+    {
+      "path": "appearance-inputs.json",
+      "bytes": 376,
+      "sha256": "532ac9051f4cabdc6216609e6e061be9029455a92ee60ab1998257731b341c69"
+    },
+    {
+      "path": "common-appearance-recipe.mjs",
+      "bytes": 25026,
+      "sha256": "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06"
+    },
+    {
+      "path": "common-sttn-template.json",
+      "bytes": 11161,
+      "sha256": "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324"
+    },
+    {
+      "path": "paired-v2-adapter.mjs",
+      "bytes": 5601,
+      "sha256": "aaad826832616abc7e84eb72fbf2a17b94950de7afaaafd3df72b01b43fc8ded"
+    },
+    {
+      "path": "paired-v2-compile.mjs",
+      "bytes": 35378,
+      "sha256": "b550536ab1b446200f9debd066365ba518685c259bbd501091af59d85f1ac53a"
+    }
+  ],
+  "sources": {
+    "recipe": {
+      "owner": "cttn",
+      "path": "tools/appearance-catalog-lib.mjs",
+      "bytes": 25026,
+      "sha256": "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06"
+    },
+    "template": {
+      "owner": "cttn",
+      "path": "tools/source/sttn/v0.4/terminal-nova.theme.json",
+      "bytes": 11161,
+      "sha256": "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324"
+    },
+    "transport": {
+      "owner": "nebular",
+      "path": "paired-v2-compile.mjs",
+      "bytes": 35378,
+      "sha256": "b550536ab1b446200f9debd066365ba518685c259bbd501091af59d85f1ac53a"
+    }
+  }
+}

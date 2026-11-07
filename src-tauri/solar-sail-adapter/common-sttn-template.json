@@ -1,0 +1,367 @@
+{
+  "name": "terminal-nova",
+  "version": "0.4.0",
+  "schemaVersion": "tfsl.theme-v2",
+  "adapter": "starlight-v0.42",
+  "tokenSets": {
+    "forge-console": {
+      "cyan-dark-accent-base": "#69d3e4",
+      "cyan-dark-accent-high": "#c0f0f5",
+      "cyan-dark-accent-low": "#14333c",
+      "cyan-dark-body": "#eee9e3",
+      "cyan-dark-border": "#50535d",
+      "cyan-dark-card": "#191c23",
+      "cyan-dark-code": "#15181e",
+      "cyan-dark-focus": "#69d3e4",
+      "cyan-dark-hairline": "#393d48",
+      "cyan-dark-header": "#191c23",
+      "cyan-dark-inline-code": "#262a33",
+      "cyan-dark-inverted": "#111318",
+      "cyan-dark-link": "#69d3e4",
+      "cyan-dark-muted": "#b9b4ad",
+      "cyan-dark-navigation": "#191c23",
+      "cyan-dark-page": "#111318",
+      "cyan-dark-panel": "#262a33",
+      "cyan-dark-raised": "#191c23",
+      "cyan-dark-secondary": "#ddd7d0",
+      "cyan-dark-selection-background": "#14333c",
+      "cyan-dark-selection-text": "#c0f0f5",
+      "cyan-dark-sidebar": "#15181e",
+      "cyan-light-accent-base": "#126475",
+      "cyan-light-accent-high": "#104552",
+      "cyan-light-accent-low": "#d8f2f3",
+      "cyan-light-body": "#262a33",
+      "cyan-light-border": "#9d9187",
+      "cyan-light-card": "#fffdfa",
+      "cyan-light-code": "#faf1e8",
+      "cyan-light-focus": "#126475",
+      "cyan-light-hairline": "#d1c4b8",
+      "cyan-light-header": "#fffdfa",
+      "cyan-light-inline-code": "#eee4da",
+      "cyan-light-inverted": "#fff8f0",
+      "cyan-light-link": "#126475",
+      "cyan-light-muted": "#625a55",
+      "cyan-light-navigation": "#fffdfa",
+      "cyan-light-page": "#fff8f0",
+      "cyan-light-panel": "#eee4da",
+      "cyan-light-raised": "#fffdfa",
+      "cyan-light-secondary": "#33343b",
+      "cyan-light-selection-background": "#d8f2f3",
+      "cyan-light-selection-text": "#104552",
+      "cyan-light-sidebar": "#f5ede5",
+      "orange-dark-accent-base": "#ff8a3d",
+      "orange-dark-accent-high": "#ffcfad",
+      "orange-dark-accent-low": "#3a231c",
+      "orange-dark-body": "#eee9e3",
+      "orange-dark-border": "#50535d",
+      "orange-dark-card": "#191c23",
+      "orange-dark-code": "#15181e",
+      "orange-dark-focus": "#ff8a3d",
+      "orange-dark-hairline": "#393d48",
+      "orange-dark-header": "#191c23",
+      "orange-dark-inline-code": "#262a33",
+      "orange-dark-inverted": "#111318",
+      "orange-dark-link": "#ff8a3d",
+      "orange-dark-muted": "#b9b4ad",
+      "orange-dark-navigation": "#191c23",
+      "orange-dark-page": "#111318",
+      "orange-dark-panel": "#262a33",
+      "orange-dark-raised": "#191c23",
+      "orange-dark-secondary": "#ddd7d0",
+      "orange-dark-selection-background": "#3a231c",
+      "orange-dark-selection-text": "#ffcfad",
+      "orange-dark-sidebar": "#15181e",
+      "orange-light-accent-base": "#9c3e0b",
+      "orange-light-accent-high": "#612909",
+      "orange-light-accent-low": "#ffeadc",
+      "orange-light-body": "#262a33",
+      "orange-light-border": "#9d9187",
+      "orange-light-card": "#fffdfa",
+      "orange-light-code": "#faf1e8",
+      "orange-light-focus": "#9c3e0b",
+      "orange-light-hairline": "#d1c4b8",
+      "orange-light-header": "#fffdfa",
+      "orange-light-inline-code": "#eee4da",
+      "orange-light-inverted": "#fff8f0",
+      "orange-light-link": "#9c3e0b",
+      "orange-light-muted": "#625a55",
+      "orange-light-navigation": "#fffdfa",
+      "orange-light-page": "#fff8f0",
+      "orange-light-panel": "#eee4da",
+      "orange-light-raised": "#fffdfa",
+      "orange-light-secondary": "#33343b",
+      "orange-light-selection-background": "#ffeadc",
+      "orange-light-selection-text": "#612909",
+      "orange-light-sidebar": "#f5ede5"
+    }
+  },
+  "accentVariants": {
+    "cyan": {
+      "tokenSet": "forge-console",
+      "light": {
+        "accent-base": "cyan-light-accent-base",
+        "accent-high": "cyan-light-accent-high",
+        "accent-low": "cyan-light-accent-low",
+        "body": "cyan-light-body",
+        "border": "cyan-light-border",
+        "card": "cyan-light-card",
+        "code": "cyan-light-code",
+        "focus": "cyan-light-focus",
+        "hairline": "cyan-light-hairline",
+        "header": "cyan-light-header",
+        "inline-code": "cyan-light-inline-code",
+        "inverted": "cyan-light-inverted",
+        "link": "cyan-light-link",
+        "muted": "cyan-light-muted",
+        "navigation": "cyan-light-navigation",
+        "page": "cyan-light-page",
+        "panel": "cyan-light-panel",
+        "raised": "cyan-light-raised",
+        "secondary": "cyan-light-secondary",
+        "selection-background": "cyan-light-selection-background",
+        "selection-text": "cyan-light-selection-text",
+        "sidebar": "cyan-light-sidebar"
+      },
+      "dark": {
+        "accent-base": "cyan-dark-accent-base",
+        "accent-high": "cyan-dark-accent-high",
+        "accent-low": "cyan-dark-accent-low",
+        "body": "cyan-dark-body",
+        "border": "cyan-dark-border",
+        "card": "cyan-dark-card",
+        "code": "cyan-dark-code",
+        "focus": "cyan-dark-focus",
+        "hairline": "cyan-dark-hairline",
+        "header": "cyan-dark-header",
+        "inline-code": "cyan-dark-inline-code",
+        "inverted": "cyan-dark-inverted",
+        "link": "cyan-dark-link",
+        "muted": "cyan-dark-muted",
+        "navigation": "cyan-dark-navigation",
+        "page": "cyan-dark-page",
+        "panel": "cyan-dark-panel",
+        "raised": "cyan-dark-raised",
+        "secondary": "cyan-dark-secondary",
+        "selection-background": "cyan-dark-selection-background",
+        "selection-text": "cyan-dark-selection-text",
+        "sidebar": "cyan-dark-sidebar"
+      }
+    },
+    "orange": {
+      "tokenSet": "forge-console",
+      "light": {
+        "accent-base": "orange-light-accent-base",
+        "accent-high": "orange-light-accent-high",
+        "accent-low": "orange-light-accent-low",
+        "body": "orange-light-body",
+        "border": "orange-light-border",
+        "card": "orange-light-card",
+        "code": "orange-light-code",
+        "focus": "orange-light-focus",
+        "hairline": "orange-light-hairline",
+        "header": "orange-light-header",
+        "inline-code": "orange-light-inline-code",
+        "inverted": "orange-light-inverted",
+        "link": "orange-light-link",
+        "muted": "orange-light-muted",
+        "navigation": "orange-light-navigation",
+        "page": "orange-light-page",
+        "panel": "orange-light-panel",
+        "raised": "orange-light-raised",
+        "secondary": "orange-light-secondary",
+        "selection-background": "orange-light-selection-background",
+        "selection-text": "orange-light-selection-text",
+        "sidebar": "orange-light-sidebar"
+      },
+      "dark": {
+        "accent-base": "orange-dark-accent-base",
+        "accent-high": "orange-dark-accent-high",
+        "accent-low": "orange-dark-accent-low",
+        "body": "orange-dark-body",
+        "border": "orange-dark-border",
+        "card": "orange-dark-card",
+        "code": "orange-dark-code",
+        "focus": "orange-dark-focus",
+        "hairline": "orange-dark-hairline",
+        "header": "orange-dark-header",
+        "inline-code": "orange-dark-inline-code",
+        "inverted": "orange-dark-inverted",
+        "link": "orange-dark-link",
+        "muted": "orange-dark-muted",
+        "navigation": "orange-dark-navigation",
+        "page": "orange-dark-page",
+        "panel": "orange-dark-panel",
+        "raised": "orange-dark-raised",
+        "secondary": "orange-dark-secondary",
+        "selection-background": "orange-dark-selection-background",
+        "selection-text": "orange-dark-selection-text",
+        "sidebar": "orange-dark-sidebar"
+      }
+    }
+  },
+  "defaultAccent": "orange",
+  "typography": {
+    "body": {
+      "font": "system-sans",
+      "size": 18.0,
+      "lineHeight": 1.65
+    },
+    "heading": {
+      "font": "system-mono",
+      "size": 30.0,
+      "lineHeight": 1.3
+    },
+    "ui": {
+      "font": "system-mono",
+      "size": 14.0,
+      "lineHeight": 1.5
+    },
+    "code": {
+      "font": "system-mono",
+      "size": 14.0,
+      "lineHeight": 1.6
+    }
+  },
+  "surfaces": {
+    "borderStyle": "solid",
+    "focusOffset": 3.0,
+    "spacing": 4.0,
+    "radii": 4.0,
+    "border": 1.0,
+    "focus": 2.0,
+    "content": 704.0,
+    "sidebar": 272.0
+  },
+  "layoutPreset": "standard",
+  "components": {
+    "pageTitle": "page-title-frame"
+  },
+  "codePresentation": {
+    "mode": "expressive-code",
+    "syntaxTheme": {
+      "light": {
+        "rules": [
+          {
+            "scopes": [
+              "keyword"
+            ],
+            "foreground": "#8d3267"
+          },
+          {
+            "scopes": [
+              "string"
+            ],
+            "foreground": "#126475"
+          },
+          {
+            "scopes": [
+              "comment"
+            ],
+            "foreground": "#625a55"
+          },
+          {
+            "scopes": [
+              "entity.name.function"
+            ],
+            "foreground": "#9c3e0b"
+          },
+          {
+            "scopes": [
+              "variable"
+            ],
+            "foreground": "#524598"
+          },
+          {
+            "scopes": [
+              "constant"
+            ],
+            "foreground": "#756014"
+          }
+        ]
+      },
+      "dark": {
+        "rules": [
+          {
+            "scopes": [
+              "keyword"
+            ],
+            "foreground": "#f1a8cd"
+          },
+          {
+            "scopes": [
+              "string"
+            ],
+            "foreground": "#83d9dd"
+          },
+          {
+            "scopes": [
+              "comment"
+            ],
+            "foreground": "#b9b4ad"
+          },
+          {
+            "scopes": [
+              "entity.name.function"
+            ],
+            "foreground": "#ffac75"
+          },
+          {
+            "scopes": [
+              "variable"
+            ],
+            "foreground": "#c6b2f3"
+          },
+          {
+            "scopes": [
+              "constant"
+            ],
+            "foreground": "#e5cf8a"
+          }
+        ]
+      }
+    },
+    "frame": "editor",
+    "marks": {
+      "marked": "#bf771d",
+      "inserted": "#25834b",
+      "deleted": "#c44848"
+    },
+    "copy": "standard",
+    "tabs": "deferred"
+  },
+  "fonts": [],
+  "catalog": {
+    "hero": {
+      "routes": [
+        {
+          "route": "/overview",
+          "layout": "banner",
+          "title": "A clear view of the work",
+          "subtitle": "Terminal Nova / Forge Console",
+          "summary": "Readable documentation, explicit design decisions and original technical graphics.",
+          "announcement": "Forge Console 0.2.0",
+          "actions": [
+            {
+              "label": "Explore the workflow",
+              "href": "/docs/workflow/"
+            }
+          ]
+        }
+      ]
+    },
+    "pageTitle": {
+      "copy": "url"
+    },
+    "pagination": {
+      "variant": "card"
+    },
+    "sidebar": {
+      "mode": "nested",
+      "groupIds": [
+        "documentation"
+      ]
+    },
+    "layout": "standard",
+    "fontLicenses": []
+  }
+}

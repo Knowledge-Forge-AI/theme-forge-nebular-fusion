@@ -1,0 +1,466 @@
+{
+  "schema": "theme-forge.generated-appearance-inventory.v1",
+  "members": [
+    {
+      "path": "anime/appearance-extensions.css",
+      "bytes": 361,
+      "sha256": "5f86d5ca7ea76c4c14c3e608ccf37424334f19684c5ee04c507551bb7cc01ada"
+    },
+    {
+      "path": "anime/application-extension.mapping.json",
+      "bytes": 984,
+      "sha256": "98193943251c3e6fc4e99ff0838ca4eb4e4d00c11c4a4aabcf0eb82ba0c9d9eb"
+    },
+    {
+      "path": "anime/application.css",
+      "bytes": 4247,
+      "sha256": "3e6bcb1635261da524f66eace082d7878c548db832f8e7816ac2c26fd55a6cbb"
+    },
+    {
+      "path": "anime/cttn.css",
+      "bytes": 3840,
+      "sha256": "e96efe07659bf29747011e93c04511e9b056900d6e1cf6e28c2a6ce36295817d"
+    },
+    {
+      "path": "anime/loom.mapping.json",
+      "bytes": 50889,
+      "sha256": "84e7ef1d4b005ab4cfd1ddaac7b6f039924a497f9e7c7808e953384ced3e6c21"
+    },
+    {
+      "path": "anime/solar.mapping.json",
+      "bytes": 31263,
+      "sha256": "60971ba62f61b501a53d253cdbc4bb5802301c04486d041b96f1bce5acd44fe8"
+    },
+    {
+      "path": "anime/sttn.catalog.json",
+      "bytes": 16810,
+      "sha256": "7324ca5b1bafe641af9f49a1f64fc563d06fbf44e5c71c6f4a8a2ed33b0adc83"
+    },
+    {
+      "path": "anime/sttn.css",
+      "bytes": 10915,
+      "sha256": "99b3d65d28a2a7612f253971ab30c8f746c6aff3d2695db82e52156082dd9c93"
+    },
+    {
+      "path": "anime/styles/accent.css",
+      "bytes": 693,
+      "sha256": "53112c292fc812c12aef899087c36afbf9a72640d8fe7074531f2b7af4fbe579"
+    },
+    {
+      "path": "anime/styles/base.css",
+      "bytes": 2378,
+      "sha256": "f355e4591cb5b83f0ce6f21ca7674149c4b9c6a26b4c32a37f3cba32fa06cef9"
+    },
+    {
+      "path": "anime/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "anime/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "6ff84d5d149cceb2ecbc7b034f5e2cc3a22724e98add802c98862db706776e4c"
+    },
+    {
+      "path": "anime/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "anime/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "anime/styles/tokens.css",
+      "bytes": 4149,
+      "sha256": "8a1e2b49cb337a8ef5dacc6d03132f675023cc38c6016d21807ccb86b1c08f59"
+    },
+    {
+      "path": "catalog.json",
+      "bytes": 286807,
+      "sha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351"
+    },
+    {
+      "path": "developer/appearance-extensions.css",
+      "bytes": 360,
+      "sha256": "154928721cf2ad497473fd0243e4c93a361ed3434b348afd56df32d2868e02ec"
+    },
+    {
+      "path": "developer/application-extension.mapping.json",
+      "bytes": 983,
+      "sha256": "c455475eb33d77f4236b4da33077d0e63b8fdad547dce4316ea193321f90aacc"
+    },
+    {
+      "path": "developer/application.css",
+      "bytes": 4250,
+      "sha256": "6952118016681724443152d5a27c3bbe231e1ad804c33076432dd62b7379f88d"
+    },
+    {
+      "path": "developer/cttn.css",
+      "bytes": 3844,
+      "sha256": "fd91f8ef49be6386327638070bc2dc93fc8ad7464bdab052dcc4ddaa52006f79"
+    },
+    {
+      "path": "developer/loom.mapping.json",
+      "bytes": 46521,
+      "sha256": "7ac1711a9b88f4e90bc0f7b433a98060d3bc84affe4ba4583bed8fdc891fb915"
+    },
+    {
+      "path": "developer/solar.mapping.json",
+      "bytes": 31275,
+      "sha256": "6621225e9625f7e31b4c50e1cb6e721fc3ffab26fab48002b8af26ddd5ba2d69"
+    },
+    {
+      "path": "developer/sttn.catalog.json",
+      "bytes": 12736,
+      "sha256": "a2371dc0ece80bb70d8f8a0f0c695e5a2b721ebd30243554744cc9b4e97bf002"
+    },
+    {
+      "path": "developer/sttn.css",
+      "bytes": 10917,
+      "sha256": "2c12f2220958e9233570c51ebb5b13e8c0caa4523aa1cd88a34cc6c2ba589fcf"
+    },
+    {
+      "path": "developer/styles/accent.css",
+      "bytes": 693,
+      "sha256": "1fa0ecf300bb8f89ff692abd6e2655418dc8248800a2721984b48b86d75ec048"
+    },
+    {
+      "path": "developer/styles/base.css",
+      "bytes": 2380,
+      "sha256": "0142aaf1ee0e22536fdaf27bdf79eaa48d45bd317d875141f06c5441ce17d65d"
+    },
+    {
+      "path": "developer/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "developer/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "05a350ed6654c1c8d6b08f055f3192e926ed7558704f3ed45496d223ff341183"
+    },
+    {
+      "path": "developer/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "developer/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "developer/styles/tokens.css",
+      "bytes": 4149,
+      "sha256": "933c425498a80db8dcf939cf28c10ad670ad7543efbb352b31dedccdc2787205"
+    },
+    {
+      "path": "gamer/appearance-extensions.css",
+      "bytes": 360,
+      "sha256": "25e295fb65131b203155a64275055ba4d59d466042c7a5b6b6d03b9c34ca0c18"
+    },
+    {
+      "path": "gamer/application-extension.mapping.json",
+      "bytes": 983,
+      "sha256": "3d469305eb3c7221f018ce2985d106c6f77bd0ea0ffd05fc638b171bc313823e"
+    },
+    {
+      "path": "gamer/application.css",
+      "bytes": 4250,
+      "sha256": "c89d11e1c225127c4288a7a6b3f2a5f096d3cb8ee96225e47fea7897643919d6"
+    },
+    {
+      "path": "gamer/cttn.css",
+      "bytes": 3844,
+      "sha256": "4832861605414f343fe16c4e591cf0c0cf39beb52356211ba17a0bdd36de5e85"
+    },
+    {
+      "path": "gamer/loom.mapping.json",
+      "bytes": 46558,
+      "sha256": "2e6aa3512df64896a7ec2af8fddb3b624d9888e75f95dd4f9a37945be1f2cb1c"
+    },
+    {
+      "path": "gamer/solar.mapping.json",
+      "bytes": 31272,
+      "sha256": "5c570112a0b215851aa90c254061b126d4db1530c3f52856ce6c5fa37178f983"
+    },
+    {
+      "path": "gamer/sttn.catalog.json",
+      "bytes": 12768,
+      "sha256": "c9a9098fef98b02af294b2fa0fb6987e52b9a7a38bbda368e4d87e4e159c3c93"
+    },
+    {
+      "path": "gamer/sttn.css",
+      "bytes": 10915,
+      "sha256": "6cd6fbcda1124d47383b8f99fec7b5cba1564677333fcd833d18d0b313eb6b8e"
+    },
+    {
+      "path": "gamer/styles/accent.css",
+      "bytes": 693,
+      "sha256": "be66f2dc6915b99e1c93a18292dda08a2dc71f0c5b6cfe4de01499dd0b3df2ea"
+    },
+    {
+      "path": "gamer/styles/base.css",
+      "bytes": 2379,
+      "sha256": "6bef75866cf2cea303c436cd6649d880fed2e129e85d3e799661cced9ae70a75"
+    },
+    {
+      "path": "gamer/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "gamer/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "216c0b905ba9dbc2e7f350bfe437e00846c79786b17e096602b5c22261aa07e1"
+    },
+    {
+      "path": "gamer/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "gamer/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "gamer/styles/tokens.css",
+      "bytes": 4148,
+      "sha256": "bb72f7c87e019538fea39134b6d96c2ce1aad8625f8aa1e7dfa607d86f66f3a1"
+    },
+    {
+      "path": "graphic-designer/appearance-extensions.css",
+      "bytes": 360,
+      "sha256": "5f89ef21e287f005379fc7690a193b05a7cf48d9354f2a2c82326062e3b286de"
+    },
+    {
+      "path": "graphic-designer/application-extension.mapping.json",
+      "bytes": 983,
+      "sha256": "1c3007e95c4314d52cdd7a277940c95660f436c190ae52fae6e57d4585ccf04b"
+    },
+    {
+      "path": "graphic-designer/application.css",
+      "bytes": 4246,
+      "sha256": "5bd1f7de357259b389bfcdeab25044b5b8044ef4ad9a54388a762b4227001d12"
+    },
+    {
+      "path": "graphic-designer/cttn.css",
+      "bytes": 3840,
+      "sha256": "07aa8243219a78a89156cfc3ed711ad03574130506a317a81ba7cc7e0d375b45"
+    },
+    {
+      "path": "graphic-designer/loom.mapping.json",
+      "bytes": 46439,
+      "sha256": "a110e90888e01b64b92485679b378e39a7c9115ead0f0c7219c3ca025060b76c"
+    },
+    {
+      "path": "graphic-designer/solar.mapping.json",
+      "bytes": 31260,
+      "sha256": "caac449f8916b2340fffd520ba8b71937933f2025d1ea21cc3667ef3072f4c97"
+    },
+    {
+      "path": "graphic-designer/sttn.catalog.json",
+      "bytes": 12742,
+      "sha256": "0f2c408f8349496cda27b7cfbf21f481085aa31b8e9c333401f323b5c7ba2298"
+    },
+    {
+      "path": "graphic-designer/sttn.css",
+      "bytes": 10916,
+      "sha256": "dede2e61fe3ae76bf93f09a93daaba03c5fe95cf7f260ea68290efc8f3595f4c"
+    },
+    {
+      "path": "graphic-designer/styles/accent.css",
+      "bytes": 693,
+      "sha256": "1143a64f4bb3be880d3fba227be3cb2d2717a48fcd2d264dce7d4511d17d0375"
+    },
+    {
+      "path": "graphic-designer/styles/base.css",
+      "bytes": 2378,
+      "sha256": "f355e4591cb5b83f0ce6f21ca7674149c4b9c6a26b4c32a37f3cba32fa06cef9"
+    },
+    {
+      "path": "graphic-designer/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "graphic-designer/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "e0f5b837a7677b6280c2dda6b6ff7df13e4f0f9c1d16e41a1fdca9185a5699b9"
+    },
+    {
+      "path": "graphic-designer/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "graphic-designer/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "graphic-designer/styles/tokens.css",
+      "bytes": 4150,
+      "sha256": "64f57f883efda28cf27a64d5b6b840690028692b093245aa5b339c014edc0fa2"
+    },
+    {
+      "path": "nebular/appearance-extensions.css",
+      "bytes": 361,
+      "sha256": "8a7e900b83d9b77f0d145adf1dc2fc287b7a80de5681922a5e12832f908c640b"
+    },
+    {
+      "path": "nebular/application-extension.mapping.json",
+      "bytes": 984,
+      "sha256": "806d83229e81cb27ff8e0ac64baf8f7ac9f0f2024fbb8e52c9fec16279c36545"
+    },
+    {
+      "path": "nebular/application.css",
+      "bytes": 4228,
+      "sha256": "616ffa3e0001cf146d552fcb5cca18b177febabf9ca406151578db53fd3d84cb"
+    },
+    {
+      "path": "nebular/cttn.css",
+      "bytes": 3821,
+      "sha256": "28962ace9e9ef9651fa1d35e2158552b02522852e75b75cdba71327628fb6dde"
+    },
+    {
+      "path": "nebular/loom.mapping.json",
+      "bytes": 42951,
+      "sha256": "c2c45d6dc4f676147f0f191b2f115293cb1721a7ba91bbc87c105ebbf6530182"
+    },
+    {
+      "path": "nebular/solar.mapping.json",
+      "bytes": 21932,
+      "sha256": "be1d3d3f51f0408c848e89b5254428cc88c8c0e7386ce148ca0faa14c6191aa3"
+    },
+    {
+      "path": "nebular/sttn.catalog.json",
+      "bytes": 20371,
+      "sha256": "9c713eb02549b4ae58921bd316405a8bf9f1c28e169a1a185ed2d075e7c05f1a"
+    },
+    {
+      "path": "nebular/sttn.css",
+      "bytes": 10907,
+      "sha256": "b6e74c12cd4eed6dd6e7cba28bead4892dee6fafc24af96ab57349ea51ec26cc"
+    },
+    {
+      "path": "nebular/styles/accent.css",
+      "bytes": 693,
+      "sha256": "ecb223c7ce6b6792b3ace400ae7145ccb1cc2fea6af7e884dc8c11932b478733"
+    },
+    {
+      "path": "nebular/styles/base.css",
+      "bytes": 2378,
+      "sha256": "bfce7094679830b2e3d030127d4ed74390fd51f5d504c62fd21f529776b139c7"
+    },
+    {
+      "path": "nebular/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "nebular/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "579a326977806b286204b21dfc883e2f64308bcfc3461cae6f3f5d61eacbe484"
+    },
+    {
+      "path": "nebular/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "nebular/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "nebular/styles/tokens.css",
+      "bytes": 4141,
+      "sha256": "51f3b2f14cebc21868fdafe5a1b0ed695a776c316f293ea728e3107e1d354e0d"
+    },
+    {
+      "path": "runtime-baselines.ts",
+      "bytes": 26498,
+      "sha256": "11714787ea2cdf79a3ad25a2bd71affe5ab51948071e2edf99d9d50575ccf12f"
+    },
+    {
+      "path": "terminal-nova/appearance-extensions.css",
+      "bytes": 360,
+      "sha256": "f617f809adc5db9a7c739b5a9218b57467934fe160be92214f49ef6feb97dc55"
+    },
+    {
+      "path": "terminal-nova/application-extension.mapping.json",
+      "bytes": 983,
+      "sha256": "51908fd440fa3fb469d5c413b68c2baae1f658b95d7bfad1014b5614c1202124"
+    },
+    {
+      "path": "terminal-nova/application.css",
+      "bytes": 4227,
+      "sha256": "e4f8327022953c78996bf799385feae0ad7caff850eeaf9b198a7a6c5eb5ff7f"
+    },
+    {
+      "path": "terminal-nova/cttn.css",
+      "bytes": 3821,
+      "sha256": "acf0ccb3c315f6de0c2cf655260efa520431996f8c510f3ddb2941e0ac4d7fe9"
+    },
+    {
+      "path": "terminal-nova/loom.mapping.json",
+      "bytes": 34604,
+      "sha256": "9e90b21d11c33af6f275884675e0ec5e10e31d2a217c84a236febd1c183097b2"
+    },
+    {
+      "path": "terminal-nova/solar.mapping.json",
+      "bytes": 21943,
+      "sha256": "ae7d89e5935982d7b8bfce6511390cbb99e675c6a9d3244062456f7d9a5ccd13"
+    },
+    {
+      "path": "terminal-nova/sttn.catalog.json",
+      "bytes": 12739,
+      "sha256": "1c0a90c7aba31ff3daf794ec1ecc8bb64edf081e7fcafb8c62d4c218c586e294"
+    },
+    {
+      "path": "terminal-nova/sttn.css",
+      "bytes": 10922,
+      "sha256": "328439213f29cf6e05ac7df7323d2dda5336bce9228825b26a16b34a1beadcb7"
+    },
+    {
+      "path": "terminal-nova/styles/accent.css",
+      "bytes": 693,
+      "sha256": "2d0dcd05a9daf8d1e2d8a52ef9d9cb3921164b968c3e6fc9026fd9d15eff8176"
+    },
+    {
+      "path": "terminal-nova/styles/base.css",
+      "bytes": 2378,
+      "sha256": "bfce7094679830b2e3d030127d4ed74390fd51f5d504c62fd21f529776b139c7"
+    },
+    {
+      "path": "terminal-nova/styles/code.css",
+      "bytes": 402,
+      "sha256": "260665acc2797b18443497987bd9e0508fdf28edb0fc8df6df059b3744d6b7ca"
+    },
+    {
+      "path": "terminal-nova/styles/compat.css",
+      "bytes": 2670,
+      "sha256": "7f1ce986048d6348af8d5135780da32dcfa94308f402a42f4b4b88daaf31faff"
+    },
+    {
+      "path": "terminal-nova/styles/layers.css",
+      "bytes": 144,
+      "sha256": "de5d41c727f757b231bbd7bc463e157f4f75bb04363c99faa8feeb0474a61290"
+    },
+    {
+      "path": "terminal-nova/styles/overrides.css",
+      "bytes": 466,
+      "sha256": "87a8e2ea1ac8ba344246405fa9588dccbbaf6824113bfce17f3a5ab695f195d2"
+    },
+    {
+      "path": "terminal-nova/styles/tokens.css",
+      "bytes": 4156,
+      "sha256": "74f6bac4dadaa3c48829a62d1e246c03b0196f2c8602768fe0bc38e641c218bd"
+    }
+  ],
+  "digest": "d9f94a7f5ce0730098d840e409ca588caefc2e05c45fbec02d749d25f418fb51"
+}

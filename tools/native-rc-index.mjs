@@ -10,11 +10,24 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readRegularSnapshot } from "./fs-snapshot.mjs";
-import { LANES } from "./native-rc-plan.mjs";
+import { appearanceScenariosForPlan, LANES } from "./native-rc-plan.mjs";
 
 const json = (path) => JSON.parse(readRegularSnapshot(path, { label: path, maxBytes: 16 * 1024 * 1024 }).bytes.toString("utf8"));
 const DIGEST = /^(?:sha256:)?[a-f0-9]{64}$/;
 const DAY = 24 * 60 * 60 * 1000;
+
+function smokeSummary(run) {
+  const summary = { label: run.label, scenario: run.scenario, source: run.source, status: run.status, receiptSha256: run.receiptSha256 };
+  if (run.scenario === "appearance-pair") return { ...summary, pairIdentity: run.pairIdentity, appearancePair: run.appearancePair, observedPreference: run.observedPreference };
+  if (run.scenario === "paired-v2") return { ...summary, appearanceMatrix: run.appearanceMatrix, appearanceMatrixEditorPreserved: run.appearanceMatrixEditorPreserved };
+  return summary;
+}
+
+export function appearancePairExecutableIdentityMatches(run, sealedExecutableSha256) {
+  return DIGEST.test(sealedExecutableSha256 ?? "")
+    && run?.pairIdentity?.rawExecutableSha256 === sealedExecutableSha256
+    && run?.pairIdentity?.npmExecutableSha256 === sealedExecutableSha256;
+}
 
 /** Reads an artifact's expiry through the Actions REST API (GET only). */
 export async function artifactExpiry({ repository, artifactId, token, fetchImpl = globalThis.fetch }) {
@@ -64,9 +77,31 @@ export async function buildIndex({ plan, needs, downloadDir, expiry, now = Date.
         if (actual.sha256 !== file.sha256) problems.push(`${file.name} does not match its sealed digest`);
       }
       if (!(evidence.smoke ?? []).length || !(evidence.smoke ?? []).every((run) => run.status === "pass")) problems.push("not every smoke run passed");
+      const appearanceScenarios = appearanceScenariosForPlan(plan, name);
+      if (appearanceScenarios === null) problems.push("appearance scenario declaration is malformed");
+      const appearanceRuns = (evidence.smoke ?? []).filter((run) => appearanceScenarios?.includes(run.scenario));
+      for (const scenario of appearanceScenarios ?? []) {
+        const matching = appearanceRuns.filter((run) => run.scenario === scenario);
+        if (matching.length !== 1 || matching[0]?.source !== "raw-archive") problems.push(`appearance scenario ${scenario} is not exactly one raw sealed receipt`);
+        if (scenario === "appearance-pair") {
+          if (matching[0]?.appearancePair?.status !== "pass") problems.push("appearance pair did not pass its sealed gate");
+          const sealedExecutableSha256 = evidence.candidate?.executableSha256;
+          if (!DIGEST.test(sealedExecutableSha256 ?? "")) problems.push("sealed candidate executable identity is missing");
+          if (!appearancePairExecutableIdentityMatches(matching[0], sealedExecutableSha256)) {
+            problems.push("appearance pair executable parity is not sealed");
+          }
+        }
+        if (scenario === "paired-v2"
+            && (matching[0]?.appearanceMatrix?.status !== "pass" || matching[0]?.appearanceMatrix?.cells !== 12)) {
+          problems.push("paired-v2 appearance matrix did not pass its sealed 12-cell gate");
+        }
+        if (scenario === "paired-v2" && matching[0]?.appearanceMatrixEditorPreserved !== true) {
+          problems.push("paired-v2 appearance matrix editor-preservation fact did not pass its sealed gate");
+        }
+      }
       entry.source = evidence.source;
       entry.candidate = evidence.candidate;
-      entry.smoke = (evidence.smoke ?? []).map(({ label, scenario, source, status, receiptSha256 }) => ({ label, scenario, source, status, receiptSha256 }));
+      entry.smoke = (evidence.smoke ?? []).map(smokeSummary);
       if (!expiry) {
         problems.push("retention read-back unavailable");
       } else {

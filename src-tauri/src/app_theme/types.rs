@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::paired_v2::{AppThemePairedCompileV2Response, PairedV2AdapterCompileRequest};
+
 macro_rules! closed_opt_struct {
     (
         pub struct $name:ident {
@@ -562,6 +564,7 @@ closed_opt_struct! {
         @opt pub readonly_reason: Option<String>,
         @opt pub diagnostic_code: Option<String>,
         @opt pub diagnostic_summary: Option<String>,
+        @opt pub v2_authoring_eligible: Option<bool>,
         @opt pub profile: Option<PairedProfileDto>,
         @opt pub v2_profile: Option<PairedProfileV2DocumentDto>,
     }
@@ -596,6 +599,13 @@ pub struct ThemeDescriptorDto {
     pub diagnostics: Vec<ThemeDiagnosticDto>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PairedV2AuthoringCapability {
+    pub session_id: String,
+    pub supported: bool,
+}
+
 closed_opt_struct! {
     pub struct AppThemeStatus {
         pub available: bool,
@@ -609,6 +619,7 @@ closed_opt_struct! {
         @opt pub active_display_name: Option<String>,
         @opt pub active_schema_version: Option<ProfileDocumentSchemaVersion>,
         @opt pub active_verification_status: Option<ProfileVerificationStatus>,
+        @opt pub paired_v2_authoring: Option<PairedV2AuthoringCapability>,
     }
 }
 
@@ -728,6 +739,8 @@ pub(crate) struct AdapterSubprocessRequest {
     pub language: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paired_v2_request: Option<Box<PairedV2AdapterCompileRequest>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -777,6 +790,8 @@ pub(crate) struct AdapterSubprocessResponse {
     pub details: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paired_v2_response: Option<Box<AppThemePairedCompileV2Response>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

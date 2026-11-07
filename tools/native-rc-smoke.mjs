@@ -19,12 +19,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readRegularSnapshot } from "./fs-snapshot.mjs";
 import { nativeLauncher } from "./native-launcher.mjs";
 import { verifyPlatformPackage } from "./native-rc-package.mjs";
 import { selectPayloadNativeRuntime } from "./native-runtime.mjs";
+import { buildExpectations, verifyExpectationsArtifact } from "./appearance-matrix-prep1/generate.mjs";
 
 export const APPLICATION_IDENTIFIER = "ai.knowledgeforge.themeforge.nebularfusion";
 export const RECEIPT_SCHEMA = "nebular.release-smoke-receipt-v1";
@@ -35,8 +36,46 @@ export const SCENARIOS = Object.freeze({
   B: Object.freeze({ platforms: ["linux-arm64"], caseSensitive: true, steps: ["app-shell", "app-theme-status", "app-theme-compile", "theme-lab-compile", "brand-system-view", "host-start", "host-status", "project-open-upper", "brand-read-upper", "project-open-lower", "brand-read-lower", "host-status-final"] }),
   C: Object.freeze({ platforms: ["linux-x64"], caseSensitive: true, steps: ["app-shell", "host-start", "host-start-idempotent", "host-stop", "host-start-again", "host-status", "project-open-case", "derive-plan-cancel", "derive-plan-apply", "host-status-final"] }),
   "C-signal": Object.freeze({ platforms: ["linux-x64"], caseSensitive: true, signal: true, steps: ["app-shell", "host-start", "host-start-idempotent", "host-stop", "host-start-again", "host-status", "project-open-case", "derive-plan-cancel", "derive-plan-apply", "host-status-final"] }),
+  "P-save": Object.freeze({ platforms: ["darwin-arm64", "linux-arm64", "linux-x64"], steps: ["p-save-shell", "p-save-load-missing", "p-save-select-family", "p-save-select-mode", "p-save-apply", "p-save-load-saved"] }),
+  "P-restart": Object.freeze({ platforms: ["darwin-arm64", "linux-arm64", "linux-x64"], steps: ["p-restart-shell", "p-restart-startup", "p-restart-load-exact"] }),
+  "paired-v2": Object.freeze({ platforms: ["darwin-arm64", "linux-arm64", "linux-x64"], steps: ["app-shell", "paired-app-theme", "paired-open-developer", "paired-brief", "paired-three-edits", "paired-compile-both", "paired-preview-acks", "paired-create-candidate", "paired-review-association", "paired-select-candidate", "paired-appearance-dark", "paired-apply-detached", "paired-save-as", "paired-reopen", "paired-appearance-matrix"] }),
+});
+export const SEAL_ONLY_SCENARIOS = Object.freeze({
+  "appearance-pair": Object.freeze({ platforms: ["darwin-arm64", "linux-arm64", "linux-x64"], steps: ["p-save", "p-restart"] }),
 });
 export const PLATFORM_SCENARIOS = Object.freeze({ "darwin-arm64": ["A"], "linux-arm64": ["B"], "linux-x64": ["C", "C-signal"] });
+export const APPEARANCE_PAIR_SCENARIOS = Object.freeze(["appearance-pair", "paired-v2"]);
+export const APPEARANCE_FAILURE_CATEGORIES = Object.freeze([
+  "appearance-startup-backend-unsupported",
+  "appearance-startup-load-rejected",
+  "appearance-save-failed",
+  "appearance-saved-status-timeout",
+  "appearance-selection-mismatch",
+  "appearance-computed-mismatch",
+  "appearance-record-mismatch",
+  "pair-leaf-inventory-mismatch",
+  "pair-layout-mismatch",
+  "restart-not-persisted",
+  "appearance-pair-harness-error",
+]);
+export const APPEARANCE_PREFERENCE_RECORD = Object.freeze({ version: 1, mode: "dark", light: "developer", dark: "developer" });
+export const APPEARANCE_PREFERENCE_BYTES = Buffer.from('{"version":1,"mode":"dark","light":"developer","dark":"developer"}');
+export const APPEARANCE_PREFERENCE_SHA256 = "11ed5c176d7725adcb7911ceb7a9a11943af63197dbee5d2e4317dc1df8c7540";
+export const APPEARANCE_PAIR_LIMITS = Object.freeze({ markerBytes: 160, preferenceBytes: 4 * 1024, phaseTimeoutMs: 420_000, phases: 2, views: 2 });
+export const APPEARANCE_MATRIX_FAMILY_IDS = Object.freeze(["terminal-nova", "nebular", "developer", "graphic-designer", "anime", "gamer"]);
+export const APPEARANCE_MATRIX_MODES = Object.freeze(["light", "dark"]);
+export const APPEARANCE_MATRIX_FACT_KEY = "appearanceMatrixCell";
+export const APPEARANCE_MATRIX_EDITOR_PRESERVED_FACT_KEY = "appearanceMatrixEditorPreserved";
+export const APPEARANCE_MATRIX_CELL_KEYS = Object.freeze(["family", "mode", "background", "primary", "fontUi", "radius", "selection", "selectionText", "rolesMatch"]);
+const APPEARANCE_MATRIX_SOURCE_LIMITS = Object.freeze({ runtimeBytes: 128 * 1024, catalogBytes: 16 * 1024, expectationsBytes: 64 * 1024 });
+const APPEARANCE_MATRIX_ROLE_KEYS = Object.freeze({
+  background: "--background",
+  primary: "--primary",
+  fontUi: "--tf-appearance-font-ui",
+  radius: "--tf-appearance-radius-surface",
+  selection: "--tf-appearance-selection",
+  selectionText: "--tf-appearance-selection-text",
+});
 const NPM_PLATFORM_KEYS = new Set(Object.keys(PLATFORM_SCENARIOS));
 const CORE_FIXTURE = "docs/examples/v0.4/brand-system/core-minimal";
 const DEFAULT_TIMEOUT_MS = 420_000;
@@ -46,6 +85,123 @@ const FILESYSTEM_CODES = new Set([
   "EMLINK", "ENOSPC", "EROFS", "EIO", "EMFILE", "ENFILE", "EXDEV", "ENAMETOOLONG", "EBADF",
 ]);
 const PROCESS_SYSCALLS = new Set(["kill", "spawn", "spawnSync", "waitpid"]);
+
+export function appearanceMatrixCellsForCheckout(checkout) {
+  const checkoutRoot = resolve(checkout);
+  const runtimePath = join(checkoutRoot, "src/features/appearance/generated/runtime-baselines.ts");
+  const catalogPath = join(checkoutRoot, "src/features/appearance/generated/catalog-index.json");
+  const expectationsPath = join(checkoutRoot, "src-tauri/src/release_smoke/appearance-role-expectations.v1.json");
+  const runtimeText = readRegularSnapshot(runtimePath, { label: "Generated appearance baselines", maxBytes: APPEARANCE_MATRIX_SOURCE_LIMITS.runtimeBytes }).bytes.toString("utf8");
+  const catalogText = readRegularSnapshot(catalogPath, { label: "Generated appearance catalog", maxBytes: APPEARANCE_MATRIX_SOURCE_LIMITS.catalogBytes }).bytes.toString("utf8");
+  const expectations = JSON.parse(readRegularSnapshot(expectationsPath, { label: "Generated appearance expectations", maxBytes: APPEARANCE_MATRIX_SOURCE_LIMITS.expectationsBytes }).bytes.toString("utf8"));
+  try {
+    verifyExpectationsArtifact(expectations, { runtimeText, catalogText });
+  } catch (error) {
+    throw new HarnessStateError(`generated appearance expectations are stale: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const expected = buildExpectations({
+    runtimeText,
+    catalogText,
+    runtimePath: "frontend-fixture/src/features/appearance/generated/runtime-baselines.ts",
+    catalogPath: "frontend-fixture/src/features/appearance/generated/catalog-index.json",
+  });
+  const rows = expected.rows;
+  for (let index = 0; index < APPEARANCE_MATRIX_FAMILY_IDS.length; index += 1) {
+    const light = rows[index];
+    const dark = rows[index + APPEARANCE_MATRIX_FAMILY_IDS.length];
+    if (light.roles["--background"] === dark.roles["--background"] || light.roles["--tf-appearance-selection"] === dark.roles["--tf-appearance-selection"]) {
+      throw new HarnessStateError(`generated appearance mode roles collapsed for ${light.family}`);
+    }
+  }
+  return Object.freeze(rows.map(({ family, mode, roles }) => Object.freeze({
+    family,
+    mode,
+    background: roles[APPEARANCE_MATRIX_ROLE_KEYS.background],
+    primary: roles[APPEARANCE_MATRIX_ROLE_KEYS.primary],
+    fontUi: roles[APPEARANCE_MATRIX_ROLE_KEYS.fontUi],
+    radius: roles[APPEARANCE_MATRIX_ROLE_KEYS.radius],
+    selection: roles[APPEARANCE_MATRIX_ROLE_KEYS.selection],
+    selectionText: roles[APPEARANCE_MATRIX_ROLE_KEYS.selectionText],
+    rolesMatch: true,
+  })));
+}
+
+function parseAppearanceMatrixCell(value, expected, index, problems) {
+  if (typeof value !== "string") {
+    problems.push(`appearance matrix fact ${index} value is not a string`);
+    return null;
+  }
+  if (Buffer.byteLength(value, "utf8") > 1024) {
+    problems.push(`appearance matrix fact ${index} exceeds 1024 bytes`);
+    return null;
+  }
+  let cell;
+  try {
+    cell = JSON.parse(value);
+  } catch {
+    problems.push(`appearance matrix fact ${index} is not JSON`);
+    return null;
+  }
+  if (JSON.stringify(cell) !== value) problems.push(`appearance matrix fact ${index} is not compact canonical JSON`);
+  if (cell === null || typeof cell !== "object" || Array.isArray(cell)
+      || JSON.stringify(Object.keys(cell)) !== JSON.stringify(APPEARANCE_MATRIX_CELL_KEYS)) {
+    problems.push(`appearance matrix fact ${index} keys are not closed and ordered`);
+    return null;
+  }
+  if (cell.family !== expected.family || cell.mode !== expected.mode) problems.push(`appearance matrix fact ${index} family/mode order mismatch`);
+  for (const role of ["background", "primary", "fontUi", "radius", "selection", "selectionText"]) {
+    if (typeof cell[role] !== "string" || cell[role].length === 0) problems.push(`appearance matrix fact ${index} ${role} type/value invalid`);
+    else if (cell[role] !== expected[role]) problems.push(`appearance matrix fact ${index} ${role} does not match generated source`);
+  }
+  if (cell.rolesMatch !== true) problems.push(`appearance matrix fact ${index} rolesMatch is not true`);
+  return cell;
+}
+
+export function validateAppearanceMatrixFacts(receipt, checkout) {
+  const problems = [];
+  const facts = receipt?.driver?.facts;
+  if (!Array.isArray(facts)) return ["appearance matrix facts are missing"];
+  if (facts.length > 32) problems.push("driver facts exceed the native 32-fact bound");
+  for (const [index, fact] of facts.entries()) {
+    if (!Array.isArray(fact) || fact.length !== 2 || typeof fact[0] !== "string" || typeof fact[1] !== "string") {
+      problems.push(`driver fact ${index} has invalid tuple shape`);
+    } else if (Buffer.byteLength(fact[0], "utf8") > 64 || Buffer.byteLength(fact[1], "utf8") > 1024) {
+      problems.push(`driver fact ${index} exceeds native bounds`);
+    }
+  }
+  const matrixFacts = facts.filter((fact) => Array.isArray(fact) && fact.length === 2 && fact[0] === APPEARANCE_MATRIX_FACT_KEY);
+  if (matrixFacts.length !== 12) {
+    problems.push(`appearance matrix requires exactly 12 ${APPEARANCE_MATRIX_FACT_KEY} facts`);
+    return problems;
+  }
+  let expected;
+  try {
+    expected = appearanceMatrixCellsForCheckout(checkout);
+  } catch {
+    problems.push("generated appearance role source could not be read");
+    return problems;
+  }
+  const seen = new Set();
+  matrixFacts.forEach((fact, index) => {
+    const cell = parseAppearanceMatrixCell(fact[1], expected[index], index, problems);
+    if (cell !== null && typeof cell.family === "string" && typeof cell.mode === "string") {
+      const key = `${cell.family}:${cell.mode}`;
+      if (seen.has(key)) problems.push(`appearance matrix fact ${index} is duplicated`);
+      seen.add(key);
+    }
+  });
+  return problems;
+}
+
+export function validateAppearanceMatrixEditorPreservedFact(receipt) {
+  const facts = receipt?.driver?.facts;
+  if (!Array.isArray(facts)) return ["appearance matrix editor-preserved fact is missing"];
+  const matching = facts.filter((fact) => Array.isArray(fact) && fact.length === 2 && fact[0] === APPEARANCE_MATRIX_EDITOR_PRESERVED_FACT_KEY);
+  const problems = [];
+  if (matching.length !== 1) problems.push("appearance matrix editor-preserved fact must occur exactly once");
+  if (matching.length === 1 && matching[0][1] !== "true") problems.push("appearance matrix editor-preserved fact must be true");
+  return problems;
+}
 
 /** Authenticate the selected npm package manifest before using any projected runtime aliases. */
 export function authenticateNpmPackageContext(packageRoot, platform, packageManifestSha256) {
@@ -228,6 +384,7 @@ function deriveProject(checkout, destination, name) {
 export function prepareFixtures(scenario, checkout, smokeDir) {
   const fixtures = join(smokeDir, "fixtures");
   mkdirSync(fixtures, { mode: 0o700 });
+  if (scenario === "paired-v2") return { observed: {} };
   if (SCENARIOS[scenario].caseSensitive && !caseSensitive(fixtures)) {
     throw new HarnessStateError(`scenario ${scenario} requires a case-sensitive filesystem`);
   }
@@ -329,7 +486,10 @@ export function judgeReceipt(record, { scenario, platform, executableSha256, pid
   if (receipt.target !== triple) problems.push(`receipt target ${receipt.target}`);
   if (receipt.executable?.sha256 !== executableSha256) problems.push("the running executable is not the candidate executable");
   const steps = receipt.driver?.steps ?? [];
-  const byId = new Map(steps.map((step) => [step.id, step]));
+  const byId = new Map(steps.filter((step) => step !== null && typeof step === "object").map((step) => [step.id, step]));
+  if (scenario === "paired-v2" && JSON.stringify(steps.map((step) => step !== null && typeof step === "object" ? step.id : null)) !== JSON.stringify(SCENARIOS[scenario].steps)) {
+    problems.push("paired-v2 steps are not the exact ordered sequence");
+  }
   for (const id of SCENARIOS[scenario].steps) {
     if (!byId.get(id)?.ok) problems.push(`required step ${id} ${byId.has(id) ? "failed" : "missing"}: ${byId.get(id)?.detail ?? ""}`);
   }
@@ -408,11 +568,14 @@ export function buildSmokeEnvironment({ platform, home, temp, smokeDir, xdg, inh
 
 /**
  * Runs one scenario against one extracted candidate.
- * @param {{ platform: string, scenario: string, launchRoot: string, checkout: string, evidenceDir: string, source?: "raw-archive"|"npm-package", packageManifestSha256?: string, label?: string, timeoutMs?: number, keep?: boolean }} options
+ * @param {{ platform: string, scenario: string, launchRoot: string, checkout: string, evidenceDir: string, source?: "raw-archive"|"npm-package", packageManifestSha256?: string, label?: string, timeoutMs?: number, keep?: boolean, layout?: { home: string, temp: string, smokeDir: string, xdg: { config: string, cache: string, data: string, state: string, runtime: string } }, extraEnv?: Record<string, string>, prepareFixtures?: boolean }} options
  */
 export async function runSmoke(options) {
   const { platform, scenario } = options;
+  if (scenario === "appearance-pair") throw new Error("appearance-pair is seal-only and cannot be launched");
   if (!SCENARIOS[scenario] || !SCENARIOS[scenario].platforms.includes(platform)) throw new Error(`scenario ${scenario} is not defined for ${platform}`);
+  if (scenario.startsWith("P-") && options.layout === undefined) throw new Error(`${scenario} requires an allocated appearance-pair view layout`);
+  if (scenario === "paired-v2" && options.source !== "raw-archive") throw new Error("paired-v2 requires the raw archive source");
   const launchRoot = realpathSync(resolve(options.launchRoot));
   const authenticatedPackage = options.source === "npm-package"
     ? authenticateNpmPackageContext(dirname(launchRoot), platform, options.packageManifestSha256)
@@ -436,25 +599,26 @@ export async function runSmoke(options) {
     }
   }
 
-  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "nebular-rc-smoke-")));
-  const home = ownerOnlyDir(join(scratch, "home"));
-  const temp = ownerOnlyDir(join(scratch, "tmp"));
-  const smokeDir = ownerOnlyDir(join(temp, "nebular-release-smoke"));
-  const xdg = Object.fromEntries(["config", "cache", "data", "state", "runtime"].map((name) => [name, ownerOnlyDir(join(scratch, "xdg", name))]));
+  const layout = options.layout ?? null;
+  const scratch = layout ? null : realpathSync(mkdtempSync(join(tmpdir(), "nebular-rc-smoke-")));
+  const home = layout?.home ?? ownerOnlyDir(join(scratch, "home"));
+  const temp = layout?.temp ?? ownerOnlyDir(join(scratch, "tmp"));
+  const smokeDir = layout?.smokeDir ?? ownerOnlyDir(join(temp, "nebular-release-smoke"));
+  const xdg = layout?.xdg ?? Object.fromEntries(["config", "cache", "data", "state", "runtime"].map((name) => [name, ownerOnlyDir(join(scratch, "xdg", name))]));
   const result = { schema: RUN_SCHEMA, label, platform, scenario, source: options.source ?? null, executable: { path: relative(launchRoot, executable), sha256: measured.sha256, size: measured.size }, checks: {}, problems: [] };
   const started = Date.now();
   return finalizeSmokeRun({
     result,
     keep: Boolean(options.keep),
     body: async (run) => {
-      const fixtures = prepareFixtures(scenario, checkout, smokeDir);
+      const fixtures = options.prepareFixtures === false ? { observed: {} } : prepareFixtures(scenario, checkout, smokeDir);
       const fixturesBefore = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
       const locations = persistentStateLocations(platform);
       const persistentBefore = snapshotLocations(locations);
       const preexisting = candidateProcesses(launchRoot);
       if (preexisting.length) throw new HarnessStateError(`candidate processes already running: ${JSON.stringify(preexisting)}`);
 
-      const env = buildSmokeEnvironment({ platform, home, temp, smokeDir, xdg });
+      const env = { ...buildSmokeEnvironment({ platform, home, temp, smokeDir, xdg }), ...validatedSmokeExtraEnv(scenario, options.extraEnv) };
       const log = { stdout: [], stderr: [] };
       const child = spawn(launchTarget, [`--nebular-release-smoke=${scenario}`], { cwd: home, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       if (typeof child.pid === "number") run.launched();
@@ -505,7 +669,14 @@ export async function runSmoke(options) {
         () => readReceipt(smokeDir),
         (observed) => writeFileSync(join(evidenceDir, `${label}.receipt.json`), `${JSON.stringify(observed.receipt, null, 2)}\n`),
       );
-      result.receipt = record ? { sha256: record.sha256, status: record.receipt.status, steps: (record.receipt.driver?.steps ?? []).map((step) => ({ id: step.id, ok: step.ok, via: step.via, ms: step.ms })) } : null;
+      result.receipt = record ? { sha256: record.sha256, status: record.receipt.status, steps: (record.receipt.driver?.steps ?? []).map((step) => step !== null && typeof step === "object" ? ({ id: step.id, ok: step.ok, via: step.via, ms: step.ms }) : ({ id: null, ok: false, via: null, ms: null })) } : null;
+      if (scenario === "paired-v2") {
+        const matrixProblems = validateAppearanceMatrixFacts(record?.receipt, checkout);
+        const editorPreservedProblems = validateAppearanceMatrixEditorPreservedFact(record?.receipt);
+        result.appearanceMatrix = { status: matrixProblems.length === 0 ? "pass" : "fail", cells: matrixProblems.length === 0 ? 12 : null };
+        result.appearanceMatrixEditorPreserved = editorPreservedProblems.length === 0;
+        result.problems.push(...matrixProblems, ...editorPreservedProblems);
+      }
       result.problems.push(...judgeReceipt(record, { scenario, platform, executableSha256: measured.sha256, pid: child.pid }));
 
       const fixturesAfter = Object.fromEntries(Object.entries(fixtures.observed).map(([name, path]) => [name, inventory(path)]));
@@ -527,8 +698,310 @@ export async function runSmoke(options) {
       const after = readRegularSnapshot(executable, { label: "Candidate executable", maxBytes: 1024 * 1024 * 1024 });
       if (after.sha256 !== measured.sha256) result.problems.push("the candidate executable changed during the smoke run");
     },
-    cleanup: () => rmSync(scratch, { recursive: true, force: true }),
+    cleanup: () => { if (scratch) rmSync(scratch, { recursive: true, force: true }); },
     writeReport: (text) => writeFileSync(join(evidenceDir, `${label}.run.json`), text),
+  });
+}
+
+const APPEARANCE_PAIR_MARKER = ".nebular-appearance-pair-v1";
+const APPEARANCE_PAIR_MARKER_SCHEMA = "nebular.appearance-pair.v1";
+const APPEARANCE_PREFERENCE_ENV = "TFNF_RELEASE_SMOKE_PREFERENCES_DIR";
+
+function validatedSmokeExtraEnv(scenario, extraEnv) {
+  if (extraEnv === undefined) return {};
+  if (extraEnv === null || typeof extraEnv !== "object" || Array.isArray(extraEnv)) {
+    throw new HarnessStateError("smoke extra environment is malformed");
+  }
+  const keys = Object.keys(extraEnv);
+  if (scenario !== "P-save" && scenario !== "P-restart") {
+    throw new HarnessStateError("smoke extra environment is only available to appearance pair phases");
+  }
+  if (keys.some((key) => key !== APPEARANCE_PREFERENCE_ENV) || typeof extraEnv[APPEARANCE_PREFERENCE_ENV] !== "string") {
+    throw new HarnessStateError("smoke extra environment contains an unsupported key");
+  }
+  return { [APPEARANCE_PREFERENCE_ENV]: extraEnv[APPEARANCE_PREFERENCE_ENV] };
+}
+
+function assertOwnerDirectory(path, label) {
+  const info = lstatSync(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o7777) !== 0o700) {
+    throw new HarnessStateError(`${label} is not a real owner-only directory`);
+  }
+}
+
+function assertOwnerRegularFile(path, label, mode = 0o600) {
+  const info = lstatSync(path);
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || (info.mode & 0o7777) !== mode) {
+    throw new HarnessStateError(`${label} is not the required regular owner-only file`);
+  }
+}
+
+function sortedNames(path) {
+  return readdirSync(path).sort();
+}
+
+function exactNames(path, expected, label) {
+  const actual = sortedNames(path);
+  if (JSON.stringify(actual) !== JSON.stringify([...expected].sort())) {
+    throw new HarnessStateError(`${label} inventory mismatch`);
+  }
+}
+
+function createAppearancePairView(pairRoot, name) {
+  const viewRoot = ownerOnlyDir(join(pairRoot, name));
+  const home = ownerOnlyDir(join(viewRoot, "home"));
+  const temp = ownerOnlyDir(join(viewRoot, "tmp"));
+  const smokeDir = ownerOnlyDir(join(temp, "nebular-release-smoke"));
+  const xdg = Object.fromEntries(["config", "cache", "data", "state", "runtime"].map((part) => [part, ownerOnlyDir(join(viewRoot, "xdg", part))]));
+  return { viewRoot, home, temp, smokeDir, xdg };
+}
+
+export function createAppearancePairLayout(platform = "test-lane") {
+  const runRoot = realpathSync(mkdtempSync(join(tmpdir(), "nebular-appearance-pair-run-")));
+  try {
+    const lane = platform === "darwin-arm64" ? "macos-arm64" : platform;
+    const laneRoot = ownerOnlyDir(join(runRoot, lane));
+    const sourceRoot = ownerOnlyDir(join(laneRoot, "appearance-pair", "raw-only"));
+    const pairRoot = realpathSync(mkdtempSync(join(sourceRoot, "appearance-pair-v1-")));
+    const pairId = basename(pairRoot);
+    if (!/^appearance-pair-v1-[A-Za-z0-9._-]{1,96}$/u.test(pairId)) throw new HarnessStateError("appearance pair marker id is invalid");
+    const marker = join(pairRoot, APPEARANCE_PAIR_MARKER);
+    const markerBytes = Buffer.from(`${APPEARANCE_PAIR_MARKER_SCHEMA}\n${pairId}\n`);
+    if (markerBytes.byteLength > APPEARANCE_PAIR_LIMITS.markerBytes) throw new HarnessStateError("appearance pair marker exceeds its bound");
+    writeFileSync(marker, markerBytes, { flag: "wx", mode: 0o600 });
+    chmodSync(marker, 0o600);
+    const sharedRoot = ownerOnlyDir(join(pairRoot, "shared-prefs"));
+    const preferencesRoot = ownerOnlyDir(join(sharedRoot, "appearance-preferences"));
+    const viewA = createAppearancePairView(pairRoot, "view-a");
+    const viewB = createAppearancePairView(pairRoot, "view-b");
+    return { runRoot, laneRoot, sourceRoot, pairRoot, pairId, marker, sharedRoot, preferencesRoot, viewA, viewB };
+  } catch (error) {
+    try { rmSync(runRoot, { recursive: true, force: true }); } catch { /* retain the original allocation error */ }
+    throw error;
+  }
+}
+
+export function assertAppearancePairLayout(layout, phase) {
+  assertOwnerDirectory(layout.runRoot, "appearance pair run root");
+  assertOwnerDirectory(layout.laneRoot, "appearance pair lane root");
+  assertOwnerDirectory(layout.sourceRoot, "appearance pair source-form root");
+  assertOwnerDirectory(layout.pairRoot, "appearance pair root");
+  assertOwnerRegularFile(layout.marker, "appearance pair marker");
+  const marker = readRegularSnapshot(layout.marker, { label: "Appearance pair marker", maxBytes: APPEARANCE_PAIR_LIMITS.markerBytes }).bytes.toString("utf8");
+  if (marker !== `${APPEARANCE_PAIR_MARKER_SCHEMA}\n${layout.pairId}\n`) throw new HarnessStateError("appearance pair marker content mismatch");
+  exactNames(layout.pairRoot, [APPEARANCE_PAIR_MARKER, "shared-prefs", "view-a", "view-b"], "appearance pair root");
+  assertOwnerDirectory(layout.sharedRoot, "appearance pair shared preferences root");
+  assertOwnerDirectory(layout.preferencesRoot, "appearance preferences root");
+  exactNames(layout.sharedRoot, ["appearance-preferences"], "shared preferences root");
+  for (const [name, view] of [["view-a", layout.viewA], ["view-b", layout.viewB]]) {
+    assertOwnerDirectory(view.viewRoot, name);
+    assertOwnerDirectory(view.home, `${name} HOME`);
+    assertOwnerDirectory(view.temp, `${name} TMPDIR`);
+    assertOwnerDirectory(view.smokeDir, `${name} smoke root`);
+    for (const [xdgName, xdgPath] of Object.entries(view.xdg)) assertOwnerDirectory(xdgPath, `${name} XDG ${xdgName}`);
+    exactNames(view.viewRoot, ["home", "tmp", "xdg"], `${name} root`);
+    exactNames(view.temp, ["nebular-release-smoke"], `${name} temp root`);
+    const expectedSmokeNames = phase === "before-save"
+      ? []
+      : phase === "after-save"
+        ? (name === "view-a" ? ["receipt.json"] : [])
+        : ["receipt.json"];
+    exactNames(view.smokeDir, expectedSmokeNames, `${name} smoke root`);
+    if (expectedSmokeNames.length === 1) assertOwnerRegularFile(join(view.smokeDir, "receipt.json"), `${name} smoke receipt`);
+    exactNames(join(view.viewRoot, "xdg"), Object.keys(view.xdg), `${name} XDG root`);
+  }
+  const names = sortedNames(layout.preferencesRoot);
+  if (phase === "before-save" && names.length !== 0) throw new HarnessStateError("appearance preference leaf was not empty before P-save");
+  if (phase !== "before-save" && JSON.stringify(names) !== JSON.stringify(["appearance.json"])) throw new HarnessStateError("appearance preference leaf inventory mismatch");
+}
+
+export function assertAppearancePreferenceRecord(layout, expectedBytes = APPEARANCE_PREFERENCE_BYTES) {
+  const path = join(layout.preferencesRoot, "appearance.json");
+  assertOwnerRegularFile(path, "appearance preference record");
+  const bytes = readRegularSnapshot(path, { label: "Appearance preference record", maxBytes: APPEARANCE_PAIR_LIMITS.preferenceBytes }).bytes;
+  if (bytes.byteLength > APPEARANCE_PAIR_LIMITS.preferenceBytes) throw new HarnessStateError("appearance preference record exceeds its bound");
+  if (!bytes.equals(expectedBytes)) throw new HarnessStateError("appearance preference record bytes mismatch");
+  if (sha256(bytes) !== APPEARANCE_PREFERENCE_SHA256) throw new HarnessStateError("appearance preference record digest mismatch");
+  const decoded = JSON.parse(bytes.toString("utf8"));
+  if (JSON.stringify(decoded) !== JSON.stringify(APPEARANCE_PREFERENCE_RECORD)) throw new HarnessStateError("appearance preference record fields mismatch");
+  if (sortedNames(layout.preferencesRoot).some((name) => name.startsWith(".nebular-appearance-tmp-"))) {
+    throw new HarnessStateError("appearance preference temporary file remains");
+  }
+}
+
+function readOrdinarySmokeRuns(evidenceDir, platform) {
+  const runs = [];
+  for (const name of sortedNames(evidenceDir).filter((entry) => entry.endsWith(".run.json"))) {
+    try {
+      const value = JSON.parse(readRegularSnapshot(join(evidenceDir, name), { label: `Ordinary smoke run ${name}`, maxBytes: 16 * 1024 * 1024 }).bytes.toString("utf8"));
+      if (value.platform === platform && PLATFORM_SCENARIOS[platform]?.includes(value.scenario)) runs.push(value);
+    } catch {
+      // An unrelated diagnostic file cannot become package identity evidence.
+    }
+  }
+  return runs;
+}
+
+export function requireRawNpmParity(evidenceDir, platform, executableSha256) {
+  const runs = readOrdinarySmokeRuns(evidenceDir, platform);
+  const raw = runs.filter((run) => run.source === "raw-archive" && run.status === "pass");
+  const npm = runs.filter((run) => run.source === "npm-package" && run.status === "pass");
+  const rawDigests = new Set(raw.map((run) => run.executable?.sha256).filter((value) => typeof value === "string"));
+  const npmDigests = new Set(npm.map((run) => run.executable?.sha256).filter((value) => typeof value === "string"));
+  if (rawDigests.size !== 1 || npmDigests.size !== 1) throw new HarnessStateError("ordinary raw/npm smoke identity is incomplete");
+  const rawDigest = [...rawDigests][0];
+  const npmDigest = [...npmDigests][0];
+  if (rawDigest !== executableSha256 || npmDigest !== executableSha256 || rawDigest !== npmDigest) {
+    throw new HarnessStateError("appearance pair executable identity does not match ordinary raw/npm smoke");
+  }
+  return { rawExecutableSha256: rawDigest, npmExecutableSha256: npmDigest };
+}
+
+function normalizeAppearancePairResult(result) {
+  if (result.problems.some((problem) => !APPEARANCE_FAILURE_CATEGORIES.includes(problem))) {
+    result.problems = ["appearance-pair-harness-error"];
+  }
+  result.status = result.problems.length === 0 ? "pass" : "fail";
+  if (result.appearancePair) result.appearancePair.status = result.status;
+  return result;
+}
+
+/**
+ * Finalizes pair evidence only after owned-root cleanup, so a cleanup failure
+ * cannot leave a sealed pass record while returning a failed result.
+ * The callbacks keep this seam deterministic for source-level failure tests.
+ */
+export function finalizeAppearancePairEvidence({ result, keep = false, cleanup, writeEvidence }) {
+  if (!keep) {
+    try {
+      cleanup();
+    } catch {
+      result.problems.push("appearance-pair-harness-error");
+    }
+  }
+  normalizeAppearancePairResult(result);
+  try {
+    writeEvidence();
+  } catch {
+    result.problems.push("appearance-pair-harness-error");
+    normalizeAppearancePairResult(result);
+  }
+  return result;
+}
+
+function phaseSummary(result, phase) {
+  return {
+    status: result.status,
+    problems: result.status === "pass" ? [] : [phase === "save" ? (result.receipt ? "appearance-save-failed" : "appearance-saved-status-timeout") : "restart-not-persisted"],
+    receipt: result.receipt ? { sha256: result.receipt.sha256, status: result.receipt.status, steps: result.receipt.steps } : null,
+  };
+}
+
+/**
+ * Runs one fixed P-save/P-restart preference pair against the raw candidate.
+ * The pair is deliberately separate from ordinary PLATFORM_SCENARIOS and from
+ * the paired-v2 UI scenario. It is a proposal harness seam: no native result
+ * is implied until the source-side P phases exist and a parent gate runs it.
+ */
+export async function runAppearancePair(options) {
+  const { platform } = options;
+  if (options.scenario !== undefined) throw new Error("appearance pair takes no scenario argument");
+  if (!SCENARIOS["P-save"].platforms.includes(platform) || !SCENARIOS["P-restart"].platforms.includes(platform)) {
+    throw new Error(`appearance pair is not defined for ${platform}`);
+  }
+  if (options.source !== "raw-archive") throw new Error("appearance pair requires the raw archive source");
+  const launchRoot = realpathSync(resolve(options.launchRoot));
+  const evidenceDir = resolve(options.evidenceDir);
+  mkdirSync(evidenceDir, { recursive: true });
+  const label = options.label ?? `${platform}-appearance-pair-raw`;
+  const executable = executablePath(launchRoot, platform);
+  const measured = readRegularSnapshot(executable, { label: "Candidate executable", maxBytes: 1024 * 1024 * 1024 });
+  if (!measured.executable) throw new Error("candidate executable is not executable");
+  const parity = requireRawNpmParity(evidenceDir, platform, measured.sha256);
+  const layout = createAppearancePairLayout(platform);
+  const result = {
+    schema: RUN_SCHEMA,
+    label,
+    platform,
+    scenario: "appearance-pair",
+    source: "raw-archive",
+    executable: { path: relative(launchRoot, executable), sha256: measured.sha256, size: measured.size },
+    pairIdentity: { schema: APPEARANCE_PAIR_MARKER_SCHEMA, id: layout.pairId, rawExecutableSha256: parity.rawExecutableSha256, npmExecutableSha256: parity.npmExecutableSha256 },
+    expectedPreference: { sha256: APPEARANCE_PREFERENCE_SHA256, bytes: APPEARANCE_PREFERENCE_BYTES.byteLength, ...APPEARANCE_PREFERENCE_RECORD },
+    phases: {},
+    phaseEvidence: `${label}.phases`,
+    problems: [],
+  };
+  let phaseEvidence;
+  try {
+    phaseEvidence = ownerOnlyDir(join(evidenceDir, `${label}.phases`));
+    assertAppearancePairLayout(layout, "before-save");
+    const sharedEnv = { [APPEARANCE_PREFERENCE_ENV]: layout.sharedRoot };
+    const phaseA = await runSmoke({
+      ...options,
+      scenario: "P-save",
+      timeoutMs: options.timeoutMs ?? APPEARANCE_PAIR_LIMITS.phaseTimeoutMs,
+      evidenceDir: phaseEvidence,
+      label: `${platform}-P-save-raw`,
+      keep: true,
+      layout: layout.viewA,
+      extraEnv: sharedEnv,
+      prepareFixtures: false,
+    });
+    result.phases.save = phaseSummary(phaseA, "save");
+    if (phaseA.status !== "pass") {
+      result.problems.push(phaseA.receipt ? "appearance-save-failed" : "appearance-saved-status-timeout");
+    } else {
+      assertAppearancePairLayout(layout, "after-save");
+      assertAppearancePreferenceRecord(layout);
+    }
+    if (result.problems.length === 0) {
+      const beforeRestart = readRegularSnapshot(join(layout.preferencesRoot, "appearance.json"), {
+        label: "Observed appearance preference record",
+        maxBytes: APPEARANCE_PAIR_LIMITS.preferenceBytes,
+      }).bytes;
+      const phaseB = await runSmoke({
+        ...options,
+        scenario: "P-restart",
+        timeoutMs: options.timeoutMs ?? APPEARANCE_PAIR_LIMITS.phaseTimeoutMs,
+        evidenceDir: phaseEvidence,
+        label: `${platform}-P-restart-raw`,
+        keep: true,
+        layout: layout.viewB,
+        extraEnv: sharedEnv,
+        prepareFixtures: false,
+      });
+      result.phases.restart = phaseSummary(phaseB, "restart");
+      if (phaseB.status !== "pass") {
+        result.problems.push("restart-not-persisted");
+      } else {
+        assertAppearancePairLayout(layout, "after-restart");
+        result.observedPreference = { sha256: sha256(beforeRestart), bytes: beforeRestart.byteLength };
+        assertAppearancePreferenceRecord(layout, beforeRestart);
+      }
+    }
+    result.appearancePair = {
+      status: result.problems.length === 0 ? "pass" : "fail",
+      phases: ["P-save", "P-restart"],
+      sharedPreferenceRecord: "exact-dark-developer-v1",
+      evidence: "sealed-with-lane-evidence",
+    };
+    result.status = result.problems.length === 0 ? "pass" : "fail";
+  } catch (error) {
+    result.problems.push(error instanceof HarnessStateError ? "pair-layout-mismatch" : "appearance-pair-harness-error");
+    result.appearancePair = { status: "fail", phases: ["P-save", "P-restart"], sharedPreferenceRecord: "not-proven", evidence: "sealed-with-lane-evidence" };
+    result.status = "fail";
+  }
+  const writePairEvidence = () => {
+    writeFileSync(join(evidenceDir, `${label}-view-a.receipt.json`), `${JSON.stringify(result.phases.save?.receipt ?? null, null, 2)}\n`, { flag: "wx" });
+    writeFileSync(join(evidenceDir, `${label}-view-b.receipt.json`), `${JSON.stringify(result.phases.restart?.receipt ?? null, null, 2)}\n`, { flag: "wx" });
+    writeFileSync(join(evidenceDir, `${label}.pair.run.json`), `${JSON.stringify(result, null, 2)}\n`, { flag: "wx" });
+  };
+  return finalizeAppearancePairEvidence({
+    result,
+    keep: Boolean(options.keep),
+    cleanup: () => rmSync(layout.runRoot, { recursive: true, force: true }),
+    writeEvidence: writePairEvidence,
   });
 }
 
@@ -537,9 +1010,10 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = argv[index + 1];
+    if (flag === "--appearance-pair") { options.appearancePair = true; continue; }
     if (flag === "--keep") { options.keep = true; continue; }
     const key = { "--platform": "platform", "--scenario": "scenario", "--launch-root": "launchRoot", "--checkout": "checkout", "--evidence": "evidenceDir", "--label": "label", "--timeout-ms": "timeoutMs", "--source": "source", "--package-manifest-sha256": "packageManifestSha256" }[flag];
-    if (!key || value === undefined) throw new Error(`Usage: native-rc-smoke.mjs --platform <p> --scenario <s> --launch-root <dir> --checkout <dir> --evidence <dir> [--label l] [--timeout-ms n] [--source raw-archive|npm-package] [--package-manifest-sha256 sha256] [--keep]`);
+    if (!key || value === undefined) throw new Error(`Usage: native-rc-smoke.mjs --platform <p> --scenario <s> --launch-root <dir> --checkout <dir> --evidence <dir> [--appearance-pair] [--label l] [--timeout-ms n] [--source raw-archive|npm-package] [--package-manifest-sha256 sha256] [--keep]`);
     options[key] = key === "timeoutMs" ? Number(value) : value;
     index += 1;
   }
@@ -548,7 +1022,8 @@ function parseArgs(argv) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const result = await runSmoke(parseArgs(process.argv.slice(2)));
+    const options = parseArgs(process.argv.slice(2));
+    const result = options.appearancePair ? await runAppearancePair(options) : await runSmoke(options);
     process.stdout.write(`${JSON.stringify({ label: result.label, status: result.status, problems: result.problems })}\n`);
     if (result.status !== "pass") process.exitCode = 1;
   } catch (error) {
