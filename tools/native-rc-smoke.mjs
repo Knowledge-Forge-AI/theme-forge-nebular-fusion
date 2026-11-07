@@ -328,6 +328,29 @@ function ownerOnlyDir(path) {
   return path;
 }
 
+// Runtime children are harness-owned fixed roots. Their private identity is bound in memory for
+// phase checks; dev/ino/type/nonlink/uid/mode are identity fields. nlink/mtime/size are deliberately
+// not identity invariants because native WebView/sidecar writers may update them.
+function boundOwnerDirectory(path, label) {
+  if (typeof process.getuid !== "function") throw new HarnessStateError(`${label} owner identity is unavailable`);
+  const info = lstatSync(path);
+  const uid = typeof info.uid === "number" ? info.uid : null;
+  const mode = info.mode & 0o7777;
+  if (!info.isDirectory() || info.isSymbolicLink() || uid === null || uid !== process.getuid() || mode !== 0o700) {
+    throw new HarnessStateError(`${label} is not a real owner-only directory`);
+  }
+  return Object.freeze({ dev: info.dev, ino: info.ino, type: "directory", nonlink: true, uid, mode });
+}
+
+function assertBoundOwnerDirectory(path, identity, label, { empty = false } = {}) {
+  const current = boundOwnerDirectory(path, label);
+  if (current.dev !== identity.dev || current.ino !== identity.ino || current.type !== identity.type
+      || current.nonlink !== identity.nonlink || current.uid !== identity.uid || current.mode !== identity.mode) {
+    throw new HarnessStateError(`${label} identity changed`);
+  }
+  if (empty && readdirSync(path).length !== 0) throw new HarnessStateError(`${label} must be fresh and empty`);
+}
+
 function inventory(root) {
   const files = {};
   const visit = (dir) => {
@@ -706,6 +729,32 @@ export async function runSmoke(options) {
 const APPEARANCE_PAIR_MARKER = ".nebular-appearance-pair-v1";
 const APPEARANCE_PAIR_MARKER_SCHEMA = "nebular.appearance-pair-v1";
 const APPEARANCE_PREFERENCE_ENV = "TFNF_RELEASE_SMOKE_PREFERENCES_DIR";
+const APPEARANCE_LAYOUT_PHASES = Object.freeze(["before-save", "after-save", "after-restart"]);
+const APPEARANCE_LAYOUT_CHECKPOINTS = Object.freeze([
+  "run-root", "lane-root", "source-root", "pair-root", "marker", "shared-root", "preferences-root",
+  "view-a:root", "view-a:home", "view-a:temp-root", "view-a:runtime-roots", "view-a:smoke-root", "view-a:receipt", "view-a:xdg-root",
+  "view-b:root", "view-b:home", "view-b:temp-root", "view-b:runtime-roots", "view-b:smoke-root", "view-b:receipt", "view-b:xdg-root",
+  "preference-inventory", "preference-record",
+]);
+const APPEARANCE_LAYOUT_FAILURES = new WeakMap();
+
+function captureAppearanceLayoutFailure(phase, checkpoint, operation) {
+  try {
+    return operation();
+  } catch (error) {
+    if (error !== null && (typeof error === "object" || typeof error === "function")
+        && APPEARANCE_LAYOUT_PHASES.includes(phase)
+        && APPEARANCE_LAYOUT_CHECKPOINTS.includes(checkpoint)) {
+      APPEARANCE_LAYOUT_FAILURES.set(error, Object.freeze({ phase, checkpoint }));
+    }
+    throw error;
+  }
+}
+
+export function getAppearanceLayoutDiagnostic(error) {
+  if (error === null || (typeof error !== "object" && typeof error !== "function")) return null;
+  return APPEARANCE_LAYOUT_FAILURES.get(error) ?? null;
+}
 
 function validatedSmokeExtraEnv(scenario, extraEnv) {
   if (extraEnv === undefined) return {};
@@ -752,8 +801,18 @@ function createAppearancePairView(pairRoot, name) {
   const home = ownerOnlyDir(join(viewRoot, "home"));
   const temp = ownerOnlyDir(join(viewRoot, "tmp"));
   const smokeDir = ownerOnlyDir(join(temp, "nebular-release-smoke"));
+  const runtime = {
+    webviewData: ownerOnlyDir(join(smokeDir, "webview-data")),
+    sidecarTemp: ownerOnlyDir(join(smokeDir, "sidecar-temp")),
+  };
+  const runtimeIdentity = {
+    webviewData: boundOwnerDirectory(runtime.webviewData, `${name} webview-data`),
+    sidecarTemp: boundOwnerDirectory(runtime.sidecarTemp, `${name} sidecar-temp`),
+  };
   const xdg = Object.fromEntries(["config", "cache", "data", "state", "runtime"].map((part) => [part, ownerOnlyDir(join(viewRoot, "xdg", part))]));
-  return { viewRoot, home, temp, smokeDir, xdg };
+  const view = { viewRoot, home, temp, smokeDir, runtime, xdg };
+  Object.defineProperty(view, "runtimeIdentity", { value: runtimeIdentity, enumerable: false });
+  return view;
 }
 
 export function createAppearancePairLayout(platform = "test-lane") {
@@ -782,51 +841,73 @@ export function createAppearancePairLayout(platform = "test-lane") {
 }
 
 export function assertAppearancePairLayout(layout, phase) {
-  assertOwnerDirectory(layout.runRoot, "appearance pair run root");
-  assertOwnerDirectory(layout.laneRoot, "appearance pair lane root");
-  assertOwnerDirectory(layout.sourceRoot, "appearance pair source-form root");
-  assertOwnerDirectory(layout.pairRoot, "appearance pair root");
-  assertOwnerRegularFile(layout.marker, "appearance pair marker");
-  const marker = readRegularSnapshot(layout.marker, { label: "Appearance pair marker", maxBytes: APPEARANCE_PAIR_LIMITS.markerBytes }).bytes.toString("utf8");
-  if (marker !== `${APPEARANCE_PAIR_MARKER_SCHEMA}\n${layout.pairId}\n`) throw new HarnessStateError("appearance pair marker content mismatch");
-  exactNames(layout.pairRoot, [APPEARANCE_PAIR_MARKER, "shared-prefs", "view-a", "view-b"], "appearance pair root");
-  assertOwnerDirectory(layout.sharedRoot, "appearance pair shared preferences root");
-  assertOwnerDirectory(layout.preferencesRoot, "appearance preferences root");
-  exactNames(layout.sharedRoot, ["appearance-preferences"], "shared preferences root");
+  const at = (checkpoint, operation) => captureAppearanceLayoutFailure(phase, checkpoint, operation);
+  at("run-root", () => assertOwnerDirectory(layout.runRoot, "appearance pair run root"));
+  at("lane-root", () => assertOwnerDirectory(layout.laneRoot, "appearance pair lane root"));
+  at("source-root", () => assertOwnerDirectory(layout.sourceRoot, "appearance pair source-form root"));
+  at("pair-root", () => assertOwnerDirectory(layout.pairRoot, "appearance pair root"));
+  at("marker", () => assertOwnerRegularFile(layout.marker, "appearance pair marker"));
+  const marker = at("marker", () => readRegularSnapshot(layout.marker, { label: "Appearance pair marker", maxBytes: APPEARANCE_PAIR_LIMITS.markerBytes }).bytes.toString("utf8"));
+  at("marker", () => {
+    if (marker !== `${APPEARANCE_PAIR_MARKER_SCHEMA}\n${layout.pairId}\n`) throw new HarnessStateError("appearance pair marker content mismatch");
+  });
+  at("pair-root", () => exactNames(layout.pairRoot, [APPEARANCE_PAIR_MARKER, "shared-prefs", "view-a", "view-b"], "appearance pair root"));
+  at("shared-root", () => assertOwnerDirectory(layout.sharedRoot, "appearance pair shared preferences root"));
+  at("preferences-root", () => assertOwnerDirectory(layout.preferencesRoot, "appearance preferences root"));
+  at("shared-root", () => exactNames(layout.sharedRoot, ["appearance-preferences"], "shared preferences root"));
   for (const [name, view] of [["view-a", layout.viewA], ["view-b", layout.viewB]]) {
-    assertOwnerDirectory(view.viewRoot, name);
-    assertOwnerDirectory(view.home, `${name} HOME`);
-    assertOwnerDirectory(view.temp, `${name} TMPDIR`);
-    assertOwnerDirectory(view.smokeDir, `${name} smoke root`);
-    for (const [xdgName, xdgPath] of Object.entries(view.xdg)) assertOwnerDirectory(xdgPath, `${name} XDG ${xdgName}`);
-    exactNames(view.viewRoot, ["home", "tmp", "xdg"], `${name} root`);
-    exactNames(view.temp, ["nebular-release-smoke"], `${name} temp root`);
+    const prefix = name === "view-a" ? "view-a" : "view-b";
+    at(`${prefix}:root`, () => assertOwnerDirectory(view.viewRoot, name));
+    at(`${prefix}:home`, () => assertOwnerDirectory(view.home, `${name} HOME`));
+    at(`${prefix}:temp-root`, () => assertOwnerDirectory(view.temp, `${name} TMPDIR`));
+    at(`${prefix}:smoke-root`, () => assertOwnerDirectory(view.smokeDir, `${name} smoke root`));
+    at(`${prefix}:xdg-root`, () => {
+      for (const [xdgName, xdgPath] of Object.entries(view.xdg)) assertOwnerDirectory(xdgPath, `${name} XDG ${xdgName}`);
+    });
+    at(`${prefix}:root`, () => exactNames(view.viewRoot, ["home", "tmp", "xdg"], `${name} root`));
+    at(`${prefix}:temp-root`, () => exactNames(view.temp, ["nebular-release-smoke"], `${name} temp root`));
+    at(`${prefix}:runtime-roots`, () => {
+      assertBoundOwnerDirectory(view.runtime.webviewData, view.runtimeIdentity.webviewData, `${name} webview-data`, {
+        empty: phase === "before-save" || (phase === "after-save" && name === "view-b"),
+      });
+      assertBoundOwnerDirectory(view.runtime.sidecarTemp, view.runtimeIdentity.sidecarTemp, `${name} sidecar-temp`, {
+        empty: phase === "before-save" || (phase === "after-save" && name === "view-b"),
+      });
+    });
+    const runtimeNames = ["sidecar-temp", "webview-data"];
     const expectedSmokeNames = phase === "before-save"
-      ? []
+      ? runtimeNames
       : phase === "after-save"
-        ? (name === "view-a" ? ["receipt.json"] : [])
-        : ["receipt.json"];
-    exactNames(view.smokeDir, expectedSmokeNames, `${name} smoke root`);
-    if (expectedSmokeNames.length === 1) assertOwnerRegularFile(join(view.smokeDir, "receipt.json"), `${name} smoke receipt`);
-    exactNames(join(view.viewRoot, "xdg"), Object.keys(view.xdg), `${name} XDG root`);
+        ? (name === "view-a" ? ["receipt.json", ...runtimeNames] : runtimeNames)
+        : ["receipt.json", ...runtimeNames];
+    at(`${prefix}:smoke-root`, () => exactNames(view.smokeDir, expectedSmokeNames, `${name} smoke root`));
+    if (expectedSmokeNames.includes("receipt.json")) at(`${prefix}:receipt`, () => assertOwnerRegularFile(join(view.smokeDir, "receipt.json"), `${name} smoke receipt`));
+    at(`${prefix}:xdg-root`, () => exactNames(join(view.viewRoot, "xdg"), Object.keys(view.xdg), `${name} XDG root`));
   }
-  const names = sortedNames(layout.preferencesRoot);
-  if (phase === "before-save" && names.length !== 0) throw new HarnessStateError("appearance preference leaf was not empty before P-save");
-  if (phase !== "before-save" && JSON.stringify(names) !== JSON.stringify(["appearance.json"])) throw new HarnessStateError("appearance preference leaf inventory mismatch");
+  at("preference-inventory", () => {
+    const names = sortedNames(layout.preferencesRoot);
+    if (phase === "before-save" && names.length !== 0) throw new HarnessStateError("appearance preference leaf was not empty before P-save");
+    if (phase !== "before-save" && JSON.stringify(names) !== JSON.stringify(["appearance.json"])) throw new HarnessStateError("appearance preference leaf inventory mismatch");
+  });
 }
 
-export function assertAppearancePreferenceRecord(layout, expectedBytes = APPEARANCE_PREFERENCE_BYTES) {
+export function assertAppearancePreferenceRecord(layout, expectedBytes = APPEARANCE_PREFERENCE_BYTES, phase = null) {
+  const at = (checkpoint, operation) => captureAppearanceLayoutFailure(phase, checkpoint, operation);
   const path = join(layout.preferencesRoot, "appearance.json");
-  assertOwnerRegularFile(path, "appearance preference record");
-  const bytes = readRegularSnapshot(path, { label: "Appearance preference record", maxBytes: APPEARANCE_PAIR_LIMITS.preferenceBytes }).bytes;
-  if (bytes.byteLength > APPEARANCE_PAIR_LIMITS.preferenceBytes) throw new HarnessStateError("appearance preference record exceeds its bound");
-  if (!bytes.equals(expectedBytes)) throw new HarnessStateError("appearance preference record bytes mismatch");
-  if (sha256(bytes) !== APPEARANCE_PREFERENCE_SHA256) throw new HarnessStateError("appearance preference record digest mismatch");
-  const decoded = JSON.parse(bytes.toString("utf8"));
-  if (JSON.stringify(decoded) !== JSON.stringify(APPEARANCE_PREFERENCE_RECORD)) throw new HarnessStateError("appearance preference record fields mismatch");
-  if (sortedNames(layout.preferencesRoot).some((name) => name.startsWith(".nebular-appearance-tmp-"))) {
-    throw new HarnessStateError("appearance preference temporary file remains");
-  }
+  at("preference-record", () => assertOwnerRegularFile(path, "appearance preference record"));
+  const bytes = at("preference-record", () => readRegularSnapshot(path, { label: "Appearance preference record", maxBytes: APPEARANCE_PAIR_LIMITS.preferenceBytes }).bytes);
+  at("preference-record", () => {
+    if (bytes.byteLength > APPEARANCE_PAIR_LIMITS.preferenceBytes) throw new HarnessStateError("appearance preference record exceeds its bound");
+    if (!bytes.equals(expectedBytes)) throw new HarnessStateError("appearance preference record bytes mismatch");
+    if (sha256(bytes) !== APPEARANCE_PREFERENCE_SHA256) throw new HarnessStateError("appearance preference record digest mismatch");
+    const decoded = JSON.parse(bytes.toString("utf8"));
+    if (JSON.stringify(decoded) !== JSON.stringify(APPEARANCE_PREFERENCE_RECORD)) throw new HarnessStateError("appearance preference record fields mismatch");
+  });
+  at("preference-inventory", () => {
+    if (sortedNames(layout.preferencesRoot).some((name) => name.startsWith(".nebular-appearance-tmp-"))) {
+      throw new HarnessStateError("appearance preference temporary file remains");
+    }
+  });
 }
 
 function readOrdinarySmokeRuns(evidenceDir, platform) {
@@ -953,7 +1034,7 @@ export async function runAppearancePair(options) {
       result.problems.push(phaseA.receipt ? "appearance-save-failed" : "appearance-saved-status-timeout");
     } else {
       assertAppearancePairLayout(layout, "after-save");
-      assertAppearancePreferenceRecord(layout);
+      assertAppearancePreferenceRecord(layout, undefined, "after-save");
     }
     if (result.problems.length === 0) {
       const beforeRestart = readRegularSnapshot(join(layout.preferencesRoot, "appearance.json"), {
@@ -977,7 +1058,7 @@ export async function runAppearancePair(options) {
       } else {
         assertAppearancePairLayout(layout, "after-restart");
         result.observedPreference = { sha256: sha256(beforeRestart), bytes: beforeRestart.byteLength };
-        assertAppearancePreferenceRecord(layout, beforeRestart);
+        assertAppearancePreferenceRecord(layout, beforeRestart, "after-restart");
       }
     }
     result.appearancePair = {
@@ -988,6 +1069,8 @@ export async function runAppearancePair(options) {
     };
     result.status = result.problems.length === 0 ? "pass" : "fail";
   } catch (error) {
+    const layoutDiagnostic = getAppearanceLayoutDiagnostic(error);
+    if (layoutDiagnostic !== null) result.layoutDiagnostic = layoutDiagnostic;
     result.problems.push(error instanceof HarnessStateError ? "pair-layout-mismatch" : "appearance-pair-harness-error");
     result.appearancePair = { status: "fail", phases: ["P-save", "P-restart"], sharedPreferenceRecord: "not-proven", evidence: "sealed-with-lane-evidence" };
     result.status = "fail";

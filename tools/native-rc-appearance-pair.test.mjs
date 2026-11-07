@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -19,6 +19,7 @@ import {
   assertAppearancePreferenceRecord,
   createAppearancePairLayout,
   finalizeAppearancePairEvidence,
+  getAppearanceLayoutDiagnostic,
   judgeReceipt,
   requireRawNpmParity,
   runSmoke,
@@ -101,6 +102,168 @@ test("pair layout enforces empty-before-save and exact dark Developer bytes acro
     assertAppearancePreferenceRecord(layout, APPEARANCE_PREFERENCE_BYTES);
     writeFileSync(join(layout.preferencesRoot, "unexpected"), "x", { mode: 0o600 });
     assert.throws(() => assertAppearancePairLayout(layout, "after-restart"), /inventory mismatch/);
+  } finally {
+    rmSync(layout.runRoot, { recursive: true, force: true });
+  }
+});
+
+test("runtime inventory allows opaque descendants but rejects fixed-root drift and phase-inappropriate receipts", () => {
+  const layout = createAppearancePairLayout("linux-x64");
+  try {
+    assertAppearancePairLayout(layout, "before-save");
+    mkdirSync(join(layout.viewA.runtime.webviewData, "opaque-state"), { mode: 0o700 });
+    writeFileSync(join(layout.viewA.runtime.webviewData, "opaque-state", "state.bin"), "opaque", { mode: 0o600 });
+    writeFileSync(join(layout.viewA.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
+    writeFileSync(join(layout.preferencesRoot, "appearance.json"), APPEARANCE_PREFERENCE_BYTES, { mode: 0o600 });
+    assertAppearancePairLayout(layout, "after-save");
+
+    writeFileSync(join(layout.viewB.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
+    assert.throws(() => assertAppearancePairLayout(layout, "after-save"), /inventory mismatch/);
+    rmSync(join(layout.viewB.smokeDir, "receipt.json"));
+
+    chmodSync(layout.viewA.runtime.sidecarTemp, 0o1700);
+    assert.throws(() => assertAppearancePairLayout(layout, "after-save"), /owner-only|identity/);
+    chmodSync(layout.viewA.runtime.sidecarTemp, 0o700);
+
+    rmSync(layout.viewA.runtime.webviewData, { recursive: true, force: true });
+    symlinkSync(layout.viewB.runtime.webviewData, layout.viewA.runtime.webviewData);
+    assert.throws(() => assertAppearancePairLayout(layout, "after-save"), /owner-only|identity/);
+  } finally {
+    rmSync(layout.runRoot, { recursive: true, force: true });
+  }
+});
+
+test("runtime inventory rejects missing, replaced, wrong-owner-binding, and unknown fixed entries", () => {
+  const missing = createAppearancePairLayout("linux-arm64");
+  try {
+    rmSync(missing.viewB.runtime.sidecarTemp, { recursive: true, force: true });
+    assert.throws(() => assertAppearancePairLayout(missing, "before-save"), /ENOENT|missing|lstat|real owner/);
+  } finally {
+    rmSync(missing.runRoot, { recursive: true, force: true });
+  }
+
+  const replaced = createAppearancePairLayout("darwin-arm64");
+  try {
+    const identity = replaced.viewA.runtimeIdentity.webviewData;
+    replaced.viewA.runtimeIdentity.webviewData = { ...identity, uid: identity.uid === 0 ? 1 : 0 };
+    assert.throws(() => assertAppearancePairLayout(replaced, "before-save"), /identity changed/);
+    replaced.viewA.runtimeIdentity.webviewData = identity;
+    renameSync(replaced.viewA.runtime.webviewData, join(replaced.runRoot, "retired-runtime"));
+    mkdirSync(replaced.viewA.runtime.webviewData, { mode: 0o700 });
+    assert.throws(() => assertAppearancePairLayout(replaced, "before-save"), /identity changed/);
+  } finally {
+    rmSync(replaced.runRoot, { recursive: true, force: true });
+  }
+
+  const unknown = createAppearancePairLayout("linux-x64");
+  try {
+    writeFileSync(join(unknown.viewB.smokeDir, "unexpected"), "x", { mode: 0o600 });
+    assert.throws(() => assertAppearancePairLayout(unknown, "before-save"), /inventory mismatch/);
+  } finally {
+    rmSync(unknown.runRoot, { recursive: true, force: true });
+  }
+});
+
+test("layout failures expose only a frozen phase/checkpoint diagnostic", () => {
+  const layout = createAppearancePairLayout("linux-x64");
+  try {
+    writeFileSync(join(layout.pairRoot, "unexpected"), "x", { mode: 0o600 });
+    let pairError;
+    try {
+      assertAppearancePairLayout(layout, "after-save");
+    } catch (error) {
+      pairError = error;
+    }
+    assert.ok(pairError);
+    const pairDiagnostic = getAppearanceLayoutDiagnostic(pairError);
+    assert.deepEqual(pairDiagnostic, { phase: "after-save", checkpoint: "pair-root" });
+    assert.equal(Object.isFrozen(pairDiagnostic), true);
+    assert.deepEqual(Object.keys(pairDiagnostic), ["phase", "checkpoint"]);
+    assert.equal(JSON.stringify({ layoutDiagnostic: pairDiagnostic }), '{"layoutDiagnostic":{"phase":"after-save","checkpoint":"pair-root"}}');
+    assert.equal(getAppearanceLayoutDiagnostic(new Error("unrelated")), null);
+  } finally {
+    rmSync(layout.runRoot, { recursive: true, force: true });
+  }
+
+  const preferenceLayout = createAppearancePairLayout("linux-arm64");
+  try {
+    writeFileSync(join(preferenceLayout.preferencesRoot, "appearance.json"), "{}", { mode: 0o600 });
+    let preferenceError;
+    try {
+      assertAppearancePreferenceRecord(preferenceLayout, undefined, "after-restart");
+    } catch (error) {
+      preferenceError = error;
+    }
+    assert.ok(preferenceError);
+    assert.deepEqual(getAppearanceLayoutDiagnostic(preferenceError), { phase: "after-restart", checkpoint: "preference-record" });
+  } finally {
+    rmSync(preferenceLayout.runRoot, { recursive: true, force: true });
+  }
+});
+
+test("layout diagnostics distinguish temp, runtime and smoke failures without entry names", () => {
+  const cases = [
+    ["view-a:temp-root", (layout) => writeFileSync(join(layout.viewA.temp, "unrecognized-entry"), "x", { mode: 0o600 })],
+    ["view-a:runtime-roots", (layout) => rmSync(layout.viewA.runtime.sidecarTemp, { recursive: true, force: true })],
+    ["view-a:smoke-root", (layout) => writeFileSync(join(layout.viewA.smokeDir, "unrecognized-entry"), "x", { mode: 0o600 })],
+  ];
+  for (const [checkpoint, corrupt] of cases) {
+    const layout = createAppearancePairLayout("linux-x64");
+    try {
+      corrupt(layout);
+      let observed;
+      try { assertAppearancePairLayout(layout, "before-save"); } catch (error) { observed = error; }
+      assert.ok(observed);
+      const diagnostic = getAppearanceLayoutDiagnostic(observed);
+      assert.deepEqual(diagnostic, { phase: "before-save", checkpoint });
+      assert.equal(JSON.stringify(diagnostic).includes("unrecognized-entry"), false);
+      assert.deepEqual(Object.keys(diagnostic), ["phase", "checkpoint"]);
+    } finally {
+      rmSync(layout.runRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("runtime children stay fresh until their phase and become opaque afterward", () => {
+  const layout = createAppearancePairLayout("linux-x64");
+  try {
+    const stateA = join(layout.viewA.runtime.sidecarTemp, "state");
+    writeFileSync(stateA, "opaque", { mode: 0o600 });
+    assert.throws(() => assertAppearancePairLayout(layout, "before-save"), /fresh and empty/);
+    rmSync(stateA);
+    assertAppearancePairLayout(layout, "before-save");
+    writeFileSync(join(layout.viewA.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
+    writeFileSync(join(layout.preferencesRoot, "appearance.json"), APPEARANCE_PREFERENCE_BYTES, { mode: 0o600 });
+    const stateB = join(layout.viewB.runtime.webviewData, "state");
+    writeFileSync(stateB, "opaque", { mode: 0o600 });
+    assert.throws(() => assertAppearancePairLayout(layout, "after-save"), /fresh and empty/);
+    rmSync(stateB);
+    assertAppearancePairLayout(layout, "after-save");
+    writeFileSync(stateA, "opaque", { mode: 0o600 });
+    writeFileSync(stateB, "opaque", { mode: 0o600 });
+    writeFileSync(join(layout.viewB.smokeDir, "receipt.json"), "{}", { mode: 0o600 });
+    assertAppearancePairLayout(layout, "after-restart");
+  } finally {
+    rmSync(layout.runRoot, { recursive: true, force: true });
+  }
+});
+
+test("phase receipts retain exact regular-file mode and no-link checks beside runtime children", () => {
+  const layout = createAppearancePairLayout("darwin-arm64");
+  try {
+    const receiptA = join(layout.viewA.smokeDir, "receipt.json");
+    const receiptB = join(layout.viewB.smokeDir, "receipt.json");
+    writeFileSync(receiptA, "{}", { mode: 0o600 });
+    writeFileSync(join(layout.preferencesRoot, "appearance.json"), APPEARANCE_PREFERENCE_BYTES, { mode: 0o600 });
+    chmodSync(receiptA, 0o644);
+    assert.throws(() => assertAppearancePairLayout(layout, "after-save"), /regular owner-only file/);
+    chmodSync(receiptA, 0o600);
+    assertAppearancePairLayout(layout, "after-save");
+    symlinkSync(receiptA, receiptB);
+    assert.throws(() => assertAppearancePairLayout(layout, "after-restart"), /regular owner-only file/);
+    rmSync(receiptB);
+    mkdirSync(receiptB, { mode: 0o700 });
+    assert.throws(() => assertAppearancePairLayout(layout, "after-restart"), /regular owner-only file/);
   } finally {
     rmSync(layout.runRoot, { recursive: true, force: true });
   }
