@@ -1,0 +1,5 @@
+@media not all {
+  :root {
+    --theme-forge-appearance-owned-slot-inert: 0;
+  }
+}

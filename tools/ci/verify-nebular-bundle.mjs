@@ -8,6 +8,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { DEFAULT_TARGET, OPTIONAL_SCENE_RESOURCE, SOLAR_SAIL_RESOURCE } from "./verify-tauri-resource-closure.mjs";
+import { verifyPairedV2AdapterDirectory } from "../paired-v2-adapter-prepare.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const STUDIO_ROOT = existsSync(join(REPO_ROOT, "apps/studio/src-tauri/tauri.conf.json")) ? join(REPO_ROOT, "apps/studio") : REPO_ROOT;
 
@@ -358,6 +359,15 @@ export async function verifyScenePayloads({ preparedPath, packedPath, nodePath, 
   };
 }
 
+/** @param {string} inventorySource @param {string[]} permissions @returns {string[]} */
+export function verifyCommandInventory(inventorySource, permissions) {
+  const declaration = /^pub\(crate\) static STUDIO_COMMAND_NAMES: &\[&str\] = &\[([\s\S]*?)\];\s*$/u.exec(inventorySource);
+  if (!declaration || !/^(?:\s*"studio_[a-z0-9_]+",)*\s*$/u.test(declaration[1] ?? "")) throw new Error("Owning command inventory syntax is unsupported.");
+  const expectedAcl = [...(declaration[1] ?? "").matchAll(/"(studio_[a-z0-9_]+)"/gu)].map((match) => match[1]);
+  if (expectedAcl.length === 0 || new Set(expectedAcl).size !== expectedAcl.length || JSON.stringify(permissions) !== JSON.stringify(expectedAcl)) throw new Error("Bundle capability ACL differs from the owning command inventory.");
+  return expectedAcl;
+}
+
 /** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, sourceSolarSailPayloadPath?: string, sourceScenePayloadPath?: string, sourceCandidate?: string, solarSailRoute?: SolarSailRoute, solarSailBuildPinPath?: string, sceneSourceCandidate?: string, sceneRoute?: SceneRoute, sceneBuildPinPath?: string, outputPath: string, launch?: boolean}} options */
 export async function verifyNebularBundle(options) {
   const appPath = resolve(options.appPath), contents = join(appPath, "Contents"), macos = join(contents, "MacOS"), resources = join(contents, "Resources");
@@ -389,6 +399,30 @@ export async function verifyNebularBundle(options) {
     }
   }
   const tauri = JSON.parse(await readFile(join(STUDIO_ROOT, "src-tauri/tauri.conf.json"), "utf8"));
+  const configuredPairedV2AdapterResource = Array.isArray(tauri.bundle?.resources)
+    && tauri.bundle.resources.includes("solar-sail-adapter/**/*");
+  if (!configuredPairedV2AdapterResource) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] solar-sail-adapter/**/* is not declared in the bundle resources.");
+  }
+  const preparedPairedV2AdapterPath = join(STUDIO_ROOT, "src-tauri", "solar-sail-adapter");
+  const packedPairedV2AdapterPath = join(resources, "solar-sail-adapter");
+  if (!existsSync(preparedPairedV2AdapterPath) || !existsSync(packedPairedV2AdapterPath)) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Prepared and packed paired-v2 adapter directories are required.");
+  }
+  let preparedPairedV2Adapter;
+  let packedPairedV2Adapter;
+  try {
+    preparedPairedV2Adapter = await verifyPairedV2AdapterDirectory(preparedPairedV2AdapterPath);
+    packedPairedV2Adapter = await verifyPairedV2AdapterDirectory(packedPairedV2AdapterPath);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Adapter closure failed: ${detail}`);
+  }
+  if (preparedPairedV2Adapter.sha256 !== packedPairedV2Adapter.sha256
+    || preparedPairedV2Adapter.bytes !== packedPairedV2Adapter.bytes
+    || JSON.stringify(preparedPairedV2Adapter.files) !== JSON.stringify(packedPairedV2Adapter.files)) {
+    throw new Error("[PAIRED_V2_ADAPTER_RESOURCE_FAIL] Packed paired-v2 adapter differs from the prepared adapter closure.");
+  }
   const configuredSceneResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(OPTIONAL_SCENE_RESOURCE);
   const configuredSolarSailResource = Array.isArray(tauri.bundle?.resources) && tauri.bundle.resources.includes(SOLAR_SAIL_RESOURCE);
   const sceneRoute = options.sceneRoute ?? "published-archive";
@@ -472,10 +506,7 @@ export async function verifyNebularBundle(options) {
   if (!Array.isArray(capability.permissions) || !capability.permissions.every((/** @type {unknown} */ value) => typeof value === "string")) throw new Error("Bundle capability permissions are invalid.");
   const permissions = capability.permissions.map((/** @type {string} */ value) => value.replace(/^allow-/u, "").replace(/-/gu, "_"));
   const inventorySource = await readFile(join(STUDIO_ROOT, "src-tauri/src/command_inventory.rs"), "utf8");
-  const declaration = /^pub\(crate\) static STUDIO_COMMAND_NAMES: &\[&str\] = &\[([\s\S]*?)\];\s*$/u.exec(inventorySource);
-  if (!declaration || !/^(?:\s*"studio_[a-z_]+",)*\s*$/u.test(declaration[1] ?? "")) throw new Error("Owning command inventory syntax is unsupported.");
-  const expectedAcl = [...(declaration[1] ?? "").matchAll(/"(studio_[a-z_]+)"/gu)].map((match) => match[1]);
-  if (expectedAcl.length === 0 || new Set(expectedAcl).size !== expectedAcl.length || JSON.stringify(permissions) !== JSON.stringify(expectedAcl)) throw new Error("Bundle capability ACL differs from the owning command inventory.");
+  const expectedAcl = verifyCommandInventory(inventorySource, permissions);
   const bundleVersion = execFileSync("plutil", ["-extract", "CFBundleShortVersionString", "raw", join(contents, "Info.plist")], {encoding:"utf8"}).trim();
   if (bundleVersion !== tauri.version) throw new Error("Bundle version differs from the owning application version.");
   const signingInspection = spawnSync("codesign", ["-dv", "--verbose=4", appPath], { encoding: "utf8" });
@@ -507,6 +538,12 @@ export async function verifyNebularBundle(options) {
       sourceCandidate: solarSailBuildPin?.sourceCandidate ?? null,
       binding: solarSailBinding,
     } : null,
+    pairedV2Adapter: {
+      files: packedPairedV2Adapter.files.length,
+      bytes: packedPairedV2Adapter.bytes,
+      identity: packedPairedV2Adapter.sha256,
+      preparedEqual: true,
+    },
     scenePayload: sceneInventory ? {
       payloadFiles: sceneInventory.length,
       batchExecutable: true,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { version as applicationVersion } from "../../package.json";
 import type { StudioBrandReadClient } from "../brand-read/StudioBrandReadClient";
 import type { StudioBrandPlanClient } from "../brand-plans/StudioBrandPlanClient";
@@ -17,7 +17,14 @@ import type { VectorGraphicsBridge } from "../features/vector-graphics/types";
 import "../features/vector-graphics/styles.css";
 import { ApplicationThemeLab } from "../features/application-theme";
 import type { AppThemeBridge } from "../features/application-theme/types";
-import "../styles/self-theme.css";
+import type { PairedV2NativeBridge } from "../features/application-theme/paired-v2-ui-adapter";
+import type { PairedV2PacketBridge } from "../features/application-theme/paired-v2-packet-bridge";
+import { createAppearanceController, type AppearanceController } from "../features/appearance/appearance-controller";
+import { bundledAppearanceCatalog } from "../features/appearance/bundled-appearance-catalog";
+import { AppearanceControls } from "../features/appearance/AppearanceControls";
+import type { AppearancePreferencePersistence } from "../features/appearance/appearance-persistence";
+import type { AppearancePreferenceStartupStatus } from "../features/appearance/appearance-settings-bridge";
+import "../features/appearance/generated/nebular.css";
 
 export type Destination = "brand-system" | "vector-graphics" | "starlight-theme" | "application-theme";
 
@@ -28,13 +35,25 @@ export function App({
   themeLabBridge,
   vectorGraphicsBridge,
   appThemeBridge,
+  pairedV2Bridge,
+  pairedV2PacketBridge,
+  appearanceController,
+  appearancePersistence,
+  appearanceStartupStatus,
 }: {
   readonly hostBridge: StudioHostBridge;
   readonly brandReadClient?: StudioBrandReadClient;
   readonly themeLabBridge?: ThemeLabBridge;
   readonly vectorGraphicsBridge?: VectorGraphicsBridge;
   readonly appThemeBridge?: AppThemeBridge;
+  readonly pairedV2Bridge?: PairedV2NativeBridge;
+  readonly pairedV2PacketBridge?: PairedV2PacketBridge;
+  readonly appearanceController?: AppearanceController;
+  readonly appearancePersistence?: AppearancePreferencePersistence;
+  readonly appearanceStartupStatus?: AppearancePreferenceStartupStatus;
 }) {
+  const [ownedAppearance] = useState(() => createAppearanceController(bundledAppearanceCatalog));
+  const appearance = appearanceController ?? ownedAppearance;
   const [activeDestination, setActiveDestination] = useState<Destination>("brand-system");
   const [visitedDestinations, setVisitedDestinations] = useState<ReadonlySet<Destination>>(
     () => new Set<Destination>(["brand-system"]),
@@ -50,6 +69,19 @@ export function App({
   const readClient = useMemo(() => brandReadClient ?? new TauriStudioBrandReadClient(), [brandReadClient]);
   const effectiveThemeLabBridge = useMemo(() => themeLabBridge ?? new TauriThemeLabBridge(), [themeLabBridge]);
   const planClient = useMemo<StudioBrandPlanClient | undefined>(() => hostBridge.startPlanOperation && hostBridge.cancelPlanOperation ? { startPlanOperation: hostBridge.startPlanOperation.bind(hostBridge), cancelPlanOperation: hostBridge.cancelPlanOperation.bind(hostBridge) } : undefined, [hostBridge]);
+
+  useLayoutEffect(() => {
+    const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    appearance.attach(document, media?.matches ? "dark" : "light");
+    const followSystem = () => appearance.change({ kind: "set-system-mode", mode: media?.matches ? "dark" : "light" });
+    media?.addEventListener("change", followSystem);
+    return () => { media?.removeEventListener("change", followSystem); appearance.detach(); };
+  }, [appearance]);
+
+  useEffect(() => {
+    appearancePersistence?.connect();
+    return () => appearancePersistence?.disconnect();
+  }, [appearancePersistence]);
 
   useEffect(() => {
     let active = true;
@@ -116,6 +148,9 @@ export function App({
         <p className="eyebrow">Human-first · evidence-bound · typed plan workbench</p>
         <h1>Theme Forge Nebular Fusion</h1>
         <p>Supervise the verified local TFSB service while TFSB remains the semantic authority.</p>
+        <AppearanceControls appearance={appearance}
+          {...(appearancePersistence ? { persistence: appearancePersistence } : {})}
+          {...(appearanceStartupStatus ? { startupStatus: appearanceStartupStatus } : {})} />
         <nav className="destination-nav" aria-label="Workbench destinations">
           <button
             type="button"
@@ -193,7 +228,12 @@ export function App({
             hidden={activeDestination !== "application-theme"}
             inert={activeDestination !== "application-theme" ? true : undefined}
           >
-            <ApplicationThemeLab bridge={appThemeBridge} />
+            <ApplicationThemeLab
+              bridge={appThemeBridge}
+              pairedV2Bridge={pairedV2Bridge}
+              pairedV2PacketBridge={pairedV2PacketBridge}
+              appearanceController={appearance}
+            />
           </div>
         ) : null}
       </main>

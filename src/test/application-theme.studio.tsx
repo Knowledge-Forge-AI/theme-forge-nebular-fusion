@@ -69,23 +69,24 @@ describe("ApplicationThemeLab component", () => {
     });
   });
 
-  it("adopts compiled theme draft into Studio shell self-theme", async () => {
+  it("adopts a distinct compiled draft and preserves the baseline when the editor resets", async () => {
     const bridge = new MockAppThemeBridge();
     render(<ApplicationThemeLab bridge={bridge} />);
 
     expect(await screen.findByRole("heading", { name: "Application Theme Lab" })).toBeTruthy();
 
     const adoptBtn = screen.getByRole("button", { name: "Adopt as Draft" });
+    const baseline = [...document.head.querySelectorAll("style")];
     fireEvent.click(adoptBtn);
 
-    expect(document.body.classList.contains("self-theme")).toBe(true);
+    expect(document.head.querySelectorAll("style")).toHaveLength(baseline.length + 1);
     expect(screen.getByText(/Adopted theme candidate as unsaved draft/i)).toBeTruthy();
 
-    // Verify reset removes self-theme
-    const resetBtn = screen.getByRole("button", { name: "Reset to Bundled" });
+    // Editor reset removes only the draft attachment.
+    const resetBtn = screen.getByRole("button", { name: "Reset editor profile" });
     fireEvent.click(resetBtn);
     await waitFor(() => {
-      expect(document.body.classList.contains("self-theme")).toBe(false);
+      expect([...document.head.querySelectorAll("style")]).toEqual(baseline);
     });
   });
 
@@ -201,14 +202,14 @@ describe("ApplicationThemeLab component", () => {
     expect(await screen.findByRole("heading", { name: "Application Theme Lab" })).toBeTruthy();
 
     // Reset before first compile resolves
-    const resetBtn = screen.getByRole("button", { name: "Reset to Bundled" });
+    const resetBtn = screen.getByRole("button", { name: "Reset editor profile" });
     fireEvent.click(resetBtn);
 
     // Now resolve the stale in-flight compilation
     resolveCompile(null);
 
     await waitFor(() => {
-      expect(screen.getByText("Reset to default self-theme.")).toBeTruthy();
+      expect(screen.getByText("Editor reset to its bundled profile. Selected application appearance is unchanged.")).toBeTruthy();
     });
 
     // The stale compilation message must NOT have overwritten the reset message
@@ -257,11 +258,11 @@ describe("ApplicationThemeLab component", () => {
     render(<ApplicationThemeLab bridge={bridge} />);
     expect(await screen.findByRole("heading", { name: "Solar Sail Compiler Degraded" })).toBeTruthy();
 
-    const resetBtn = screen.getByRole("button", { name: "Reset to Bundled" });
+    const resetBtn = screen.getByRole("button", { name: "Reset editor profile" });
     fireEvent.click(resetBtn);
 
     await waitFor(() => {
-      expect(screen.getByText("Reset to default self-theme.")).toBeTruthy();
+      expect(screen.getByText("Editor reset to its bundled profile. Selected application appearance is unchanged.")).toBeTruthy();
     });
     expect(screen.getByText("Clean")).toBeTruthy();
   });
@@ -341,7 +342,7 @@ describe("ApplicationThemeLab component", () => {
     fireEvent.click(screen.getByRole("button", { name: "Compile Theme" }));
     expect(screen.getByRole("button", { name: "Compiling…" })).toBeTruthy();
 
-    const resetBtn = screen.getByRole("button", { name: "Reset to Bundled" });
+    const resetBtn = screen.getByRole("button", { name: "Reset editor profile" });
     fireEvent.click(resetBtn);
 
     // Older compile completes after reset
@@ -349,15 +350,16 @@ describe("ApplicationThemeLab component", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Compile Theme" })).toBeTruthy();
-      expect(screen.getByText("Reset to default self-theme.")).toBeTruthy();
+      expect(screen.getByText("Editor reset to its bundled profile. Selected application appearance is unchanged.")).toBeTruthy();
     });
   });
 
   it("adopts compiled edited theme as draft and reset cleanly detaches owned stylesheet (Findings B & F3)", async () => {
-    const origAdopted = (document as any).adoptedStyleSheets;
+    const origAdoptedDescriptor = Object.getOwnPropertyDescriptor(document, "adoptedStyleSheets");
     const origCSSStyleSheet = (window as any).CSSStyleSheet;
 
     let replacedCss = "";
+    let unmount: (() => void) | undefined;
     (document as any).adoptedStyleSheets = [];
     (window as any).CSSStyleSheet = class {
       replaceSync(css: string) {
@@ -367,7 +369,7 @@ describe("ApplicationThemeLab component", () => {
 
     try {
       const bridge = new MockAppThemeBridge();
-      render(<ApplicationThemeLab bridge={bridge} />);
+      ({ unmount } = render(<ApplicationThemeLab bridge={bridge} />));
       expect(await screen.findByRole("heading", { name: "Application Theme Lab" })).toBeTruthy();
 
       await screen.findByRole("button", { name: "Compile Theme" });
@@ -386,29 +388,29 @@ describe("ApplicationThemeLab component", () => {
 
       // Adopt draft: Even though dirty is true, adoption MUST succeed because compilation is current
       const adoptBtn = screen.getByRole("button", { name: "Adopt as Draft" });
+      const baselineSheets = [...document.adoptedStyleSheets];
       fireEvent.click(adoptBtn);
 
-      expect(document.body.classList.contains("self-theme")).toBe(true);
-      expect((window as any).__selfThemeAdoptedSheet).toBeDefined();
-      expect(document.adoptedStyleSheets).toContain((window as any).__selfThemeAdoptedSheet);
+      const draftSheet = document.adoptedStyleSheets.find((sheet) => !baselineSheets.includes(sheet));
+      expect(draftSheet).toBeDefined();
+      expect(document.adoptedStyleSheets).toHaveLength(baselineSheets.length + 1);
       expect(replacedCss).toContain("#ff0055");
       expect(screen.getByText(/Adopted theme candidate as unsaved draft/i)).toBeTruthy();
 
       // Click Reset
-      const resetBtn = screen.getByRole("button", { name: "Reset to Bundled" });
+      const resetBtn = screen.getByRole("button", { name: "Reset editor profile" });
       fireEvent.click(resetBtn);
 
       await waitFor(() => {
-        expect(document.body.classList.contains("self-theme")).toBe(false);
-        expect((window as any).__selfThemeAdoptedSheet).toBeUndefined();
-        expect(document.adoptedStyleSheets).not.toContain((window as any).__selfThemeAdoptedSheet);
-        expect(screen.getByText("Reset to default self-theme.")).toBeTruthy();
+        expect(document.adoptedStyleSheets).not.toContain(draftSheet);
+        expect(document.adoptedStyleSheets).toEqual(baselineSheets);
+        expect(screen.getByText("Editor reset to its bundled profile. Selected application appearance is unchanged.")).toBeTruthy();
       });
     } finally {
-      (document as any).adoptedStyleSheets = origAdopted;
+      unmount?.();
+      if (origAdoptedDescriptor) Object.defineProperty(document, "adoptedStyleSheets", origAdoptedDescriptor);
+      else delete (document as any).adoptedStyleSheets;
       (window as any).CSSStyleSheet = origCSSStyleSheet;
-      delete (window as any).__selfThemeAdoptedSheet;
-      document.body.classList.remove("self-theme");
     }
   });
 
@@ -794,7 +796,7 @@ describe("TFNC13 profile document custody", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Save Profile…" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset to Bundled" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset editor profile" }));
     await screen.findByText("Built-in Profile");
 
     resolveSave({ cancelled: false, saved: true, document });
@@ -831,7 +833,7 @@ describe("TFNC13 profile document custody", () => {
     expect(compile).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset to Bundled" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset editor profile" }));
     await screen.findByText("Built-in Profile");
     expect(screen.queryByText(/Inspection only:/)).toBeNull();
     expect(screen.queryByText("The document contains invalid JSON.")).toBeNull();

@@ -16,14 +16,26 @@ pub(crate) fn resource_dir(
     )
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) const O_NOFOLLOW: i32 = 0x0000_0100;
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) const O_NOFOLLOW: i32 = libc::O_NOFOLLOW;
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+pub(crate) const O_NONBLOCK: i32 = libc::O_NONBLOCK;
 
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
-pub(crate) const O_NOFOLLOW: i32 = 0x0002_0000;
+pub(crate) const O_NOFOLLOW: i32 = libc::O_NOFOLLOW;
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "x86_64")
+))]
+pub(crate) const O_NONBLOCK: i32 = libc::O_NONBLOCK;
+
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+compile_error!("macOS platform abstraction is only qualified for aarch64");
 
 #[cfg(all(
     target_os = "linux",
@@ -274,16 +286,19 @@ mod tests {
         let root = guard.path();
         fs::write(root.join("file"), b"owned fixture")?;
         symlink("file", root.join("link"))?;
-        let direct = OpenOptions::new()
-            .read(true)
-            .custom_flags(O_NOFOLLOW)
-            .open(root.join("file"));
         let linked = OpenOptions::new()
             .read(true)
-            .custom_flags(O_NOFOLLOW)
+            .custom_flags(O_NOFOLLOW | O_NONBLOCK)
             .open(root.join("link"));
-        assert!(direct.is_ok());
-        assert!(linked.is_err());
+        let error = match linked {
+            Ok(_) => {
+                return Err(io::Error::other(
+                    "O_NOFOLLOW must reject the symlink at open",
+                ));
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.raw_os_error(), Some(libc::ELOOP));
         Ok(())
     }
 }

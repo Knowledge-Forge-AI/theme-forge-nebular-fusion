@@ -1,0 +1,10 @@
+{
+  "schema": "nebular.paired-v2-inputs.v1",
+  "familyBindings": {
+    "system-ui": "system-sans",
+    "monospace": "system-mono"
+  },
+  "applicationBaselineLayer": "theme-forge-application-baseline",
+  "templateSha256": "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324",
+  "recipeSha256": "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06"
+}

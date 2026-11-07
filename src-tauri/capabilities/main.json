@@ -25,6 +25,7 @@
     "allow-studio-theme-lab-dispose",
     "allow-studio-theme-lab-draft-update",
     "allow-studio-theme-brief-create",
+    "allow-studio-app-theme-paired-packet-create-v2",
     "allow-studio-theme-packet-import",
     "allow-studio-theme-packet-export",
     "allow-studio-theme-review-create",
@@ -52,9 +53,13 @@
     "allow-studio-app-theme-status",
     "allow-studio-app-theme-compile",
     "allow-studio-app-theme-paired-compile",
+    "allow-studio-app-theme-paired-compile-v2",
     "allow-studio-app-theme-open-profile",
     "allow-studio-app-theme-save-profile",
+    "allow-studio-app-theme-save-profile-v2",
     "allow-studio-app-theme-export-package",
-    "allow-studio-app-theme-reset"
+    "allow-studio-app-theme-reset",
+    "allow-studio-appearance-preferences-load",
+    "allow-studio-appearance-preferences-save"
   ]
 }

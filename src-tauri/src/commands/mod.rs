@@ -1,3 +1,4 @@
+pub(crate) mod appearance_preferences;
 pub(crate) mod brand_plan;
 pub(crate) mod brand_read;
 pub(crate) mod design_packet;

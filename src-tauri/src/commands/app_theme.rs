@@ -1,6 +1,10 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::app_theme::paired_v2::{
+    AppThemePairedCompileV2Request, AppThemePairedCompileV2Response, AppThemeSaveProfileV2Request,
+    AppThemeSaveProfileV2Response, PairedV2SaveMode,
+};
 use crate::app_theme::types::{
     AppThemeCompileRequest, AppThemeCompileResponse, AppThemeExportRequest, AppThemeExportResponse,
     AppThemeOpenProfileResponse, AppThemePairedCompileRequest, AppThemePairedCompileResponse,
@@ -8,6 +12,33 @@ use crate::app_theme::types::{
 };
 use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 use crate::state::app_theme::AppThemeState;
+
+fn paired_path(app: &AppHandle, key: &str) -> StudioResult<Option<std::path::PathBuf>> {
+    let Some(selection) = app.try_state::<crate::release_smoke::ScriptedSelections>() else {
+        return Ok(None);
+    };
+    if !selection.is_paired_v2() {
+        return Ok(None);
+    }
+    selection.paired_file(key).map(Some)
+}
+
+fn reject_nonpaired_path(app: &AppHandle) -> StudioResult<()> {
+    let Some(selection) = app.try_state::<crate::release_smoke::ScriptedSelections>() else {
+        return Ok(());
+    };
+    if selection.is_paired_v2() {
+        return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+    }
+    Ok(())
+}
+
+fn paired_save_path_key(save_mode: PairedV2SaveMode) -> Option<&'static str> {
+    match save_mode {
+        PairedV2SaveMode::NewDocument => Some("save-v2"),
+        PairedV2SaveMode::Edited => None,
+    }
+}
 
 #[tauri::command(async)]
 pub(crate) fn studio_app_theme_status(
@@ -33,10 +64,22 @@ pub(crate) fn studio_app_theme_paired_compile(
 }
 
 #[tauri::command(async)]
+pub(crate) fn studio_app_theme_paired_compile_v2(
+    request: AppThemePairedCompileV2Request,
+    state: tauri::State<'_, AppThemeState>,
+) -> StudioResult<AppThemePairedCompileV2Response> {
+    state.paired_compile_v2(request)
+}
+
+#[tauri::command(async)]
 pub(crate) fn studio_app_theme_open_profile(
     app: AppHandle,
     state: tauri::State<'_, AppThemeState>,
 ) -> StudioResult<AppThemeOpenProfileResponse> {
+    if let Some(path) = paired_path(&app, "open")? {
+        let ticket = state.begin_open()?;
+        return state.open_profile_path_with_ticket(path, ticket);
+    }
     let ticket = state.begin_open()?;
 
     #[cfg(feature = "native-smoke")]
@@ -80,6 +123,7 @@ pub(crate) fn studio_app_theme_save_profile(
     app: AppHandle,
     state: tauri::State<'_, AppThemeState>,
 ) -> StudioResult<AppThemeSaveProfileResponse> {
+    reject_nonpaired_path(&app)?;
     let ticket = state.current_custody_ticket()?;
     let (custodial_path, default_name) = match state.prepare_save_target(&request)? {
         Ok(pair) => pair,
@@ -135,11 +179,60 @@ pub(crate) fn studio_app_theme_save_profile(
 }
 
 #[tauri::command(async)]
+pub(crate) fn studio_app_theme_save_profile_v2(
+    request: AppThemeSaveProfileV2Request,
+    app: AppHandle,
+    state: tauri::State<'_, AppThemeState>,
+) -> StudioResult<AppThemeSaveProfileV2Response> {
+    let ticket = state.current_custody_ticket()?;
+    let target = match state.prepare_save_profile_v2(&request)? {
+        Ok(target) => target,
+        Err(error) => return state.paired_v2_save_rejected(&request, &error.code, &error.message),
+    };
+
+    if let Some(key) = paired_save_path_key(request.save_mode)
+        && let Some(dest) = paired_path(&app, key)?
+    {
+        return state.save_profile_v2_path_with_ticket(request, dest, ticket);
+    }
+
+    #[cfg(feature = "native-smoke")]
+    if let Some(selected) = crate::theme_lab::smoke_selection::select("save") {
+        let Some(dest) = selected? else {
+            return state.paired_v2_save_cancelled(&request);
+        };
+        return state.save_profile_v2_path_with_ticket(request, dest, ticket);
+    }
+
+    let target_path = if let Some(existing_path) = target.existing_path {
+        Some(existing_path)
+    } else {
+        app.dialog()
+            .file()
+            .set_title("Save Application Theme Profile v2")
+            .add_filter("Profile JSON", &["json"])
+            .set_file_name(&target.default_name)
+            .blocking_save_file()
+            .map(|s| {
+                s.into_path()
+                    .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))
+            })
+            .transpose()?
+    };
+
+    let Some(dest) = target_path else {
+        return state.paired_v2_save_cancelled(&request);
+    };
+    state.save_profile_v2_path_with_ticket(request, dest, ticket)
+}
+
+#[tauri::command(async)]
 pub(crate) fn studio_app_theme_export_package(
     request: AppThemeExportRequest,
     app: AppHandle,
     state: tauri::State<'_, AppThemeState>,
 ) -> StudioResult<AppThemeExportResponse> {
+    reject_nonpaired_path(&app)?;
     #[cfg(feature = "native-smoke")]
     if let Some(selected) = crate::theme_lab::smoke_selection::select("export") {
         let Some(dest) = selected? else {
@@ -203,6 +296,15 @@ mod tests {
 
     fn sample_paired_profile() -> Result<PairedProfileDto, String> {
         PairedProfileDto::from_slice_with_alias_flag(SAMPLE_V1_JSON).map(|(dto, _)| dto)
+    }
+
+    #[test]
+    fn paired_scripted_save_slot_is_new_document_only() {
+        assert_eq!(
+            paired_save_path_key(PairedV2SaveMode::NewDocument),
+            Some("save-v2")
+        );
+        assert_eq!(paired_save_path_key(PairedV2SaveMode::Edited), None);
     }
 
     fn temp_test_dir(tag: &str) -> Result<(AppThemeState, PathBuf), Box<dyn std::error::Error>> {

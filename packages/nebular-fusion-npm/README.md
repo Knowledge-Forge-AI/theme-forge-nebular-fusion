@@ -1,6 +1,6 @@
 # Theme Forge Nebular Fusion
 
-Theme Forge Nebular Fusion 0.7.1 is a native desktop GUI distributed through a
+Theme Forge Nebular Fusion 0.8.0 is a native desktop GUI distributed through a
 small npm wrapper. The wrapper selects exactly one optional platform package:
 `darwin-arm64` (Apple Silicon), `linux-arm64`, or `linux-x64` (AMD64). The
 wrapper owns the `tfnf` command; platform packages do not install competing
@@ -12,11 +12,11 @@ Install the wrapper with npm. npm selects the optional native package for the
 host when the matching package is available:
 
 ```console
-$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.7.1
+$ npm install --global @knowledge-forge-ai/theme-forge-nebular-fusion@0.8.0
 $ tfnf --version
-theme-forge-nebular-fusion 0.7.1 (<host-target>)
+theme-forge-nebular-fusion 0.8.0 (<host-target>)
 $ tfnf --help
-Theme Forge Nebular Fusion 0.7.1
+Theme Forge Nebular Fusion 0.8.0
 Usage: tfnf [--version|--help|--path]
 Normal invocation launches the installed GUI.
 ```
@@ -31,16 +31,23 @@ fallback, or foreign-architecture fallback. Unsupported hosts fail closed.
 ## Platform qualification
 
 Linux requires GNU/glibc; musl and unsupported libc environments fail closed.
-The measured compatibility floors are glibc 2.36 for Linux AMD64 and glibc
-2.35 for Linux ARM64. See the release receipts for target-specific native
-GUI qualification; optional-package presence alone does not establish it.
+Consult the matching release receipts for measured Linux compatibility floors
+and native GUI qualification. Source version and optional-package presence
+alone do not establish either.
 
-This package does not assert a macOS minimum version. Use a separately
-qualified Darwin ARM64 artifact and its release instructions. The Darwin
-developer app archive is ad-hoc-signed; it is not Developer ID signed and no
-notarization is claimed. The Homebrew cask remains withheld pending those
-distribution gates. Do not bypass Gatekeeper or remove quarantine as an
-installation workaround.
+Nebular 0.8 targets macOS 13.3 or later on the Darwin ARM64 path. For an
+unreleased candidate, this is a deployment policy rather than a claim that an
+artifact has been built, signed, notarized, or natively qualified. Use only the
+corresponding qualified artifact and release instructions for a published
+version. The native qualification gate must still prove the shipped Tauri
+WebView behavior, including the Solar Sail constructable-sheet preview and
+Starlight under the effective CSP.
+
+Availability of developer archives, the Darwin npm package, and the GUI
+formula is established separately by matching release and channel records.
+A Homebrew cask has separate qualification gates and may remain withheld;
+do not infer signing or notarization status across channels. Do not bypass
+Gatekeeper or remove quarantine as an installation workaround.
 
 ## Payload verification
 
@@ -93,6 +100,11 @@ Node does not use `fexecve`; same-user concurrent pathname mutation, symlink
 replacement, or file alteration after verification is outside this guarantee.
 
 ## Build and release boundary
+
+Published PyPI launcher versions use an explicit `tfnf install-runtime` step to
+download and verify the matching native payload from GitHub. Consult the
+matching release instructions for availability. This npm wrapper never
+downloads a native payload.
 
 Platform package assembly consumes explicitly selected, authenticated native
 payload directories and external manifest digests. Pending-native-build inputs

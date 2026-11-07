@@ -1,6 +1,7 @@
-//! The only filesystem authority of the release smoke mode. It validates the harness-created smoke
+//! The fixture and receipt filesystem helper of release smoke mode. It validates the harness-created smoke
 //! directory, resolves compiled-in fixture selections strictly inside it, measures the running
-//! executable, and creates the receipt exclusively. Nothing outside the smoke directory is written.
+//! executable, and creates the receipt exclusively. This helper writes only inside the smoke directory.
+//! The appearance-preferences module separately uses a fixed subdirectory of that same root.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -43,6 +44,238 @@ pub(super) fn contained_directory(root: &Path, relative: &str) -> Option<PathBuf
     let candidate = fs::canonicalize(root.join(relative)).ok()?;
     let metadata = fs::symlink_metadata(&candidate).ok()?;
     (metadata.is_dir() && candidate.starts_with(root) && candidate != root).then_some(candidate)
+}
+
+const PAIR_MARKER: &str = ".nebular-appearance-pair-v1";
+const PAIR_SHARED_DIR: &str = "shared-prefs";
+const PAIR_APPEARANCE_DIR: &str = "appearance-preferences";
+const PAIR_EXCHANGE_DIR: &str = "exchange";
+
+fn fixed_exchange_source(name: &str) -> bool {
+    matches!(
+        name,
+        "baseline.theme.json" | "v2-saved.theme.json" | "candidate-v2.json" | "review-v2.json"
+    )
+}
+
+fn fixed_exchange_destination(name: &str) -> bool {
+    matches!(
+        name,
+        "v2-saved.theme.json" | "candidate-v2.json" | "review-v2.json"
+    )
+}
+
+fn owner_only_directory(path: &Path, expected_uid: u32) -> Result<(), &'static str> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| "pair layout is missing")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("pair layout contains a non-directory");
+    }
+    if metadata.permissions().mode() & 0o777 != 0o700 || metadata.uid() != expected_uid {
+        return Err("pair directory must be owner-only");
+    }
+    Ok(())
+}
+
+fn owner_only_file(
+    path: &Path,
+    mode: u32,
+    nlink: u64,
+    expected_uid: u32,
+) -> Result<(), &'static str> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| "pair layout is missing")?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("pair layout contains a non-file");
+    }
+    if metadata.permissions().mode() & 0o777 != mode
+        || metadata.nlink() != nlink
+        || metadata.uid() != expected_uid
+    {
+        return Err("pair file has unexpected mode or link count");
+    }
+    Ok(())
+}
+
+fn exact_children(path: &Path, expected: &[&str]) -> Result<(), &'static str> {
+    let mut actual = fs::read_dir(path)
+        .map_err(|_| "pair layout cannot be enumerated")?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .map_err(|_| "pair layout cannot be enumerated")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    actual.sort_unstable();
+    let mut expected = expected
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    (actual == expected)
+        .then_some(())
+        .ok_or("pair layout has unexpected entries")
+}
+
+fn valid_pair_id(value: &str) -> bool {
+    value.starts_with("appearance-pair-v1-")
+        && (1..=96).contains(&(value.len().saturating_sub("appearance-pair-v1-".len())))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn pair_root_from_smoke(smoke_dir: &Path, role: &str) -> Result<PathBuf, &'static str> {
+    let smoke = fs::canonicalize(smoke_dir).map_err(|_| "smoke directory cannot be resolved")?;
+    let smoke_name = smoke
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("pair smoke path is malformed")?;
+    if smoke_name != "nebular-release-smoke" {
+        return Err("pair smoke path is malformed");
+    }
+    let tmp = smoke.parent().ok_or("pair smoke path is malformed")?;
+    let view = tmp.parent().ok_or("pair smoke path is malformed")?;
+    let pair_root = view.parent().ok_or("pair smoke path is malformed")?;
+    if view.file_name().and_then(|name| name.to_str()) != Some(role) {
+        return Err("pair view role does not match smoke path");
+    }
+    Ok(pair_root.to_path_buf())
+}
+
+/// Validates the allocator-owned P-save/P-restart layout. This function never
+/// creates, repairs, or deletes a preference directory or file.
+pub(super) fn validated_appearance_preferences(
+    smoke_dir: &Path,
+    shared_parent: &Path,
+    role: &str,
+) -> Result<PathBuf, &'static str> {
+    if !matches!(role, "view-a" | "view-b") {
+        return Err("pair view role is invalid");
+    }
+    let pair_root = pair_root_from_smoke(smoke_dir, role)?;
+    let expected_uid = fs::symlink_metadata(smoke_dir)
+        .map_err(|_| "smoke directory cannot be inspected")?
+        .uid();
+    owner_only_directory(&pair_root, expected_uid)?;
+    exact_children(
+        &pair_root,
+        &[PAIR_MARKER, PAIR_SHARED_DIR, "view-a", "view-b"],
+    )?;
+    let marker = pair_root.join(PAIR_MARKER);
+    owner_only_file(&marker, 0o600, 1, expected_uid)?;
+    let pair_id = pair_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("pair root name is invalid")?;
+    if !valid_pair_id(pair_id) {
+        return Err("pair root name is invalid");
+    }
+    let expected_marker = format!("nebular.appearance-pair-v1\n{pair_id}\n");
+    let marker_size = fs::symlink_metadata(&marker)
+        .map_err(|_| "pair marker cannot be read")?
+        .len();
+    if marker_size != expected_marker.len() as u64 {
+        return Err("pair marker is invalid");
+    }
+    let marker_bytes = fs::read(&marker).map_err(|_| "pair marker cannot be read")?;
+    if marker_bytes != expected_marker.as_bytes() {
+        return Err("pair marker is invalid");
+    }
+    if !shared_parent.is_absolute() {
+        return Err("shared preference parent must be absolute");
+    }
+    let supplied_shared =
+        fs::symlink_metadata(shared_parent).map_err(|_| "shared preference parent is missing")?;
+    if supplied_shared.file_type().is_symlink() || !supplied_shared.is_dir() {
+        return Err("shared preference parent must be a real directory");
+    }
+    let shared =
+        fs::canonicalize(shared_parent).map_err(|_| "shared preference parent is missing")?;
+    if shared != pair_root.join(PAIR_SHARED_DIR) {
+        return Err("shared preference parent is not the fixed sibling");
+    }
+    owner_only_directory(&shared, expected_uid)?;
+    exact_children(&shared, &[PAIR_APPEARANCE_DIR])?;
+    let preferences = shared.join(PAIR_APPEARANCE_DIR);
+    owner_only_directory(&preferences, expected_uid)?;
+    let other_view = if role == "view-a" { "view-b" } else { "view-a" };
+    owner_only_directory(&pair_root.join(other_view), expected_uid)?;
+    let view = pair_root.join(role);
+    owner_only_directory(&view, expected_uid)?;
+    exact_children(&view, &["home", "tmp", "xdg"])?;
+    owner_only_directory(&view.join("tmp"), expected_uid)?;
+    exact_children(&view.join("tmp"), &["nebular-release-smoke"])?;
+    owner_only_directory(
+        &view.join("tmp").join("nebular-release-smoke"),
+        expected_uid,
+    )?;
+    owner_only_directory(&view.join("home"), expected_uid)?;
+    owner_only_directory(&view.join("xdg"), expected_uid)?;
+    exact_children(
+        &view.join("xdg"),
+        &["config", "cache", "data", "state", "runtime"],
+    )?;
+    for child in ["config", "cache", "data", "state", "runtime"] {
+        owner_only_directory(&view.join("xdg").join(child), expected_uid)?;
+    }
+    if role == "view-a" {
+        if !fs::read_dir(&preferences)
+            .map_err(|_| "appearance preference leaf cannot be enumerated")?
+            .next()
+            .is_none()
+        {
+            return Err("P-save preference leaf is not empty");
+        }
+    } else {
+        owner_only_file(&preferences.join("appearance.json"), 0o600, 1, expected_uid)?;
+        if fs::read_dir(&preferences)
+            .map_err(|_| "appearance preference leaf cannot be enumerated")?
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy() != "appearance.json")
+        {
+            return Err("P-restart preference leaf has unexpected entries");
+        }
+    }
+    // The existing appearance initializer appends its fixed
+    // `appearance-preferences` child to this returned parent.
+    Ok(shared)
+}
+
+fn validated_exchange_directory(root: &Path) -> Result<PathBuf, &'static str> {
+    let root = fs::canonicalize(root).map_err(|_| "smoke directory cannot be resolved")?;
+    let expected_uid = fs::symlink_metadata(&root)
+        .map_err(|_| "smoke directory cannot be inspected")?
+        .uid();
+    let exchange = root.join(PAIR_EXCHANGE_DIR);
+    owner_only_directory(&exchange, expected_uid)?;
+    Ok(exchange)
+}
+
+pub(super) fn paired_exchange_source(root: &Path, name: &str) -> Result<PathBuf, &'static str> {
+    if !fixed_exchange_source(name) {
+        return Err("paired exchange source is not in the fixed table");
+    }
+    let exchange = validated_exchange_directory(root)?;
+    let expected_uid = fs::symlink_metadata(&exchange)
+        .map_err(|_| "paired exchange cannot be inspected")?
+        .uid();
+    let path = exchange.join(name);
+    owner_only_file(&path, 0o600, 1, expected_uid)?;
+    Ok(path)
+}
+
+pub(super) fn paired_exchange_destination(
+    root: &Path,
+    name: &str,
+) -> Result<PathBuf, &'static str> {
+    if !fixed_exchange_destination(name) {
+        return Err("paired exchange destination is not in the fixed table");
+    }
+    let exchange = validated_exchange_directory(root)?;
+    let path = exchange.join(name);
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err("paired exchange destination already exists");
+    }
+    Ok(path)
 }
 
 /// Identity of the running executable: path, device, inode, size and SHA-256 of its bytes.
@@ -93,7 +326,10 @@ pub(super) fn write_receipt(directory: &Path, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RECEIPT_NAME, contained_directory, validated_directory, write_receipt};
+    use super::{
+        RECEIPT_NAME, contained_directory, paired_exchange_destination, paired_exchange_source,
+        validated_directory, write_receipt,
+    };
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -162,5 +398,40 @@ mod tests {
             0o600
         );
         fs::remove_dir_all(&root)
+    }
+
+    #[test]
+    fn paired_exchange_names_are_closed_for_sources_and_destinations() -> std::io::Result<()> {
+        let root = fs::canonicalize(scratch("exchange-closure")?)?;
+        let exchange = root.join("exchange");
+        fs::create_dir(&exchange)?;
+        fs::set_permissions(&exchange, fs::Permissions::from_mode(0o700))?;
+        let review = exchange.join("review-v2.json");
+        fs::write(&review, b"review")?;
+        fs::set_permissions(&review, fs::Permissions::from_mode(0o600))?;
+
+        assert_eq!(
+            paired_exchange_source(&root, "review-v2.json"),
+            Ok(review.clone())
+        );
+        assert_eq!(
+            paired_exchange_source(&root, "foreign.json"),
+            Err("paired exchange source is not in the fixed table")
+        );
+        assert_eq!(
+            paired_exchange_destination(&root, "review-v2.json"),
+            Err("paired exchange destination already exists")
+        );
+        assert_eq!(
+            paired_exchange_destination(&root, "foreign.json"),
+            Err("paired exchange destination is not in the fixed table")
+        );
+
+        fs::remove_file(review)?;
+        assert_eq!(
+            paired_exchange_destination(&root, "review-v2.json"),
+            Ok(exchange.join("review-v2.json"))
+        );
+        fs::remove_dir_all(root)
     }
 }

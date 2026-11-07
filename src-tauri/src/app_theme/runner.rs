@@ -2,13 +2,18 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
+use super::paired_v2_authentication::authenticate_paired_v2_closure;
+use crate::app_theme::paired_v2::{
+    AppThemePairedCompileV2Response, PAIRED_V2_MAX_SOURCE_BYTES, PairedV2AdapterCompileRequest,
+    validate_adapter_request_transport, validate_compile_response_transport,
+};
 use crate::app_theme::types::{
     AdapterBindDocumentResponse, AdapterSubprocessRequest, AdapterSubprocessResponse,
     AppThemeCompileResponse, AppThemeExportResponse, AppThemePairedCompileResponse,
@@ -111,12 +116,54 @@ struct DocumentExecutionController {
     registration_gate: Mutex<Option<DocumentRegistrationGate>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PairedV2Operation {
+    ticket: u64,
+    nonce: u64,
+}
+
+#[derive(Debug)]
+struct PairedV2Active {
+    operation: PairedV2Operation,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Default)]
+struct PairedV2ExecutionState {
+    next_ticket: u64,
+    pending: Option<PairedV2Operation>,
+    active: Option<PairedV2Active>,
+    latest: Option<PairedV2Operation>,
+}
+
+#[derive(Debug, Default)]
+struct PairedV2ExecutionController {
+    execution_state: Mutex<PairedV2ExecutionState>,
+    execution_cvar: Condvar,
+    launch_gate: Mutex<()>,
+}
+
+struct PairedV2Lease {
+    operation: PairedV2Operation,
+    cancel: Arc<AtomicBool>,
+}
+
+struct PairedV2LeaseGuard {
+    controller: Arc<PairedV2ExecutionController>,
+    operation: PairedV2Operation,
+}
+
+struct PairedV2LaunchGuard<'a> {
+    _guard: MutexGuard<'a, ()>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppThemeRunner {
     node_binary: PathBuf,
     adapter_path: PathBuf,
     controller: Arc<ExecutionController>,
     document_controller: Arc<DocumentExecutionController>,
+    paired_v2_controller: Arc<PairedV2ExecutionController>,
     authenticate_payload: bool,
 }
 
@@ -154,6 +201,137 @@ impl<'a> Drop for ChildProcessGuard<'a> {
     }
 }
 
+impl Drop for PairedV2LeaseGuard {
+    fn drop(&mut self) {
+        self.controller.finish(self.operation);
+    }
+}
+
+impl PairedV2ExecutionController {
+    fn reserve(&self, nonce: u64) -> StudioResult<PairedV2Operation> {
+        let _launch_guard = self.launch_gate.lock().map_err(|_| sidecar_crashed())?;
+        let mut state = self.execution_state.lock().map_err(|_| sidecar_crashed())?;
+        let ticket = state
+            .next_ticket
+            .checked_add(1)
+            .ok_or_else(sidecar_crashed)?;
+        state.next_ticket = ticket;
+        let operation = PairedV2Operation { ticket, nonce };
+        if let Some(active) = state.active.as_ref() {
+            active.cancel.store(true, Ordering::SeqCst);
+        }
+        state.pending = Some(operation);
+        state.latest = Some(operation);
+        self.execution_cvar.notify_all();
+        Ok(operation)
+    }
+
+    fn abort(&self, operation: PairedV2Operation) {
+        let Ok(_launch_guard) = self.launch_gate.lock() else {
+            return;
+        };
+        let Ok(mut state) = self.execution_state.lock() else {
+            return;
+        };
+        if state.latest != Some(operation) {
+            return;
+        }
+        if let Some(active) = state.active.as_ref()
+            && active.operation == operation
+        {
+            active.cancel.store(true, Ordering::SeqCst);
+        }
+        if state.pending == Some(operation) {
+            state.pending = None;
+        }
+        state.latest = None;
+        self.execution_cvar.notify_all();
+    }
+
+    fn cancel(&self) {
+        let Ok(_launch_guard) = self.launch_gate.lock() else {
+            return;
+        };
+        let Ok(mut state) = self.execution_state.lock() else {
+            return;
+        };
+        if let Some(active) = state.active.as_ref() {
+            active.cancel.store(true, Ordering::SeqCst);
+        }
+        state.pending = None;
+        state.latest = None;
+        self.execution_cvar.notify_all();
+    }
+
+    fn acquire(&self, operation: PairedV2Operation) -> StudioResult<PairedV2Lease> {
+        let mut state = self.execution_state.lock().map_err(|_| sidecar_crashed())?;
+        loop {
+            if state.latest != Some(operation) {
+                return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+            }
+            if state.active.is_none() && state.pending == Some(operation) {
+                break;
+            }
+            state = self
+                .execution_cvar
+                .wait(state)
+                .map_err(|_| sidecar_crashed())?;
+        }
+        state.pending = None;
+        let cancel = Arc::new(AtomicBool::new(false));
+        state.active = Some(PairedV2Active {
+            operation,
+            cancel: cancel.clone(),
+        });
+        Ok(PairedV2Lease { operation, cancel })
+    }
+
+    fn begin_phase<'a>(&'a self, lease: &PairedV2Lease) -> StudioResult<PairedV2LaunchGuard<'a>> {
+        let launch_guard = self.launch_gate.lock().map_err(|_| sidecar_crashed())?;
+        let state = self.execution_state.lock().map_err(|_| sidecar_crashed())?;
+        let current = state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.operation == lease.operation)
+            && state.latest == Some(lease.operation)
+            && !lease.cancel.load(Ordering::SeqCst);
+        drop(state);
+        if !current {
+            return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+        }
+        Ok(PairedV2LaunchGuard {
+            _guard: launch_guard,
+        })
+    }
+
+    fn finish(&self, operation: PairedV2Operation) {
+        let Ok(mut state) = self.execution_state.lock() else {
+            return;
+        };
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.operation == operation)
+        {
+            state.active = None;
+            if state.pending.is_none() && state.latest == Some(operation) {
+                state.latest = None;
+            }
+            self.execution_cvar.notify_all();
+        }
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> (Option<PairedV2Operation>, Option<PairedV2Operation>) {
+        self.execution_state.lock().map_or((None, None), |state| {
+            (
+                state.pending,
+                state.active.as_ref().map(|active| active.operation),
+            )
+        })
+    }
+}
+
 impl AppThemeRunner {
     pub fn is_packaged_bundle(current_exe: &Path) -> bool {
         crate::platform::is_packaged_bundle(current_exe)
@@ -169,6 +347,7 @@ impl AppThemeRunner {
             adapter_path,
             controller: Arc::new(ExecutionController::default()),
             document_controller: Arc::new(DocumentExecutionController::default()),
+            paired_v2_controller: Arc::new(PairedV2ExecutionController::default()),
             authenticate_payload: false,
         }
     }
@@ -187,6 +366,7 @@ impl AppThemeRunner {
             adapter_path,
             controller: Arc::new(ExecutionController::default()),
             document_controller: Arc::new(DocumentExecutionController::default()),
+            paired_v2_controller: Arc::new(PairedV2ExecutionController::default()),
             authenticate_payload: true,
         }
     }
@@ -199,6 +379,13 @@ impl AppThemeRunner {
             self.adapter_path.is_file()
         };
         node_ok && adapter_ok
+    }
+
+    /// Paired-v2 has an independent authenticated closure and fixed adapter
+    /// entrypoint.  Legacy availability deliberately remains unchanged.
+    pub fn is_paired_v2_available(&self) -> bool {
+        self.node_binary.is_file()
+            && authenticate_paired_v2_closure(&self.node_binary, &self.adapter_path).is_ok()
     }
 
     pub fn node_binary_path(&self) -> &Path {
@@ -241,6 +428,18 @@ impl AppThemeRunner {
         }
     }
 
+    pub(crate) fn reserve_paired_v2(&self, nonce: u64) -> StudioResult<PairedV2Operation> {
+        self.paired_v2_controller.reserve(nonce)
+    }
+
+    pub(crate) fn abort_paired_v2(&self, operation: &PairedV2Operation) {
+        self.paired_v2_controller.abort(*operation);
+    }
+
+    pub(crate) fn cancel_paired_v2(&self) {
+        self.paired_v2_controller.cancel();
+    }
+
     #[cfg(test)]
     pub(crate) fn install_document_registration_gate(
         &self,
@@ -273,6 +472,7 @@ impl AppThemeRunner {
     pub fn cancel_all(&self) {
         self.cancel_active();
         self.cancel_documents();
+        self.cancel_paired_v2();
     }
 
     fn execute_process(
@@ -414,8 +614,9 @@ impl AppThemeRunner {
             return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
         }
 
-        let mut child = Command::new(&self.node_binary)
-            .arg(&self.adapter_path)
+        let entrypoint = self.adapter_path.clone();
+        let child = Command::new(&self.node_binary)
+            .arg(entrypoint)
             .env_clear()
             .env("NODE_ENV", "production")
             .env("LANG", "C")
@@ -426,12 +627,66 @@ impl AppThemeRunner {
             .spawn()
             .map_err(|_| StudioCommandError::new(StudioReasonCode::SidecarCrashed))?;
 
+        self.execute_spawned_child(request, request_bytes, cancel_token, child, None)
+    }
+
+    fn execute_paired_v2_phase(
+        &self,
+        request: &AdapterSubprocessRequest,
+        request_bytes: &[u8],
+        lease: &PairedV2Lease,
+    ) -> StudioResult<AdapterSubprocessResponse> {
+        if lease.cancel.load(Ordering::SeqCst) {
+            return Err(StudioCommandError::new(StudioReasonCode::Cancelled));
+        }
+        let entrypoint = if request.action == "paired_compile_v2" {
+            // Authentication is mandatory and deliberately outside the launch
+            // gate; the gate is only a current-ticket-to-spawn barrier.
+            authenticate_paired_v2_closure(&self.node_binary, &self.adapter_path)?;
+            self.adapter_path.with_file_name("paired-v2-adapter.mjs")
+        } else {
+            self.adapter_path.clone()
+        };
+        let launch_guard = self.paired_v2_controller.begin_phase(lease)?;
+        let child = Command::new(&self.node_binary)
+            .arg(entrypoint)
+            .env_clear()
+            .env("NODE_ENV", "production")
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|_| StudioCommandError::new(StudioReasonCode::SidecarCrashed))?;
+
+        self.execute_spawned_child(
+            request,
+            request_bytes,
+            &lease.cancel,
+            child,
+            Some(launch_guard),
+        )
+    }
+
+    fn execute_spawned_child(
+        &self,
+        request: &AdapterSubprocessRequest,
+        request_bytes: &[u8],
+        cancel_token: &Arc<AtomicBool>,
+        mut child: Child,
+        launch_guard: Option<PairedV2LaunchGuard<'_>>,
+    ) -> StudioResult<AdapterSubprocessResponse> {
         let mut guard = ChildProcessGuard {
             child: &mut child,
             reaped: false,
         };
-        let (stdin_thread, stdout_thread, stderr_thread, stdout_rx) =
-            spawn_adapter_io_threads(guard.child, request_bytes)?;
+        let io_threads = spawn_adapter_io_threads(guard.child, request_bytes);
+        // The gate must not be held through the wait loop or any fallible
+        // cleanup/thread join.  Drop it before propagating pipe-acquisition
+        // failure as well as before the normal wait path.
+        drop(launch_guard);
+        let (stdin_thread, stdout_thread, stderr_thread, stdout_rx) = io_threads?;
 
         let start = Instant::now();
         let mut cancelled = false;
@@ -515,147 +770,10 @@ impl AppThemeRunner {
             destination: None,
             language: None,
             ui_revision,
+            paired_v2_request: None,
         };
         let res = self.execute_document_process(&req)?;
-        let raw_source_sha256 = res.raw_source_sha256.ok_or_else(protocol_invalid)?;
-        if !is_lower_hex_sha256(&raw_source_sha256) || raw_source_sha256 != expected_raw_sha256 {
-            return Err(protocol_invalid());
-        }
-        let schema_version = res.schema_version.ok_or_else(protocol_invalid)?;
-        let alias_resolved = res.alias_resolved.ok_or_else(protocol_invalid)?;
-        let verification_status = res.verification_status.ok_or_else(protocol_invalid)?;
-
-        if res.status == "bound" {
-            if !res.valid
-                || res.error.is_some()
-                || res.error_code.is_some()
-                || verification_status != ProfileVerificationStatus::Verified
-            {
-                return Err(protocol_invalid());
-            }
-            let owner_binding = res.owner_binding.ok_or_else(protocol_invalid)?;
-            let raw_len = raw_bytes.len() as u64;
-            match schema_version {
-                ProfileDocumentSchemaVersion::PairedProfileV1 => {
-                    let normalized_sha256 = res.normalized_sha256.ok_or_else(protocol_invalid)?;
-                    let profile = res.profile.ok_or_else(protocol_invalid)?;
-                    if !is_lower_hex_sha256(&normalized_sha256)
-                        || res.v2_profile.is_some()
-                        || res.canonical_digest.is_some()
-                        || profile.schema_version != "tf-paired-profile-v1"
-                    {
-                        return Err(protocol_invalid());
-                    }
-                    check_owner_binding(
-                        &owner_binding,
-                        schema_version,
-                        alias_resolved,
-                        &expected_raw_sha256,
-                        raw_len,
-                        Some(&normalized_sha256),
-                        None,
-                    )?;
-                    Ok(AdapterBindDocumentResponse {
-                        status: res.status,
-                        valid: true,
-                        schema_version,
-                        alias_resolved,
-                        verification_status,
-                        raw_source_sha256,
-                        normalized_sha256: Some(normalized_sha256),
-                        canonical_digest: None,
-                        owner_binding: Some(owner_binding),
-                        profile: Some(profile),
-                        v2_profile: None,
-                        error_code: None,
-                        error: None,
-                        details: vec![],
-                    })
-                }
-                ProfileDocumentSchemaVersion::PairedProfileV2 => {
-                    let canonical_digest = res.canonical_digest.ok_or_else(protocol_invalid)?;
-                    let v2_profile = res.v2_profile.ok_or_else(protocol_invalid)?;
-                    if !is_lower_hex_sha256(&canonical_digest)
-                        || res.normalized_sha256.is_some()
-                        || res.profile.is_some()
-                        || alias_resolved
-                        || v2_profile.schema_version != "tf-paired-profile-v2"
-                    {
-                        return Err(protocol_invalid());
-                    }
-                    check_owner_binding(
-                        &owner_binding,
-                        schema_version,
-                        alias_resolved,
-                        &expected_raw_sha256,
-                        raw_len,
-                        None,
-                        Some(&canonical_digest),
-                    )?;
-                    Ok(AdapterBindDocumentResponse {
-                        status: res.status,
-                        valid: true,
-                        schema_version,
-                        alias_resolved: false,
-                        verification_status,
-                        raw_source_sha256,
-                        normalized_sha256: None,
-                        canonical_digest: Some(canonical_digest),
-                        owner_binding: Some(owner_binding),
-                        profile: None,
-                        v2_profile: Some(v2_profile),
-                        error_code: None,
-                        error: None,
-                        details: vec![],
-                    })
-                }
-                ProfileDocumentSchemaVersion::Corrupt => Err(protocol_invalid()),
-            }
-        } else {
-            if res.valid
-                || res.owner_binding.is_some()
-                || res.profile.is_some()
-                || res.v2_profile.is_some()
-                || res.normalized_sha256.is_some()
-                || res.canonical_digest.is_some()
-            {
-                return Err(protocol_invalid());
-            }
-            let error_code = res
-                .error_code
-                .as_deref()
-                .map(|c| sanitize_error_code(c, "BIND_ERROR"))
-                .unwrap_or_else(|| "BIND_ERROR".to_owned());
-            let error_msg = res
-                .error
-                .as_deref()
-                .map(|e| sanitize_untrusted_text(e, 512))
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "Profile document validation failed".to_owned());
-            let details = res
-                .details
-                .iter()
-                .take(16)
-                .map(|d| sanitize_untrusted_text(d, 512))
-                .filter(|s| !s.is_empty())
-                .collect();
-            Ok(AdapterBindDocumentResponse {
-                status: "error".to_owned(),
-                valid: false,
-                schema_version,
-                alias_resolved,
-                verification_status,
-                raw_source_sha256,
-                normalized_sha256: None,
-                canonical_digest: None,
-                owner_binding: None,
-                profile: None,
-                v2_profile: None,
-                error_code: Some(error_code),
-                error: Some(error_msg),
-                details,
-            })
-        }
+        decode_bind_response(raw_bytes, &expected_raw_sha256, res)
     }
 
     pub fn compile(
@@ -676,6 +794,7 @@ impl AppThemeRunner {
             destination: None,
             language: None,
             ui_revision: Some(rev),
+            paired_v2_request: None,
         };
         let res = self.execute_process(&req)?;
         Ok(AppThemeCompileResponse {
@@ -703,6 +822,7 @@ impl AppThemeRunner {
             destination: None,
             language: None,
             ui_revision: Some(rev),
+            paired_v2_request: None,
         };
         let res = self.execute_process(&req)?;
         let solar_sail = res
@@ -728,6 +848,106 @@ impl AppThemeRunner {
         })
     }
 
+    pub(crate) fn paired_compile_v2(
+        &self,
+        operation: PairedV2Operation,
+        raw_bytes: &[u8],
+        request: PairedV2AdapterCompileRequest,
+    ) -> StudioResult<AppThemePairedCompileV2Response> {
+        if validate_adapter_request_transport(&request).is_err() {
+            self.paired_v2_controller.abort(operation);
+            return Err(protocol_invalid());
+        }
+        if raw_bytes.len() > PAIRED_V2_MAX_SOURCE_BYTES
+            || request.raw_source_base64
+                != base64::engine::general_purpose::STANDARD.encode(raw_bytes)
+            || format!("{:x}", Sha256::digest(raw_bytes)) != request.expected_raw_source_sha256
+        {
+            self.paired_v2_controller.abort(operation);
+            return Err(protocol_invalid());
+        }
+        let lease = match self.paired_v2_controller.acquire(operation) {
+            Ok(lease) => lease,
+            Err(error) => {
+                self.paired_v2_controller.abort(operation);
+                return Err(error);
+            }
+        };
+        let _lease_guard = PairedV2LeaseGuard {
+            controller: self.paired_v2_controller.clone(),
+            operation,
+        };
+        if !self.is_available() {
+            return Err(sidecar_unavail());
+        }
+
+        let bind_request = AdapterSubprocessRequest {
+            action: "bind_document".to_owned(),
+            specification: None,
+            profile: None,
+            raw_bytes_base64: Some(base64::engine::general_purpose::STANDARD.encode(raw_bytes)),
+            destination: None,
+            language: None,
+            ui_revision: None,
+            paired_v2_request: None,
+        };
+        let bind_request_bytes =
+            serde_json::to_vec(&bind_request).map_err(|_| protocol_invalid())?;
+        if bind_request_bytes.len() > MAX_COMPILE_INPUT_BYTES {
+            return Err(StudioCommandError::new(StudioReasonCode::ResultTooLarge));
+        }
+        let bind_response =
+            self.execute_paired_v2_phase(&bind_request, &bind_request_bytes, &lease)?;
+        let bound = decode_bind_response(
+            raw_bytes,
+            &request.expected_raw_source_sha256,
+            bind_response,
+        )?;
+        if bound.status != "bound"
+            || !bound.valid
+            || bound.schema_version != ProfileDocumentSchemaVersion::PairedProfileV2
+            || bound.verification_status != ProfileVerificationStatus::Verified
+            || bound.canonical_digest.as_deref() != Some(request.expected_canonical_digest.as_str())
+        {
+            return Err(protocol_invalid());
+        }
+
+        let ui_revision = request.ui_revision;
+        let compile_request = AdapterSubprocessRequest {
+            action: "paired_compile_v2".to_owned(),
+            specification: None,
+            profile: None,
+            raw_bytes_base64: None,
+            destination: None,
+            language: None,
+            ui_revision: Some(ui_revision),
+            paired_v2_request: Some(Box::new(request)),
+        };
+        let compile_request_bytes =
+            serde_json::to_vec(&compile_request).map_err(|_| protocol_invalid())?;
+        if compile_request_bytes.len() > MAX_COMPILE_INPUT_BYTES {
+            return Err(StudioCommandError::new(StudioReasonCode::ResultTooLarge));
+        }
+        let res = self.execute_paired_v2_phase(&compile_request, &compile_request_bytes, &lease)?;
+        let nested = res
+            .paired_v2_response
+            .map(|response| *response)
+            .ok_or_else(protocol_invalid)?;
+        let nested_valid = match &nested {
+            AppThemePairedCompileV2Response::Success { valid, .. }
+            | AppThemePairedCompileV2Response::Partial { valid, .. } => *valid,
+            _ => false,
+        };
+        if res.valid != nested_valid || (res.status == "success") != nested_valid {
+            return Err(protocol_invalid());
+        }
+        validate_compile_response_transport(&nested).map_err(|_| protocol_invalid())?;
+        if nested_ui_revision(&nested) != ui_revision {
+            return Err(protocol_invalid());
+        }
+        Ok(nested)
+    }
+
     pub fn export_package(
         &self,
         specification: ThemeSpecificationDto,
@@ -742,6 +962,7 @@ impl AppThemeRunner {
             destination: Some(destination),
             language,
             ui_revision: None,
+            paired_v2_request: None,
         };
         let res = self.execute_process(&req)?;
         Ok(AppThemeExportResponse {
@@ -750,6 +971,162 @@ impl AppThemeRunner {
             file_count: res.file_count,
             error: res.error,
         })
+    }
+}
+
+fn decode_bind_response(
+    raw_bytes: &[u8],
+    expected_raw_sha256: &str,
+    res: AdapterSubprocessResponse,
+) -> StudioResult<AdapterBindDocumentResponse> {
+    let raw_source_sha256 = res.raw_source_sha256.ok_or_else(protocol_invalid)?;
+    if !is_lower_hex_sha256(&raw_source_sha256) || raw_source_sha256 != expected_raw_sha256 {
+        return Err(protocol_invalid());
+    }
+    let schema_version = res.schema_version.ok_or_else(protocol_invalid)?;
+    let alias_resolved = res.alias_resolved.ok_or_else(protocol_invalid)?;
+    let verification_status = res.verification_status.ok_or_else(protocol_invalid)?;
+
+    if res.status == "bound" {
+        if !res.valid
+            || res.error.is_some()
+            || res.error_code.is_some()
+            || verification_status != ProfileVerificationStatus::Verified
+        {
+            return Err(protocol_invalid());
+        }
+        let owner_binding = res.owner_binding.ok_or_else(protocol_invalid)?;
+        let raw_len = raw_bytes.len() as u64;
+        match schema_version {
+            ProfileDocumentSchemaVersion::PairedProfileV1 => {
+                let normalized_sha256 = res.normalized_sha256.ok_or_else(protocol_invalid)?;
+                let profile = res.profile.ok_or_else(protocol_invalid)?;
+                if !is_lower_hex_sha256(&normalized_sha256)
+                    || res.v2_profile.is_some()
+                    || res.canonical_digest.is_some()
+                    || profile.schema_version != "tf-paired-profile-v1"
+                {
+                    return Err(protocol_invalid());
+                }
+                check_owner_binding(
+                    &owner_binding,
+                    schema_version,
+                    alias_resolved,
+                    expected_raw_sha256,
+                    raw_len,
+                    Some(&normalized_sha256),
+                    None,
+                )?;
+                Ok(AdapterBindDocumentResponse {
+                    status: res.status,
+                    valid: true,
+                    schema_version,
+                    alias_resolved,
+                    verification_status,
+                    raw_source_sha256,
+                    normalized_sha256: Some(normalized_sha256),
+                    canonical_digest: None,
+                    owner_binding: Some(owner_binding),
+                    profile: Some(profile),
+                    v2_profile: None,
+                    error_code: None,
+                    error: None,
+                    details: vec![],
+                })
+            }
+            ProfileDocumentSchemaVersion::PairedProfileV2 => {
+                let canonical_digest = res.canonical_digest.ok_or_else(protocol_invalid)?;
+                let v2_profile = res.v2_profile.ok_or_else(protocol_invalid)?;
+                if !is_lower_hex_sha256(&canonical_digest)
+                    || res.normalized_sha256.is_some()
+                    || res.profile.is_some()
+                    || alias_resolved
+                    || v2_profile.schema_version != "tf-paired-profile-v2"
+                {
+                    return Err(protocol_invalid());
+                }
+                check_owner_binding(
+                    &owner_binding,
+                    schema_version,
+                    alias_resolved,
+                    expected_raw_sha256,
+                    raw_len,
+                    None,
+                    Some(&canonical_digest),
+                )?;
+                Ok(AdapterBindDocumentResponse {
+                    status: res.status,
+                    valid: true,
+                    schema_version,
+                    alias_resolved: false,
+                    verification_status,
+                    raw_source_sha256,
+                    normalized_sha256: None,
+                    canonical_digest: Some(canonical_digest),
+                    owner_binding: Some(owner_binding),
+                    profile: None,
+                    v2_profile: Some(v2_profile),
+                    error_code: None,
+                    error: None,
+                    details: vec![],
+                })
+            }
+            ProfileDocumentSchemaVersion::Corrupt => Err(protocol_invalid()),
+        }
+    } else {
+        if res.valid
+            || res.owner_binding.is_some()
+            || res.profile.is_some()
+            || res.v2_profile.is_some()
+            || res.normalized_sha256.is_some()
+            || res.canonical_digest.is_some()
+        {
+            return Err(protocol_invalid());
+        }
+        let error_code = res
+            .error_code
+            .as_deref()
+            .map(|c| sanitize_error_code(c, "BIND_ERROR"))
+            .unwrap_or_else(|| "BIND_ERROR".to_owned());
+        let error_msg = res
+            .error
+            .as_deref()
+            .map(|e| sanitize_untrusted_text(e, 512))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Profile document validation failed".to_owned());
+        let details = res
+            .details
+            .iter()
+            .take(16)
+            .map(|d| sanitize_untrusted_text(d, 512))
+            .filter(|s| !s.is_empty())
+            .collect();
+        Ok(AdapterBindDocumentResponse {
+            status: "error".to_owned(),
+            valid: false,
+            schema_version,
+            alias_resolved,
+            verification_status,
+            raw_source_sha256,
+            normalized_sha256: None,
+            canonical_digest: None,
+            owner_binding: None,
+            profile: None,
+            v2_profile: None,
+            error_code: Some(error_code),
+            error: Some(error_msg),
+            details,
+        })
+    }
+}
+
+fn nested_ui_revision(response: &AppThemePairedCompileV2Response) -> u64 {
+    match response {
+        AppThemePairedCompileV2Response::Success { ui_revision, .. }
+        | AppThemePairedCompileV2Response::Partial { ui_revision, .. }
+        | AppThemePairedCompileV2Response::Stale { ui_revision, .. }
+        | AppThemePairedCompileV2Response::Cancelled { ui_revision, .. }
+        | AppThemePairedCompileV2Response::Error { ui_revision, .. } => *ui_revision,
     }
 }
 
@@ -893,3 +1270,7 @@ fn join_io_threads(
 #[cfg(test)]
 #[path = "document_queue_tests.rs"]
 mod document_queue_tests;
+
+#[cfg(test)]
+#[path = "paired_v2_controller_tests.rs"]
+mod paired_v2_controller_tests;

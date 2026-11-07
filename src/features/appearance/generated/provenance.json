@@ -1,0 +1,68 @@
+{
+  "schema": "theme-forge.application-appearance-projection.v1",
+  "inventoryDigest": "d9f94a7f5ce0730098d840e409ca588caefc2e05c45fbec02d749d25f418fb51",
+  "catalogSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+  "defaultFamily": "nebular",
+  "members": [
+    {
+      "producerMember": "runtime-baselines.ts",
+      "output": "runtime-baselines.ts",
+      "bytes": 26498,
+      "sha256": "11714787ea2cdf79a3ad25a2bd71affe5ab51948071e2edf99d9d50575ccf12f"
+    },
+    {
+      "producerMember": "catalog.json",
+      "output": "source-catalog.json",
+      "bytes": 286807,
+      "sha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351"
+    },
+    {
+      "producerMember": "terminal-nova/application.css",
+      "output": "terminal-nova.css",
+      "bytes": 4227,
+      "sha256": "e4f8327022953c78996bf799385feae0ad7caff850eeaf9b198a7a6c5eb5ff7f"
+    },
+    {
+      "producerMember": "nebular/application.css",
+      "output": "nebular.css",
+      "bytes": 4228,
+      "sha256": "616ffa3e0001cf146d552fcb5cca18b177febabf9ca406151578db53fd3d84cb"
+    },
+    {
+      "producerMember": "developer/application.css",
+      "output": "developer.css",
+      "bytes": 4250,
+      "sha256": "6952118016681724443152d5a27c3bbe231e1ad804c33076432dd62b7379f88d"
+    },
+    {
+      "producerMember": "graphic-designer/application.css",
+      "output": "graphic-designer.css",
+      "bytes": 4246,
+      "sha256": "5bd1f7de357259b389bfcdeab25044b5b8044ef4ad9a54388a762b4227001d12"
+    },
+    {
+      "producerMember": "anime/application.css",
+      "output": "anime.css",
+      "bytes": 4247,
+      "sha256": "3e6bcb1635261da524f66eace082d7878c548db832f8e7816ac2c26fd55a6cbb"
+    },
+    {
+      "producerMember": "gamer/application.css",
+      "output": "gamer.css",
+      "bytes": 4250,
+      "sha256": "c89d11e1c225127c4288a7a6b3f2a5f096d3cb8ee96225e47fea7897643919d6"
+    }
+  ],
+  "derivedMembers": [
+    {
+      "producerMember": "catalog.json",
+      "sourceSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+      "output": "catalog-index.json",
+      "transform": "family-index-v1",
+      "bytes": 567,
+      "sha256": "116af591e845204a0f139279b8f30ed219f59990a3a4df76d6c76c7167c9bc7a"
+    }
+  ],
+  "nonDefaultCssFiles": "Verification projections; runtime selection imports the generated baseline object",
+  "sourceTrust": "Input must be produced from the reviewed CTTN source and authenticated engine archives; this receipt alone is not publisher authentication"
+}

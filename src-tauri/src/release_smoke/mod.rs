@@ -9,6 +9,9 @@
 //!   sidecar temporary directory live inside the smoke directory;
 //! * answers native project selection from a compiled-in, finite list of directories that must
 //!   resolve inside the smoke directory (the page cannot choose paths);
+//! * routes ordinary appearance preferences to the fixed `appearance-preferences` subdirectory of
+//!   the smoke root, while P-save/P-restart pass the validated sibling parent whose fixed child is
+//!   shared by the two views, rather than using the production application configuration directory;
 //! * drives the real packaged frontend through its DOM and the real JS-to-Rust command bridge with
 //!   a compiled-in driver script, adding no command and no capability;
 //! * writes one exclusively created receipt and quits through the normal exit path (or, for the
@@ -30,10 +33,173 @@ use crate::errors::{StudioCommandError, StudioReasonCode, StudioResult};
 
 pub(crate) const FLAG: &str = "--nebular-release-smoke";
 pub(crate) const DIRECTORY_ENV: &str = "TFNF_RELEASE_SMOKE_DIR";
+pub(crate) const PREFERENCES_ENV: &str = "TFNF_RELEASE_SMOKE_PREFERENCES_DIR";
 const RECEIPT_SCHEMA: &str = "nebular.release-smoke-receipt-v1";
 const DRIVER: &str = include_str!("driver.js");
+const APPEARANCE_EXPECTATIONS_JSON: &str = include_str!("appearance-role-expectations.v1.json");
 const DRIVER_BUDGET: Duration = Duration::from_secs(300);
 const SIGNAL_BUDGET: Duration = Duration::from_secs(120);
+
+const APPEARANCE_EXPECTATION_ROLES: [&str; 6] = [
+    "--background",
+    "--primary",
+    "--tf-appearance-font-ui",
+    "--tf-appearance-radius-surface",
+    "--tf-appearance-selection",
+    "--tf-appearance-selection-text",
+];
+const APPEARANCE_EXPECTATION_FAMILIES: [&str; 6] = [
+    "terminal-nova",
+    "nebular",
+    "developer",
+    "graphic-designer",
+    "anime",
+    "gamer",
+];
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppearanceExpectationSource {
+    runtime_baselines_path: String,
+    runtime_baselines_sha256: String,
+    catalog_index_path: String,
+    catalog_index_sha256: String,
+    declared_source_catalog_sha256: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppearanceExpectationRoles {
+    #[serde(rename = "--background")]
+    background: String,
+    #[serde(rename = "--primary")]
+    primary: String,
+    #[serde(rename = "--tf-appearance-font-ui")]
+    font_ui: String,
+    #[serde(rename = "--tf-appearance-radius-surface")]
+    radius_surface: String,
+    #[serde(rename = "--tf-appearance-selection")]
+    selection: String,
+    #[serde(rename = "--tf-appearance-selection-text")]
+    selection_text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppearanceExpectationRow {
+    family: String,
+    mode: String,
+    roles: AppearanceExpectationRoles,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AppearanceExpectations {
+    schema: String,
+    source: AppearanceExpectationSource,
+    roles: Vec<String>,
+    rows: Vec<AppearanceExpectationRow>,
+    canonical_rows_sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairedDriverConfig {
+    scenario: &'static str,
+    appearance_expectations: AppearanceExpectations,
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn expectation_role_values_are_static(roles: &AppearanceExpectationRoles) -> bool {
+    [
+        roles.background.as_str(),
+        roles.primary.as_str(),
+        roles.font_ui.as_str(),
+        roles.radius_surface.as_str(),
+        roles.selection.as_str(),
+        roles.selection_text.as_str(),
+    ]
+    .iter()
+    .all(|value| {
+        !value.trim().is_empty()
+            && !value.contains("var(")
+            && !value.contains("calc(")
+            && !value.contains("env(")
+            && !value.contains("attr(")
+    })
+}
+
+fn validate_appearance_expectations(value: &AppearanceExpectations) -> Result<(), &'static str> {
+    if value.schema != "theme-forge.appearance-role-expectations.v1" {
+        return Err("appearance expectations schema is invalid");
+    }
+    if value.roles.len() != APPEARANCE_EXPECTATION_ROLES.len()
+        || value
+            .roles
+            .iter()
+            .zip(APPEARANCE_EXPECTATION_ROLES.iter())
+            .any(|(actual, expected)| actual != expected)
+    {
+        return Err("appearance expectations role order is invalid");
+    }
+    if value.source.runtime_baselines_path
+        != "frontend-fixture/src/features/appearance/generated/runtime-baselines.ts"
+        || value.source.catalog_index_path
+            != "frontend-fixture/src/features/appearance/generated/catalog-index.json"
+        || !is_sha256(&value.source.runtime_baselines_sha256)
+        || !is_sha256(&value.source.catalog_index_sha256)
+        || !is_sha256(&value.source.declared_source_catalog_sha256)
+        || !is_sha256(&value.canonical_rows_sha256)
+    {
+        return Err("appearance expectations source identity is invalid");
+    }
+    if value.rows.len() != APPEARANCE_EXPECTATION_FAMILIES.len() * 2 {
+        return Err("appearance expectations must contain twelve rows");
+    }
+    for (index, row) in value.rows.iter().enumerate() {
+        let expected_family =
+            APPEARANCE_EXPECTATION_FAMILIES[index % APPEARANCE_EXPECTATION_FAMILIES.len()];
+        let expected_mode = if index < APPEARANCE_EXPECTATION_FAMILIES.len() {
+            "light"
+        } else {
+            "dark"
+        };
+        if row.family != expected_family || row.mode != expected_mode {
+            return Err("appearance expectations row order is invalid");
+        }
+        if !expectation_role_values_are_static(&row.roles) {
+            return Err("appearance expectations contain an unsupported role value");
+        }
+    }
+    Ok(())
+}
+
+fn paired_driver_config(scenario: Scenario) -> Result<String, &'static str> {
+    let scenario_json = serde_json::to_string(scenario.id())
+        .map_err(|_| "release smoke scenario serialization failed")?;
+    if !scenario.is_paired_v2() {
+        return Ok(format!(
+            "window.__NEBULAR_RELEASE_SMOKE_CONFIG__ = Object.freeze({{ scenario: {scenario_json} }});\n"
+        ));
+    }
+    let expectations = serde_json::from_str::<AppearanceExpectations>(APPEARANCE_EXPECTATIONS_JSON)
+        .map_err(|_| "appearance expectations JSON is invalid")?;
+    validate_appearance_expectations(&expectations)?;
+    let payload = serde_json::to_string(&PairedDriverConfig {
+        scenario: scenario.id(),
+        appearance_expectations: expectations,
+    })
+    .map_err(|_| "appearance expectations serialization failed")?;
+    Ok(format!(
+        "window.__NEBULAR_RELEASE_SMOKE_CONFIG__ = Object.freeze({payload});\n"
+    ))
+}
 
 /// The deliberately different platform scenarios. Each fixes its own selection sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +212,12 @@ pub(crate) enum Scenario {
     RestartCancel,
     /// As `RestartCancel`, but the process then waits for the harness to terminate it.
     RestartCancelSignal,
+    /// First half of the fixed two-process appearance-preference restart pair.
+    AppearancePairSave,
+    /// Second half of the fixed two-process appearance-preference restart pair.
+    AppearancePairRestart,
+    /// The fixed paired-v2 authoring branch with finite source-side pickers.
+    PairedV2,
 }
 
 impl Scenario {
@@ -55,6 +227,9 @@ impl Scenario {
             "B" => Some(Self::CompileFirst),
             "C" => Some(Self::RestartCancel),
             "C-signal" => Some(Self::RestartCancelSignal),
+            "P-save" => Some(Self::AppearancePairSave),
+            "P-restart" => Some(Self::AppearancePairRestart),
+            "paired-v2" => Some(Self::PairedV2),
             _ => None,
         }
     }
@@ -65,6 +240,9 @@ impl Scenario {
             Self::CompileFirst => "B",
             Self::RestartCancel => "C",
             Self::RestartCancelSignal => "C-signal",
+            Self::AppearancePairSave => "P-save",
+            Self::AppearancePairRestart => "P-restart",
+            Self::PairedV2 => "paired-v2",
         }
     }
 
@@ -80,6 +258,23 @@ impl Scenario {
             Self::RestartCancel | Self::RestartCancelSignal => {
                 &["fixtures/Derive Target/Case", "fixtures/Derive Target/case"]
             }
+            Self::AppearancePairSave | Self::AppearancePairRestart | Self::PairedV2 => &[],
+        }
+    }
+
+    pub(crate) fn is_appearance_pair(self) -> bool {
+        matches!(self, Self::AppearancePairSave | Self::AppearancePairRestart)
+    }
+
+    pub(crate) fn is_paired_v2(self) -> bool {
+        self == Self::PairedV2
+    }
+
+    pub(crate) fn appearance_pair_role(self) -> Option<&'static str> {
+        match self {
+            Self::AppearancePairSave => Some("view-a"),
+            Self::AppearancePairRestart => Some("view-b"),
+            _ => None,
         }
     }
 
@@ -94,6 +289,13 @@ pub(crate) struct ScriptedSelections {
     root: PathBuf,
     sequence: &'static [&'static str],
     next: AtomicUsize,
+    scenario: Scenario,
+    paired_open: AtomicUsize,
+    paired_import: AtomicUsize,
+    paired_review_import: AtomicUsize,
+    paired_export: AtomicUsize,
+    paired_review_export: AtomicUsize,
+    paired_save: AtomicUsize,
 }
 
 impl ScriptedSelections {
@@ -112,6 +314,71 @@ impl ScriptedSelections {
             .map(Some)
             .ok_or_else(|| StudioCommandError::new(StudioReasonCode::SelectionRejected))
     }
+
+    pub(crate) fn is_paired_v2(&self) -> bool {
+        self.scenario.is_paired_v2()
+    }
+
+    /// Returns one path from the fixed paired-v2 exchange table. This method is
+    /// activation-gated and never creates, overwrites, or discovers a path.
+    pub(crate) fn paired_file(&self, key: &str) -> StudioResult<PathBuf> {
+        if !self.is_paired_v2() {
+            return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+        }
+        let (name, existing) = match key {
+            "open" => {
+                let index = self.paired_open.fetch_add(1, Ordering::SeqCst);
+                let name = match index {
+                    0 => "baseline.theme.json",
+                    1 => "v2-saved.theme.json",
+                    _ => {
+                        return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                    }
+                };
+                (name, true)
+            }
+            "import" => {
+                if self.paired_import.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                }
+                ("candidate-v2.json", true)
+            }
+            "review-import" => {
+                if self.paired_review_import.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                }
+                ("review-v2.json", true)
+            }
+            "tf-paired-profile-v2-candidate" => {
+                if self.paired_export.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                }
+                ("candidate-v2.json", false)
+            }
+            "tf-paired-profile-v2-review" => {
+                if self.paired_review_export.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                }
+                ("review-v2.json", false)
+            }
+            "save-v2" => {
+                if self.paired_save.fetch_add(1, Ordering::SeqCst) != 0 {
+                    return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+                }
+                ("v2-saved.theme.json", false)
+            }
+            _ => {
+                return Err(StudioCommandError::new(StudioReasonCode::SelectionRejected));
+            }
+        };
+        if existing {
+            io::paired_exchange_source(&self.root, name)
+                .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))
+        } else {
+            io::paired_exchange_destination(&self.root, name)
+                .map_err(|_| StudioCommandError::new(StudioReasonCode::SelectionRejected))
+        }
+    }
 }
 
 /// An activated release smoke.
@@ -119,6 +386,7 @@ impl ScriptedSelections {
 pub(crate) struct ReleaseSmoke {
     scenario: Scenario,
     directory: PathBuf,
+    appearance_preferences: Option<PathBuf>,
 }
 
 impl ReleaseSmoke {
@@ -130,11 +398,22 @@ impl ReleaseSmoke {
         &self.directory
     }
 
+    pub(crate) fn appearance_preferences(&self) -> Option<&Path> {
+        self.appearance_preferences.as_deref()
+    }
+
     pub(crate) fn selections(&self) -> ScriptedSelections {
         ScriptedSelections {
             root: self.directory.clone(),
             sequence: self.scenario.selections(),
             next: AtomicUsize::new(0),
+            scenario: self.scenario,
+            paired_open: AtomicUsize::new(0),
+            paired_import: AtomicUsize::new(0),
+            paired_review_import: AtomicUsize::new(0),
+            paired_export: AtomicUsize::new(0),
+            paired_review_export: AtomicUsize::new(0),
+            paired_save: AtomicUsize::new(0),
         }
     }
 }
@@ -144,6 +423,17 @@ impl ReleaseSmoke {
 pub(crate) fn activation(
     args: impl IntoIterator<Item = OsString>,
     directory: Option<OsString>,
+) -> Result<Option<ReleaseSmoke>, &'static str> {
+    activation_with_preferences(args, directory, std::env::var_os(PREFERENCES_ENV))
+}
+
+/// Parses activation with the optional fixed P-save/P-restart preference
+/// parent. Ordinary launches ignore a stray preference variable; active
+/// non-P scenarios reject it before the WebView starts.
+pub(crate) fn activation_with_preferences(
+    args: impl IntoIterator<Item = OsString>,
+    directory: Option<OsString>,
+    appearance_preferences: Option<OsString>,
 ) -> Result<Option<ReleaseSmoke>, &'static str> {
     let mut args = args.into_iter().skip(1);
     let mut requested = None;
@@ -173,9 +463,25 @@ pub(crate) fn activation(
     let scenario = Scenario::parse(&requested).ok_or("unknown release smoke scenario")?;
     let directory = directory.ok_or("release smoke directory is not set")?;
     let directory = io::validated_directory(Path::new(&directory))?;
+    let appearance_preferences = if scenario.is_appearance_pair() {
+        let supplied = appearance_preferences.ok_or("appearance preference parent is not set")?;
+        Some(io::validated_appearance_preferences(
+            &directory,
+            Path::new(&supplied),
+            scenario
+                .appearance_pair_role()
+                .ok_or("appearance pair role is missing")?,
+        )?)
+    } else {
+        if appearance_preferences.is_some() {
+            return Err("appearance preference parent requires an appearance pair scenario");
+        }
+        None
+    };
     Ok(Some(ReleaseSmoke {
         scenario,
         directory,
+        appearance_preferences,
     }))
 }
 
@@ -342,10 +648,14 @@ pub(crate) fn start(window: &WebviewWindow, app: AppHandle, smoke: ReleaseSmoke)
     let window = window.clone();
     thread::spawn(move || {
         let started = unix_ms();
-        let config = format!(
-            "window.__NEBULAR_RELEASE_SMOKE_CONFIG__ = Object.freeze({{ scenario: {:?} }});\n",
-            smoke.scenario.id()
-        );
+        let config = match paired_driver_config(smoke.scenario) {
+            Ok(config) => config,
+            Err(reason) => {
+                let _ = record(&smoke, started, None, Some(reason));
+                app.exit(1);
+                return;
+            }
+        };
         thread::sleep(Duration::from_millis(1500));
         if window.eval(format!("{config}{DRIVER}")).is_err() {
             let _ = record(&smoke, started, None, Some("driver injection failed"));
@@ -400,10 +710,41 @@ pub(crate) fn start(window: &WebviewWindow, app: AppHandle, smoke: ReleaseSmoke)
 
 #[cfg(test)]
 mod tests {
-    use super::{DIRECTORY_ENV, FLAG, Scenario, activation, bounded, parse_poll};
+    use super::{
+        APPEARANCE_EXPECTATIONS_JSON, AppearanceExpectations, DIRECTORY_ENV, FLAG, Scenario,
+        ScriptedSelections, activation, bounded, parse_poll, validate_appearance_expectations,
+    };
     use std::ffi::OsString;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn generated_appearance_rows_are_accepted_in_light_then_dark_order() -> Result<(), &'static str>
+    {
+        let value = serde_json::from_str::<AppearanceExpectations>(APPEARANCE_EXPECTATIONS_JSON)
+            .map_err(|_| "generated appearance expectations must decode")?;
+        assert_eq!(validate_appearance_expectations(&value), Ok(()));
+        assert_eq!(value.rows[1].family, "nebular");
+        assert_eq!(value.rows[1].mode, "light");
+        assert_eq!(value.rows[6].family, "terminal-nova");
+        assert_eq!(value.rows[6].mode, "dark");
+        Ok(())
+    }
+
+    #[test]
+    fn reordered_generated_appearance_rows_are_rejected() -> Result<(), &'static str> {
+        let mut value =
+            serde_json::from_str::<AppearanceExpectations>(APPEARANCE_EXPECTATIONS_JSON)
+                .map_err(|_| "generated appearance expectations must decode")?;
+        value.rows.swap(1, 6);
+        assert_eq!(
+            validate_appearance_expectations(&value),
+            Err("appearance expectations row order is invalid")
+        );
+        Ok(())
+    }
 
     fn args(values: &[&str]) -> Vec<OsString> {
         std::iter::once("tfnf")
@@ -421,6 +762,34 @@ mod tests {
         fs::create_dir(&path)?;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
         Ok(path)
+    }
+
+    fn paired_selections(root: PathBuf) -> ScriptedSelections {
+        ScriptedSelections {
+            root,
+            sequence: &[],
+            next: AtomicUsize::new(0),
+            scenario: Scenario::PairedV2,
+            paired_open: AtomicUsize::new(0),
+            paired_import: AtomicUsize::new(0),
+            paired_review_import: AtomicUsize::new(0),
+            paired_export: AtomicUsize::new(0),
+            paired_review_export: AtomicUsize::new(0),
+            paired_save: AtomicUsize::new(0),
+        }
+    }
+
+    fn exchange(root: &std::path::Path) -> std::io::Result<PathBuf> {
+        let exchange = root.join("exchange");
+        fs::create_dir(&exchange)?;
+        fs::set_permissions(&exchange, fs::Permissions::from_mode(0o700))?;
+        Ok(exchange)
+    }
+
+    fn exchange_file(exchange: &std::path::Path, name: &str) -> std::io::Result<()> {
+        let path = exchange.join(name);
+        fs::write(&path, b"fixed proposal fixture")?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
     }
 
     #[test]
@@ -581,5 +950,68 @@ mod tests {
             "the sequence is finite"
         );
         fs::remove_dir_all(dir)
+    }
+
+    #[test]
+    fn paired_review_selections_are_closed_finite_and_do_not_change_candidate_paths()
+    -> std::io::Result<()> {
+        let source_root = smoke_dir("paired-review-source")?;
+        let source_exchange = exchange(&source_root)?;
+        exchange_file(&source_exchange, "candidate-v2.json")?;
+        exchange_file(&source_exchange, "review-v2.json")?;
+        let selections = paired_selections(source_root.clone());
+
+        let review_source = selections
+            .paired_file("review-import")
+            .map_err(|_| std::io::Error::other("review source was rejected"))?;
+        assert!(review_source.ends_with("exchange/review-v2.json"));
+        assert!(selections.paired_file("review-import").is_err());
+        assert!(
+            selections
+                .paired_file("tf-paired-profile-v2-brief")
+                .is_err()
+        );
+        assert!(
+            selections
+                .paired_file("tf-paired-profile-v1-review")
+                .is_err()
+        );
+        assert!(selections.paired_file("../review-v2.json").is_err());
+
+        let candidate_source = selections
+            .paired_file("import")
+            .map_err(|_| std::io::Error::other("candidate source changed"))?;
+        assert!(candidate_source.ends_with("exchange/candidate-v2.json"));
+        fs::remove_dir_all(source_root)?;
+
+        let destination_root = smoke_dir("paired-review-destination")?;
+        let destination_exchange = exchange(&destination_root)?;
+        let destinations = paired_selections(destination_root.clone());
+        let review_destination = destinations
+            .paired_file("tf-paired-profile-v2-review")
+            .map_err(|_| std::io::Error::other("review destination was rejected"))?;
+        assert!(review_destination.ends_with("exchange/review-v2.json"));
+        assert!(!review_destination.exists());
+        assert!(
+            destinations
+                .paired_file("tf-paired-profile-v2-review")
+                .is_err()
+        );
+        exchange_file(&destination_exchange, "review-v2.json")?;
+        assert!(
+            destinations
+                .paired_file("tf-paired-profile-v2-review")
+                .is_err()
+        );
+        fs::remove_dir_all(destination_root)
+    }
+
+    #[test]
+    fn paired_review_source_rejects_missing_exchange_member() -> std::io::Result<()> {
+        let root = smoke_dir("paired-review-missing")?;
+        let _exchange = exchange(&root)?;
+        let selections = paired_selections(root.clone());
+        assert!(selections.paired_file("review-import").is_err());
+        fs::remove_dir_all(root)
     }
 }

@@ -1,6 +1,6 @@
 {
   "productName": "Theme Forge Nebular Fusion",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "identifier": "ai.knowledgeforge.themeforge.nebularfusion",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -49,7 +49,7 @@
     "shortDescription": "Evidence-bound Theme Forge integration workbench",
     "longDescription": "Theme Forge Nebular Fusion is a local human-first workbench for reviewing deterministic Theme Forge candidate evidence.",
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.3"
     }
   }
 }

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { decodePairedV2NativePacketEnvelope } from "../application-theme/paired-v2-packets";
 import type {
   ContrastDiagnostic,
   ThemeBriefCreateRequest,
@@ -233,24 +234,48 @@ export function validateBriefCreateResponse(value: unknown): ThemeBriefCreateRes
 
 export function validatePacketImportResponse(value: unknown): ThemePacketImportResponse {
   const obj = expectObject(value);
+  const cancelled = expectBoolean(obj.cancelled, "import cancelled");
+  const pairedV2 = obj.pairedV2 === undefined ? undefined : decodePairedV2NativePacketEnvelope(obj.pairedV2);
+  if (pairedV2 !== undefined) {
+    if (cancelled) throw new ThemeLabValidationError("Cancelled packet import cannot contain a paired v2 envelope");
+    if (
+      typeof obj.canonicalJson !== "string" ||
+      typeof obj.kind !== "string" ||
+      typeof obj.digest !== "string" ||
+      obj.canonicalJson !== pairedV2.canonicalJson ||
+      obj.kind !== pairedV2.kind ||
+      obj.digest !== pairedV2.digest
+    ) {
+      throw new ThemeLabValidationError("Paired v2 import identity fields do not match the envelope");
+    }
+  }
   return {
-    cancelled: expectBoolean(obj.cancelled, "import cancelled"),
+    cancelled,
     displayName: typeof obj.displayName === "string" ? obj.displayName : undefined,
     packet: typeof obj.canonicalJson === "string" ? expectObject(JSON.parse(obj.canonicalJson)) : undefined,
     canonicalJson: typeof obj.canonicalJson === "string" ? obj.canonicalJson : undefined,
     kind: typeof obj.kind === "string" ? obj.kind : undefined,
     digest: typeof obj.digest === "string" ? obj.digest : undefined,
+    pairedV2,
     error: validateError(obj.error),
   };
 }
 
 export function validatePacketExportResponse(value: unknown): ThemePacketExportResponse {
   const obj = expectObject(value);
+  const cancelled = expectBoolean(obj.cancelled, "export cancelled");
+  const saved = expectBoolean(obj.saved, "export saved");
+  const pairedV2 = obj.pairedV2 === undefined ? undefined : decodePairedV2NativePacketEnvelope(obj.pairedV2);
+  if (pairedV2 !== undefined) {
+    if (cancelled || !saved) throw new ThemeLabValidationError("Only a saved packet export may contain a paired v2 envelope");
+    if (obj.digest !== pairedV2.digest) throw new ThemeLabValidationError("Paired v2 export digest does not match the envelope");
+  }
   return {
-    cancelled: expectBoolean(obj.cancelled, "export cancelled"),
-    saved: expectBoolean(obj.saved, "export saved"),
+    cancelled,
+    saved,
     displayName: typeof obj.displayName === "string" ? obj.displayName : undefined,
     digest: typeof obj.digest === "string" ? obj.digest : undefined,
+    pairedV2,
     error: validateError(obj.error),
   };
 }

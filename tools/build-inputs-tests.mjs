@@ -13,6 +13,11 @@ import {
   PRIVATE_RUNTIME_PREFIX,
   PRIVATE_RUNTIME_MARKER,
   REQUIRED_RUNTIME_DIRECTORIES,
+  REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES,
+  REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS,
+  PRIVATE_GRAPHICS_VENDOR_JSON,
+  PRIVATE_GRAPHICS_VENDOR_LIBRARY,
+  PRIVATE_GRAPHICS_VENDOR_JSON_VERSION,
   REQUIRED_EXECUTABLE_RUNTIME_ROLES,
   REQUIRED_RUNTIME_ROLES,
   externalFloorForTarget,
@@ -265,7 +270,7 @@ directory = "${vendorDir}"
 test("environment semantic compile settings mutation changes identity and rejects drift", async t => {
   const { root, inputs } = await fixture(t);
   const env1 = {
-    MACOSX_DEPLOYMENT_TARGET: "13.0",
+    MACOSX_DEPLOYMENT_TARGET: "13.3",
     NIX_CFLAGS_COMPILE: "-O2",
   };
   inputs.execution = { environment: env1 };
@@ -285,10 +290,10 @@ test("environment semantic compile settings mutation changes identity and reject
   await assert.rejects(validateBuildInputs(inputs), /MACOSX_DEPLOYMENT_TARGET semantic setting mismatch/);
 });
 
-test("Darwin deployment target settings may raise but not lower the 13.0 product floor", async t => {
+test("Darwin deployment target settings may raise but not lower the 13.3 product floor", async t => {
   const { inputs } = await fixture(t);
   const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
-  assert.equal(config.bundle.macOS.minimumSystemVersion, "13.0");
+  assert.equal(config.bundle.macOS.minimumSystemVersion, "13.3");
   const bind = async value => {
     const environment = { MACOSX_DEPLOYMENT_TARGET: value };
     inputs.settings = await createBuildSettings({ environment });
@@ -296,18 +301,18 @@ test("Darwin deployment target settings may raise but not lower the 13.0 product
   };
   // Absence remains governed by generic settings parity.
   assert.equal(Object.hasOwn((await validateBuildInputs(inputs)).claims.settings.environment.semantic, "MACOSX_DEPLOYMENT_TARGET"), false);
-  // "100.0" sorts below "13.0" as a string; acceptance proves numeric comparison.
-  for (const value of ["13.0", "13.0.1", "13.1", "14.0", "100.0"]) {
+  // "100.0" sorts below "13.3" as a string; acceptance proves numeric comparison.
+  for (const value of ["13.3", "13.3.1", "13.4", "14.0", "100.0"]) {
     await bind(value);
     assert.equal((await validateBuildInputs(inputs)).claims.settings.environment.semantic.MACOSX_DEPLOYMENT_TARGET, value);
   }
-  // "9.0" sorts above "13.0" as a string; rejection proves numeric comparison.
-  for (const value of ["12.0", "11.0", "12.9.9", "9.0"]) {
+  // "9.0" sorts above "13.3" as a string; rejection proves numeric comparison.
+  for (const value of ["13.0", "13.2", "13.2.9", "12.0", "11.0", "12.9.9", "9.0"]) {
     await bind(value);
-    assert.throws(() => buildInputClaims(inputs), /Darwin MACOSX_DEPLOYMENT_TARGET .* is below product floor 13\.0/);
-    await assert.rejects(validateBuildInputs(inputs), /below product floor 13\.0/);
+    assert.throws(() => buildInputClaims(inputs), /Darwin MACOSX_DEPLOYMENT_TARGET .* is below product floor 13\.3/);
+    await assert.rejects(validateBuildInputs(inputs), /below product floor 13\.3/);
   }
-  for (const value of ["", "13", "13.", "13.0.0.0", "v13.0", "013.0", "13.0 ", "thirteen"]) {
+  for (const value of ["", "13", "13.", "13.3.0.0", "v13.3", "013.3", "13.3 ", "thirteen"]) {
     await bind(value);
     assert.throws(() => buildInputClaims(inputs), /Darwin MACOSX_DEPLOYMENT_TARGET must be numeric major\.minor\[\.patch\]/);
     await assert.rejects(validateBuildInputs(inputs), /must be numeric major\.minor\[\.patch\]/);
@@ -461,7 +466,7 @@ test("exact environment parity rejects extra or missing keys across semantic, lo
   const topDir = join(root, "top-parity");
   await mkdir(topDir);
   const boundEnv = {
-    MACOSX_DEPLOYMENT_TARGET: "13.0",
+    MACOSX_DEPLOYMENT_TARGET: "13.3",
     SDKROOT: sdkDir,
     NIX_BUILD_TOP: topDir,
     NIX_STORE: "/nix/store",
@@ -478,7 +483,7 @@ test("exact environment parity rejects extra or missing keys across semantic, lo
   // Missing semantic key in execution
   delete inputs.execution.environment.MACOSX_DEPLOYMENT_TARGET;
   await assert.rejects(validateBuildInputs(inputs), /Missing execution environment setting: MACOSX_DEPLOYMENT_TARGET/);
-  inputs.execution.environment.MACOSX_DEPLOYMENT_TARGET = "13.0";
+  inputs.execution.environment.MACOSX_DEPLOYMENT_TARGET = "13.3";
 
   // Extra locator key in execution
   const extraDir = join(root, "extra-dev-dir");
@@ -495,7 +500,7 @@ test("exact environment parity rejects extra or missing keys across semantic, lo
   // Extra execution-only key in execution
   const extraTop = join(root, "extra-top");
   await mkdir(extraTop);
-  const boundEnvNoTop = { MACOSX_DEPLOYMENT_TARGET: "13.0", SDKROOT: sdkDir };
+  const boundEnvNoTop = { MACOSX_DEPLOYMENT_TARGET: "13.3", SDKROOT: sdkDir };
   inputs.settings = await createBuildSettings({ environment: boundEnvNoTop });
   inputs.execution.environment = { ...boundEnvNoTop, NIX_BUILD_TOP: extraTop };
   await assert.rejects(validateBuildInputs(inputs), /Execution environment has unbound execution-only setting/);
@@ -793,6 +798,12 @@ test("produceBuildReceipt and verifyProducedOutput bind Linux private-runtime SO
     await chmod(absDir, 0o755);
     directories.push({ path: dir, mode: 0o755 });
   }
+  for (const dir of REQUIRED_PRIVATE_GRAPHICS_DIRECTORIES) {
+    const absDir = join(payloadRoot, dir);
+    await mkdir(absDir, { recursive: true, mode: 0o755 });
+    await chmod(absDir, 0o755);
+    directories.push({ path: dir, mode: 0o755 });
+  }
   const regulars = [];
   for (const role of REQUIRED_RUNTIME_ROLES) {
     const absPath = join(payloadRoot, role);
@@ -809,6 +820,32 @@ test("produceBuildReceipt and verifyProducedOutput bind Linux private-runtime SO
       role: executable ? "helper-executable" : "shared-object",
     });
   }
+  for (const endpoint of REQUIRED_PRIVATE_GRAPHICS_ENDPOINTS) {
+    const content = `graphics:${endpoint}\n`;
+    const absPath = join(payloadRoot, endpoint);
+    await writeFile(absPath, content, { mode: 0o644 });
+    await chmod(absPath, 0o644);
+    regulars.push({
+      path: endpoint,
+      bytes: Buffer.byteLength(content),
+      sha256: digest(content),
+      mode: 0o644,
+      role: "graphics-endpoint",
+    });
+  }
+  const vendorContent = JSON.stringify({
+    file_format_version: PRIVATE_GRAPHICS_VENDOR_JSON_VERSION,
+    ICD: { library_path: PRIVATE_GRAPHICS_VENDOR_LIBRARY },
+  }) + "\n";
+  await writeFile(join(payloadRoot, PRIVATE_GRAPHICS_VENDOR_JSON), vendorContent, { mode: 0o644 });
+  await chmod(join(payloadRoot, PRIVATE_GRAPHICS_VENDOR_JSON), 0o644);
+  regulars.push({
+    path: PRIVATE_GRAPHICS_VENDOR_JSON,
+    bytes: Buffer.byteLength(vendorContent),
+    sha256: digest(vendorContent),
+    mode: 0o644,
+    role: "graphics-vendor-json",
+  });
   // Include a second regular file with identical bytes to test alias terminal path swap
   const altWebkitRel = "opt/nebular-private/lib/libwebkit2gtk-4.1.so.0.19.10";
   const webkitContent = `role:${REQUIRED_RUNTIME_ROLES[1]}\n`;
@@ -820,6 +857,7 @@ test("produceBuildReceipt and verifyProducedOutput bind Linux private-runtime SO
     sha256: digest(webkitContent),
     mode: 0o644,
   });
+  directories.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   regulars.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
   const aliases = [

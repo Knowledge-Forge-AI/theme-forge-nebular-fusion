@@ -7,7 +7,9 @@ fn quoted_commands(text: &str) -> Vec<String> {
         .skip(1)
         .step_by(2)
         .filter(|s| {
-            s.starts_with("studio_") && s.bytes().all(|c| c.is_ascii_lowercase() || c == b'_')
+            s.starts_with("studio_")
+                && s.bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
         })
         .map(str::to_owned)
         .collect()
@@ -22,9 +24,19 @@ fn handlers_inventory_permissions_and_scene_bridge_agree() -> Result<(), Box<dyn
     assert_eq!(expected.len(), inventory.len(), "duplicate native command");
     assert_eq!(
         expected.len(),
-        49,
-        "unexplained change from the 42 + 7 command plan"
+        54,
+        "unexplained change from the approved 54-command 0.8 inventory"
     );
+    for command in [
+        "studio_app_theme_paired_packet_create_v2",
+        "studio_app_theme_paired_compile_v2",
+        "studio_app_theme_save_profile_v2",
+    ] {
+        assert!(
+            expected.contains(command),
+            "digit-bearing command missing from inventory"
+        );
+    }
     let lib = fs::read_to_string(root.join("src/lib.rs"))?;
     let handler = lib
         .split("tauri::generate_handler![")

@@ -44,10 +44,10 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-// The product floor is Tauri bundle.macOS.minimumSystemVersion (13.0). Absence
+// The product floor is Tauri bundle.macOS.minimumSystemVersion (13.3). Absence
 // stays governed by generic settings parity; a present Darwin value may only
 // raise it. Components compare numerically, never as strings.
-const DARWIN_FLOOR_MAJOR = 13, DARWIN_FLOOR_MINOR = 0;
+const DARWIN_FLOOR_MAJOR = 13, DARWIN_FLOOR_MINOR = 3;
 /** @param {unknown} value @returns {void} */
 function requireDarwinDeploymentTarget(value) {
   const match = typeof value === "string" ? /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?$/.exec(value) : null;

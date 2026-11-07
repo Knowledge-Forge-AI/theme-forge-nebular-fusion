@@ -3,6 +3,12 @@ import { BRIDGE_CONTRACT, GALLERY_AXES, GALLERY_SCENARIOS, GALLERY_SCENARIO_IDS,
   isLegacyThemeAck, isThemeAppliedBridgeAck, isThemeFailure, normalizeCommandAttemptResult,
   resolveDraftGallerySelection, validatePreSendCss, type GalleryAxis, type GalleryScenarioId } from "./gallery-contract";
 import type { ThemeSpecificationV2 } from "./v2-model";
+import {
+  createPreviewFrameIdentity,
+  normalizeComputedPreviewToken,
+  previewState,
+  type PreviewApplicationStateCallback,
+} from "../application-theme/preview-application-state";
 
 export type ViewportMode = "desktop" | "mobile";
 export type ColorSchemeMode = "dark" | "light";
@@ -11,10 +17,14 @@ export interface StarlightPreviewProps {
   readonly isLastGood?: boolean | undefined; readonly onModeChange?: ((mode: ColorSchemeMode) => void) | undefined;
   readonly gallery?: boolean | undefined; readonly spec?: ThemeSpecificationV2 | undefined;
   readonly compiledSpec?: ThemeSpecificationV2 | undefined;
+  readonly requireCorrelatedAck?: boolean | undefined;
+  readonly onPreviewState?: PreviewApplicationStateCallback | undefined;
 }
-type Pending = { revision: number; generation: number; scenario: GalleryScenarioId; applicationId: string; source: Window };
-export function StarlightPreview({ css, revision, mode, isLastGood = false, onModeChange, gallery = false, spec, compiledSpec }: StarlightPreviewProps) {
+type Pending = { revision: number; generation: number; scenario: GalleryScenarioId; applicationId: string; frameId: string; source: Window };
+export function StarlightPreview({ css, revision, mode, isLastGood = false, onModeChange, gallery = false, spec, compiledSpec, requireCorrelatedAck = false, onPreviewState }: StarlightPreviewProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const previewStateCallback = useRef(onPreviewState);
+  previewStateCallback.current = onPreviewState;
   const [viewport, setViewport] = useState<ViewportMode>("desktop");
   const [axis, setAxis] = useState<GalleryAxis>("sidebarMode");
   const [manual, setManual] = useState<GalleryScenarioId | null>(null);
@@ -38,31 +48,53 @@ export function StarlightPreview({ css, revision, mode, isLastGood = false, onMo
   const key = `${gallery ? view.entryPath : "neutral"}:${reload}`;
   const currentKey = useRef(key);
   const generation = useRef(0);
-  if (currentKey.current !== key) { currentKey.current = key; generation.current++; pending.current = null; }
+  const frameIdentity = useRef(createPreviewFrameIdentity(generation.current));
+  if (currentKey.current !== key) {
+    currentKey.current = key;
+    generation.current++;
+    frameIdentity.current = createPreviewFrameIdentity(generation.current);
+    pending.current = null;
+  }
   const stopTimer = () => { if (timer.current !== null) clearTimeout(timer.current); timer.current = null; };
 
   useEffect(() => {
     stopTimer(); pending.current = null;
-    if (!preflight.valid) { setApplicationState("failed"); setFailure(preflight.error ?? "Preview CSS rejected."); return; }
+    if (!preflight.valid) {
+      setApplicationState("failed");
+      setFailure(preflight.error ?? "Preview CSS rejected.");
+      previewStateCallback.current?.(previewState("failed", revision, mode, frameIdentity.current.frameId));
+      return;
+    }
     if (loadedKey !== key || css === undefined || !frameRef.current?.contentWindow) return;
     const applicationId = `application-${++sequence.current}`;
-    const next = { revision, generation: generation.current, scenario: view.scenarioId, applicationId, source: frameRef.current.contentWindow };
+    const next = {
+      revision,
+      generation: generation.current,
+      scenario: view.scenarioId,
+      applicationId,
+      frameId: frameIdentity.current.frameId,
+      source: frameRef.current.contentWindow,
+    };
     pending.current = next;
     setApplicationState("pending"); setFailure(null);
+    const correlated = gallery || requireCorrelatedAck;
+    previewStateCallback.current?.(previewState("pending", revision, mode, next.frameId, correlated ? { applicationId } : {}));
     timer.current = setTimeout(() => {
       if (pending.current === next) {
         pending.current = null; setApplicationState("failed");
         setFailure("Preview application was not acknowledged. The displayed result is unconfirmed; retry or reload.");
+        previewStateCallback.current?.(previewState("failed", revision, mode, next.frameId, correlated ? { applicationId } : {}));
       }
     }, BRIDGE_CONTRACT.acknowledgementTimeoutMs);
     try {
       next.source.postMessage({ type: "tfsl:apply-theme", css, mode, revision,
-        ...(gallery ? { frameGeneration: next.generation, scenarioId: next.scenario, applicationId } : {}) }, "*");
+        ...(correlated ? { frameGeneration: next.generation, scenarioId: next.scenario, applicationId } : {}) }, "*");
     } catch {
       stopTimer(); pending.current = null; setApplicationState("failed"); setFailure("Preview application failed. Retry or reload.");
+      previewStateCallback.current?.(previewState("failed", revision, mode, next.frameId, correlated ? { applicationId } : {}));
     }
     return () => { stopTimer(); pending.current = null; };
-  }, [css, revision, mode, loadedKey, loadSerial, key, gallery, view.scenarioId, preflight.valid]);
+  }, [css, revision, mode, loadedKey, loadSerial, key, gallery, requireCorrelatedAck, view.scenarioId, preflight.valid]);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
@@ -75,23 +107,47 @@ export function StarlightPreview({ css, revision, mode, isLastGood = false, onMo
       const matches = (data: {revision: number; frameGeneration: number; scenarioId: string; applicationId: string}) =>
         data.revision === expected.revision && data.frameGeneration === expected.generation
         && data.scenarioId === expected.scenario && data.applicationId === expected.applicationId;
-      if (gallery && isThemeFailure(event.data) && matches(event.data)) {
+      const correlated = gallery || requireCorrelatedAck;
+      if (correlated && isThemeFailure(event.data) && matches(event.data)) {
         stopTimer(); pending.current = null; setApplicationState("failed");
-        setFailure("Preview rejected this application. The last confirmed revision has not advanced."); return;
+        setFailure("Preview rejected this application. The last confirmed revision has not advanced.");
+        previewStateCallback.current?.(previewState("failed", expected.revision, mode, expected.frameId, { applicationId: expected.applicationId }));
+        return;
       }
-      const ack = gallery ? (isThemeAppliedBridgeAck(event.data) && matches(event.data) ? event.data : null)
+      const ack = correlated ? (isThemeAppliedBridgeAck(event.data) && matches(event.data) ? event.data : null)
         : (isLegacyThemeAck(event.data) && event.data.revision === expected.revision ? event.data : null);
       if (!ack) return;
+      const computedAccent = normalizeComputedPreviewToken(ack.computedAccent);
+      if (correlated && computedAccent === null) {
+        stopTimer(); pending.current = null; setApplicationState("failed");
+        setFailure("Preview application returned no bounded accent token. Retry or reload.");
+        previewStateCallback.current?.(previewState("failed", expected.revision, mode, expected.frameId, { applicationId: expected.applicationId }));
+        return;
+      }
       stopTimer(); pending.current = null; setAppliedRevision(ack.revision); setApplicationState("applied"); setFailure(null);
       lastGoodView.current = view;
       if (ack.computedAccent !== undefined) frame.dataset.computedAccent = ack.computedAccent;
       if (ack.renderedLinkColor !== undefined) frame.dataset.renderedLinkColor = ack.renderedLinkColor;
+      previewStateCallback.current?.(previewState("applied", ack.revision, mode, expected.frameId, {
+        ...(correlated ? { applicationId: expected.applicationId } : {}),
+        ...(computedAccent === null ? {} : { computedToken: computedAccent }),
+      }));
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [gallery, view]);
+  }, [gallery, mode, requireCorrelatedAck, view]);
 
-  const reloadFrame = () => { stopTimer(); pending.current = null; setLoadedKey(""); setAppliedRevision(0); setApplicationState("pending"); setReload(value => value + 1); };
+  const reloadFrame = () => {
+    stopTimer();
+    const invalidatedApplicationId = pending.current?.applicationId;
+    pending.current = null;
+    setLoadedKey("");
+    setAppliedRevision(0);
+    setApplicationState("pending");
+    previewStateCallback.current?.(previewState("pending", revision, mode, frameIdentity.current.frameId,
+      (gallery || requireCorrelatedAck) && invalidatedApplicationId !== undefined ? { applicationId: invalidatedApplicationId } : {}));
+    setReload(value => value + 1);
+  };
   const confirmed = applicationState === "applied" && loadedKey === key && appliedRevision === revision && preflight.valid;
   const status = !preflight.valid ? "Preview application failure; last-good preview retained"
     : applicationState === "failed" ? "Preview application failure"
@@ -139,7 +195,19 @@ export function StarlightPreview({ css, revision, mode, isLastGood = false, onMo
     <div className={`preview-frame-wrapper ${viewport}`}>
       <iframe key={key} ref={frameRef} src={gallery ? view.entryPath : "/preview/index.html"} title="Starlight Theme Preview"
         className="preview-iframe" sandbox="allow-scripts" style={viewport === "mobile" ? { width: 390, maxWidth: "100%" } : undefined}
-        onLoad={() => { stopTimer(); pending.current = null; setAppliedRevision(0); setApplicationState("pending"); setNavigated(loadedKey === key); generation.current++; setLoadedKey(key); setLoadSerial(value => value + 1); }} />
+        onLoad={() => {
+          stopTimer();
+          pending.current = null;
+          setAppliedRevision(0);
+          setApplicationState("pending");
+          setFailure(null);
+          setNavigated(loadedKey === key);
+          generation.current++;
+          frameIdentity.current = createPreviewFrameIdentity(generation.current);
+          previewStateCallback.current?.(previewState("pending", revision, mode, frameIdentity.current.frameId));
+          setLoadedKey(key);
+          setLoadSerial(value => value + 1);
+        }} />
     </div>
   </div>;
 }

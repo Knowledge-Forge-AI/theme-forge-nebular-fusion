@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app_theme;
+pub mod appearance_preferences;
 pub mod commands;
 mod design_evidence;
 pub mod errors;
@@ -110,6 +111,13 @@ pub fn run() {
             let resource = platform::resource_dir(&executable, || {
                 app.path().resource_dir().map_err(|error| error.to_string())
             })?;
+            let appearance_preferences_state = appearance_preferences::initialize(
+                app.handle(),
+                smoke_request
+                    .as_ref()
+                    .map(|smoke| smoke.appearance_preferences().unwrap_or(smoke.directory())),
+            );
+            app.manage(appearance_preferences_state);
             let temp = match smoke_request.as_ref() {
                 Some(smoke) => smoke.directory().join("sidecar-temp"),
                 None => app
@@ -210,6 +218,7 @@ pub fn run() {
             commands::theme_lab::studio_theme_lab_dispose,
             commands::theme_lab::studio_theme_lab_draft_update,
             commands::theme_packet::studio_theme_brief_create,
+            commands::theme_packet::studio_app_theme_paired_packet_create_v2,
             commands::theme_packet::studio_theme_packet_import,
             commands::theme_packet::studio_theme_packet_export,
             commands::theme_packet::studio_theme_review_create,
@@ -237,10 +246,14 @@ pub fn run() {
             commands::app_theme::studio_app_theme_status,
             commands::app_theme::studio_app_theme_compile,
             commands::app_theme::studio_app_theme_paired_compile,
+            commands::app_theme::studio_app_theme_paired_compile_v2,
             commands::app_theme::studio_app_theme_open_profile,
             commands::app_theme::studio_app_theme_save_profile,
+            commands::app_theme::studio_app_theme_save_profile_v2,
             commands::app_theme::studio_app_theme_export_package,
             commands::app_theme::studio_app_theme_reset,
+            commands::appearance_preferences::studio_appearance_preferences_load,
+            commands::appearance_preferences::studio_appearance_preferences_save,
         ])
         .build(tauri::generate_context!());
 
@@ -427,6 +440,7 @@ mod tests {
                 "studio_theme_lab_dispose",
                 "studio_theme_lab_draft_update",
                 "studio_theme_brief_create",
+                "studio_app_theme_paired_packet_create_v2",
                 "studio_theme_packet_import",
                 "studio_theme_packet_export",
                 "studio_theme_review_create",
@@ -454,10 +468,14 @@ mod tests {
                 "studio_app_theme_status",
                 "studio_app_theme_compile",
                 "studio_app_theme_paired_compile",
+                "studio_app_theme_paired_compile_v2",
                 "studio_app_theme_open_profile",
                 "studio_app_theme_save_profile",
+                "studio_app_theme_save_profile_v2",
                 "studio_app_theme_export_package",
                 "studio_app_theme_reset",
+                "studio_appearance_preferences_load",
+                "studio_appearance_preferences_save",
             ]
         );
     }

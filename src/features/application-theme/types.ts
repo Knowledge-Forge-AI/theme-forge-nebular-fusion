@@ -380,6 +380,8 @@ export interface AppThemeOpenedDocument {
   normalizedSha256?: string;
   canonicalDigest?: string;
   editable: boolean;
+  /** Separate native v2 authoring custody; legacy v1 `editable` may remain false. */
+  v2AuthoringEligible?: boolean;
   readonlyReason?: string;
   diagnosticCode?: string;
   diagnosticSummary?: string;
@@ -391,6 +393,11 @@ export interface AppThemeOpenProfileResponse {
   cancelled: boolean;
   document?: AppThemeOpenedDocument;
   error?: string;
+}
+
+export interface AppThemePairedV2AuthoringCapability {
+  supported: boolean;
+  sessionId?: string;
 }
 
 export interface AppThemeSaveProfileRequest {
@@ -421,6 +428,7 @@ export interface AppThemeStatus extends AppThemeStatusResponse {
   latestRevision?: number;
   message?: string;
   dirty?: boolean;
+  pairedV2Authoring?: AppThemePairedV2AuthoringCapability;
 }
 
 export interface AppThemeCompileResult {

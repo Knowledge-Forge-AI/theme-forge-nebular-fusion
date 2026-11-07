@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-studio-appearance-preferences-load"
+description = "Enables the studio_appearance_preferences_load command without any pre-configured scope."
+commands.allow = ["studio_appearance_preferences_load"]
+
+[[permission]]
+identifier = "deny-studio-appearance-preferences-load"
+description = "Denies the studio_appearance_preferences_load command without any pre-configured scope."
+commands.deny = ["studio_appearance_preferences_load"]

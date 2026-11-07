@@ -1,0 +1,23 @@
+{
+  "schema": "nebular-solar-sail-build-pin-v1",
+  "target": "aarch64-apple-darwin",
+  "package": {
+    "name": "@knowledge-forge-ai/theme-forge-solar-sail",
+    "version": "0.3.0",
+    "packageJsonSha256": "7812613701f22cd993ef4c5cffa2a372611cc570ba70b766bf88a64f4627ba88"
+  },
+  "binding": {
+    "size": 10170,
+    "sha256": "7248a3f6ac5de65b9e33b28717177b01d5adcb2d673ddaee19e0bec722d4e3fc",
+    "inventoryDigest": "0fdb11c3e4ebd0136e6c260f1a5c7c5626824aaff25ebccdf46545a0417f4676",
+    "memberCount": 63
+  },
+  "provenance": {
+    "publishedArchive": {
+      "name": "@knowledge-forge-ai/theme-forge-solar-sail",
+      "version": "0.3.0",
+      "size": 110836,
+      "sha256": "65070c3478a1d55476c1b09fbe1dcadfdf7c3d3aa54a154bc9ac9e299411f415"
+    }
+  }
+}

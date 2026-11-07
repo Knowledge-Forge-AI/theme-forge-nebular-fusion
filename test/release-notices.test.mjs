@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   collectFrontendSupplementalNotices,
+  collectPairedV2SourceNotices,
   generateReleaseNotices,
   renderThirdPartyNoticesJson,
 } from "../tools/release-notices.mjs";
@@ -77,6 +78,23 @@ function setup() {
   mkdirSync(fixture, { recursive: true });
   for (const name of ["package.json", "package-lock.json"]) cpSync(join(SOURCE_FIXTURE, name), join(fixture, name));
   return { root, studio, supplemental, fixture, manifestPath: join(supplemental, "manifest.json") };
+}
+
+function setupPairedV2(fixture) {
+  cpSync(join(SOURCE_STUDIO, "legal/paired-v2-sources"), join(fixture.studio, "legal/paired-v2-sources"), { recursive: true });
+  const adapter = join(fixture.studio, "src-tauri/solar-sail-adapter");
+  mkdirSync(adapter, { recursive: true });
+  for (const path of ["common-appearance-recipe.mjs", "common-sttn-template.json"]) {
+    cpSync(join(SOURCE_STUDIO, "src-tauri/solar-sail-adapter", path), join(adapter, path));
+  }
+  return { ...fixture, adapter, paired: join(fixture.studio, "legal/paired-v2-sources") };
+}
+
+function mockCargo() {
+  return {
+    resolve: { root: "root", nodes: [{ id: "root", deps: [] }] },
+    packages: [{ id: "root", name: "theme-forge-nebular-fusion", version: "0.7.0" }],
+  };
 }
 
 function manifestAt(path) {
@@ -176,5 +194,85 @@ describe("authenticated distributed frontend legal supplements", () => {
     const fixture = setup();
     mutate(fixture);
     expect(() => collectFrontendSupplementalNotices(fixture.studio, fixture.root, fixture.supplemental, manifestAt(fixture.manifestPath))).toThrow(expected);
+  });
+});
+
+describe("first-party paired-v2 source legal attribution", () => {
+  it("authenticates the closed source projection and preserves both notice groups", async () => {
+    const fixture = setupPairedV2(setup());
+    const collected = collectPairedV2SourceNotices(fixture.studio);
+    expect(collected.status).toBe("firstparty-unreleased-source-projection");
+    expect(collected.groups.map(({ id }) => id)).toEqual(["cttn", "sttn"]);
+    expect(collected.groups.find(({ id }) => id === "cttn").projectedFiles).toEqual([
+      {
+        sourcePath: "tools/appearance-catalog-lib.mjs",
+        outputPath: "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs",
+        sha256: "4dbd64a4bf1739e3f809c9d5a27e0334d2344140e55e4af25272b5ef9c752f06",
+        present: true,
+      },
+      {
+        sourcePath: "tools/source/sttn/v0.4/terminal-nova.theme.json",
+        outputPath: "src-tauri/solar-sail-adapter/common-sttn-template.json",
+        sha256: "436e278cdbe3a37e06048504df3897d65230318f17b7ebd754060c2866703324",
+        present: true,
+      },
+    ]);
+    const output = join(fixture.root, "release-notices");
+    const result = await generateReleaseNotices({
+      studioRoot: fixture.studio,
+      repoRoot: fixture.root,
+      outDir: output,
+      cargoMetadata: mockCargo(),
+      cargoLockContent: "",
+      allowExternalOutDir: true,
+    });
+    const rendered = JSON.parse(readFileSync(join(output, "THIRD-PARTY-NOTICES.json"), "utf8"));
+    const renderedMarkdown = readFileSync(join(output, "THIRD-PARTY-NOTICES.md"), "utf8");
+    expect(JSON.stringify(rendered)).not.toMatch(/\/Users\/|\/home\/|\/private\//);
+    expect(rendered.pairedV2Sources.status).toBe("firstparty-unreleased-source-projection");
+    expect(rendered.pairedV2Sources.groups.map(({ id }) => id)).toEqual(["cttn", "sttn"]);
+    expect(renderedMarkdown).toContain("## First-Party Paired v2 Source Attribution");
+    expect(renderedMarkdown).toContain("https://github.com/Knowledge-Forge-AI/shadcn-theme-terminal-nova");
+    expect(renderedMarkdown).not.toMatch(/\/Users\/|\/home\/|\/private\//);
+    expect(result.writtenFiles).toEqual(expect.arrayContaining([
+      "first-party/paired-v2-sources/manifest.json",
+      "first-party/paired-v2-sources/cttn/LICENSE",
+      "first-party/paired-v2-sources/cttn/NOTICE",
+      "first-party/paired-v2-sources/cttn/COMMERCIAL-LICENSE.md",
+      "first-party/paired-v2-sources/sttn/LICENSE",
+      "first-party/paired-v2-sources/sttn/NOTICE",
+      "first-party/paired-v2-sources/sttn/COMMERCIAL-LICENSE.md",
+    ]));
+    for (const group of ["cttn", "sttn"]) {
+      for (const name of ["LICENSE", "NOTICE", "COMMERCIAL-LICENSE.md"]) {
+        expect(readFileSync(join(output, `first-party/paired-v2-sources/${group}/${name}`))).toEqual(
+          readFileSync(join(fixture.paired, group, name)),
+        );
+      }
+    }
+  });
+
+  it.each([
+    ["missing notice", (fixture) => rmSync(join(fixture.paired, "cttn/NOTICE")), /Paired-v2 cttn\/NOTICE/],
+    ["tampered notice", (fixture) => writeFileSync(join(fixture.paired, "sttn/LICENSE"), "tampered\n"), /Paired-v2 cttn|sttn\/LICENSE/],
+    ["tampered projected source", (fixture) => writeFileSync(join(fixture.adapter, "common-sttn-template.json"), "{}\n"), /projected source digest mismatch/],
+    ["tampered source path binding", (fixture) => { const manifest = manifestAt(join(fixture.paired, "manifest.json")); manifest.groups[0].projectedFiles[0].sourcePath = "tools/other.mjs"; writeManifest(join(fixture.paired, "manifest.json"), manifest); }, /projected source path is not the admitted path/],
+  ])("refuses %s", (_label, mutate, expected) => {
+    const fixture = setupPairedV2(setup());
+    mutate(fixture);
+    expect(() => collectPairedV2SourceNotices(fixture.studio)).toThrow(expected);
+  });
+
+  it("fails closed when a projected source member appears without the manifest", () => {
+    const fixture = setup();
+    const adapter = join(fixture.studio, "src-tauri/solar-sail-adapter");
+    mkdirSync(adapter, { recursive: true });
+    cpSync(join(SOURCE_STUDIO, "src-tauri/solar-sail-adapter/common-appearance-recipe.mjs"), join(adapter, "common-appearance-recipe.mjs"));
+    expect(() => collectPairedV2SourceNotices(fixture.studio)).toThrow(/manifest is absent/);
+  });
+
+  it("keeps legacy fixtures without the source projection unchanged", () => {
+    const fixture = setup();
+    expect(collectPairedV2SourceNotices(fixture.studio)).toBeNull();
   });
 });

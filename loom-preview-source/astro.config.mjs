@@ -121,15 +121,38 @@ export default defineConfig({
   }
 
   var lastAppliedRevision = 0;
+  function safeRevision(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+  }
+  function boundedCorrelationString(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 128;
+  }
+  function readOptionalCorrelation(data) {
+    var hasCorrelation = data.frameGeneration !== undefined || data.scenarioId !== undefined || data.applicationId !== undefined;
+    if (!hasCorrelation) return {};
+    if (!Number.isSafeInteger(data.frameGeneration) || data.frameGeneration < 0
+      || !boundedCorrelationString(data.scenarioId) || !boundedCorrelationString(data.applicationId)) return null;
+    return { frameGeneration: data.frameGeneration, scenarioId: data.scenarioId, applicationId: data.applicationId };
+  }
+  function sendApplicationFailure(event, revision, correlation) {
+    try {
+      if (event.source && typeof event.source.postMessage === "function") {
+        event.source.postMessage(Object.assign({ type: "tfsl:theme-failed", revision: revision, code: "application-failed" }, correlation), event.origin || "*");
+      }
+    } catch (e) {}
+  }
   window.addEventListener("message", function(event) {
     if (!event.data || typeof event.data !== "object") return;
     if (event.source !== window.parent) return;
     if (event.data.type === "tfsl:apply-theme") {
       var css = event.data.css;
       var mode = event.data.mode;
-      var revision = typeof event.data.revision === "number" ? event.data.revision : 0;
+      var revision = event.data.revision;
+      var correlation = readOptionalCorrelation(event.data);
+      if (!safeRevision(revision) || correlation === null) return;
       if (revision < lastAppliedRevision) return;
-      lastAppliedRevision = revision;
+
+      var applied = false;
       if (typeof mode === "string") {
         document.documentElement.dataset.theme = mode;
       }
@@ -142,9 +165,6 @@ export default defineConfig({
             }
             window.__tfslThemeSheet.replaceSync(css);
           }
-        } catch (e) {}
-
-        try {
           var existing = document.getElementById("tfsl-injected-theme");
           if (!existing) {
             existing = document.createElement("style");
@@ -152,8 +172,16 @@ export default defineConfig({
             document.head.appendChild(existing);
           }
           existing.textContent = css;
-        } catch (e) {}
+          applied = existing.textContent === css;
+        } catch (e) {
+          applied = false;
+        }
       }
+      if (!applied) {
+        sendApplicationFailure(event, revision, correlation);
+        return;
+      }
+      lastAppliedRevision = revision;
       try {
         if (event.source && typeof event.source.postMessage === "function") {
           var computedAccent = "";
@@ -163,7 +191,7 @@ export default defineConfig({
             var renderedLink = document.querySelector(".sl-markdown-content p a");
             if (renderedLink) renderedLinkColor = window.getComputedStyle(renderedLink).color;
           } catch (e) {}
-          event.source.postMessage({ type: "tfsl:theme-applied", revision: revision, computedAccent: computedAccent, renderedLinkColor: renderedLinkColor }, event.origin || "*");
+          event.source.postMessage(Object.assign({ type: "tfsl:theme-applied", revision: revision, computedAccent: computedAccent, renderedLinkColor: renderedLinkColor }, correlation), event.origin || "*");
         }
       } catch (e) {}
     }${nativeProbeScript}

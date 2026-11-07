@@ -1,0 +1,11 @@
+{
+  "schema": "theme-forge.application-artwork-projection.v1",
+  "asset": "appearance-artwork/anime/cartographer-v2.png",
+  "role": "optional-decorative-anime-application-chrome",
+  "bytes": 1905125,
+  "sha256": "e1df9e0c364ee97748fe2511f8a015f4ef8618d303e96ed868d4efd93800eada",
+  "dimensions": [1024, 1536],
+  "sourceSchema": "theme-forge.generated-artwork-candidate.v1",
+  "status": "source-preparation-only",
+  "rights": "Project artwork-policy decision required before distribution; software terms do not grant artwork rights."
+}

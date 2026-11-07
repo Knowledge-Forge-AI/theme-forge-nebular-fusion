@@ -362,24 +362,28 @@ body {
   const jsContent = `// Constructable stylesheet injection (CSP compliant, no unsafe-inline required)
 (function() {
   var lastAppliedRevision = -1;
+  function safeRevision(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+  }
+  function boundedIdentity(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 256;
+  }
   window.addEventListener("message", function(event) {
     if (event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (event.data.type === "tfss:apply-theme") {
       var css = event.data.css;
       var mode = event.data.mode;
-      var revision = typeof event.data.revision === "number" ? event.data.revision : 0;
-      var contextId = typeof event.data.contextId === "string" ? event.data.contextId : "";
+      var revision = event.data.revision;
+      var contextId = event.data.contextId;
+      var frameId = event.data.frameId;
+      if (!safeRevision(revision) || (mode !== "light" && mode !== "dark") || !boundedIdentity(contextId) || !boundedIdentity(frameId)) return;
       if (revision < lastAppliedRevision) return;
-      lastAppliedRevision = revision;
 
-      if (typeof mode === "string") {
-        document.documentElement.classList.toggle("dark", mode === "dark");
-        document.documentElement.dataset.theme = mode;
-      }
+      document.documentElement.classList.toggle("dark", mode === "dark");
+      document.documentElement.dataset.theme = mode;
 
       var applied = false;
-      var applyError = "";
       if (typeof css === "string") {
         try {
           if (typeof CSSStyleSheet !== "undefined" && "adoptedStyleSheets" in document) {
@@ -389,12 +393,8 @@ body {
             }
             window.__tfssThemeSheet.replaceSync(css);
             applied = true;
-          } else {
-            applyError = "CSSStyleSheet.adoptedStyleSheets unsupported";
           }
-        } catch (e) {
-          applyError = e ? (e.message || String(e)) : "Failed to replace style sheet";
-        }
+        } catch (e) { applied = false; }
       }
 
       if (applied && event.source && typeof event.source.postMessage === "function") {
@@ -405,11 +405,23 @@ body {
             computedPrimary = window.getComputedStyle(document.documentElement).getPropertyValue("--primary").trim();
             computedBg = window.getComputedStyle(document.body).backgroundColor;
           } catch (e) {}
+          if (!boundedIdentity(computedPrimary)) {
+            event.source.postMessage({
+              type: "tfss:theme-apply-failed",
+              revision: revision,
+              mode: mode,
+              contextId: contextId,
+              frameId: frameId,
+            }, "*");
+            return;
+          }
+          lastAppliedRevision = revision;
           event.source.postMessage({
             type: "tfss:theme-applied",
             revision: revision,
             mode: mode,
             contextId: contextId,
+            frameId: frameId,
             computedPrimary: computedPrimary,
             computedBackground: computedBg,
           }, "*");
@@ -421,7 +433,7 @@ body {
             revision: revision,
             mode: mode,
             contextId: contextId,
-            error: applyError || "CSS was not applied",
+            frameId: frameId,
           }, "*");
         } catch (e) {}
       }
@@ -617,7 +629,8 @@ This unprivileged sandboxed preview fixture integrates component adaptations pat
 - Zero native IPC (\`connect-src 'none'\`).
 - Zero external network authority.
 - Constructable stylesheet adoption (no \`'unsafe-inline'\` styles required).
-- Bilateral origin, context-ID and revision-bound postMessage protocol.
+- Bilateral source, opaque frame-token, generation-bound context-ID and revision-bound postMessage protocol.
+- Generic application failures do not forward child exception text.
 `;
 
   await writeFile(targetCss, cssContent, "utf8");
