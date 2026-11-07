@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SCENARIOS } from "./native-rc-smoke.mjs";
+import { verifyCommandInventory } from "./ci/verify-nebular-bundle.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const proposalNative = path.resolve(here, "..");
@@ -150,3 +151,57 @@ test("paired order is present in the actual driver scenario array and keeps rese
   assert.match(driver, /if \(calls !== 0\) throw new Error\(`reopenConfirmCalls=/);
 });
 
+const inventorySource = source("command_inventory.rs");
+const capability = JSON.parse(fs.readFileSync(path.join(proposalNative, "src-tauri", "capabilities", "main.json"), "utf8"));
+const capabilityPermissions = capability.permissions.map((value) => value.replace(/^allow-/u, "").replace(/-/gu, "_"));
+
+test("bundle inventory parser accepts the maintained 54-command inventory and ordered ACL", () => {
+  const expected = verifyCommandInventory(inventorySource, capabilityPermissions);
+  assert.equal(expected.length, 54);
+  assert.deepEqual(expected, capabilityPermissions);
+  assert.ok(expected.includes("studio_app_theme_paired_packet_create_v2"));
+  assert.ok(expected.includes("studio_app_theme_paired_compile_v2"));
+  assert.ok(expected.includes("studio_app_theme_save_profile_v2"));
+});
+
+test("bundle inventory parser rejects malformed declarations and ACL drift", () => {
+  assert.throws(
+    () => verifyCommandInventory(inventorySource + "trailing", capabilityPermissions),
+    /Owning command inventory syntax is unsupported/
+  );
+  const junkEntry = inventorySource.replace(
+    '    "studio_brand_read",',
+    '    "studio_brand_read-junk",'
+  );
+  assert.throws(
+    () => verifyCommandInventory(junkEntry, capabilityPermissions),
+    /Owning command inventory syntax is unsupported/
+  );
+  const duplicateEntry = inventorySource.replace(
+    '    "studio_brand_read",',
+    '    "studio_brand_read",\n    "studio_brand_read",'
+  );
+  assert.throws(
+    () => verifyCommandInventory(duplicateEntry, capabilityPermissions),
+    /Bundle capability ACL differs from the owning command inventory/
+  );
+  const missingEntry = inventorySource.replace('    "studio_brand_read",\n', "");
+  assert.throws(
+    () => verifyCommandInventory(missingEntry, capabilityPermissions),
+    /Bundle capability ACL differs from the owning command inventory/
+  );
+  assert.throws(
+    () => verifyCommandInventory(inventorySource, capabilityPermissions.slice(0, -1)),
+    /Bundle capability ACL differs from the owning command inventory/
+  );
+  assert.throws(
+    () => verifyCommandInventory(inventorySource, [...capabilityPermissions, "studio_unexpected"]),
+    /Bundle capability ACL differs from the owning command inventory/
+  );
+  const reordered = [...capabilityPermissions];
+  [reordered[0], reordered[1]] = [reordered[1], reordered[0]];
+  assert.throws(
+    () => verifyCommandInventory(inventorySource, reordered),
+    /Bundle capability ACL differs from the owning command inventory/
+  );
+});

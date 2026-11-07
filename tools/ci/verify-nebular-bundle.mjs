@@ -359,6 +359,15 @@ export async function verifyScenePayloads({ preparedPath, packedPath, nodePath, 
   };
 }
 
+/** @param {string} inventorySource @param {string[]} permissions @returns {string[]} */
+export function verifyCommandInventory(inventorySource, permissions) {
+  const declaration = /^pub\(crate\) static STUDIO_COMMAND_NAMES: &\[&str\] = &\[([\s\S]*?)\];\s*$/u.exec(inventorySource);
+  if (!declaration || !/^(?:\s*"studio_[a-z0-9_]+",)*\s*$/u.test(declaration[1] ?? "")) throw new Error("Owning command inventory syntax is unsupported.");
+  const expectedAcl = [...(declaration[1] ?? "").matchAll(/"(studio_[a-z0-9_]+)"/gu)].map((match) => match[1]);
+  if (expectedAcl.length === 0 || new Set(expectedAcl).size !== expectedAcl.length || JSON.stringify(permissions) !== JSON.stringify(expectedAcl)) throw new Error("Bundle capability ACL differs from the owning command inventory.");
+  return expectedAcl;
+}
+
 /** @param {{appPath: string, sourceNodePath: string, sourcePayloadPath: string, sourceLoomPayloadPath?: string, sourceSolarSailPayloadPath?: string, sourceScenePayloadPath?: string, sourceCandidate?: string, solarSailRoute?: SolarSailRoute, solarSailBuildPinPath?: string, sceneSourceCandidate?: string, sceneRoute?: SceneRoute, sceneBuildPinPath?: string, outputPath: string, launch?: boolean}} options */
 export async function verifyNebularBundle(options) {
   const appPath = resolve(options.appPath), contents = join(appPath, "Contents"), macos = join(contents, "MacOS"), resources = join(contents, "Resources");
@@ -497,10 +506,7 @@ export async function verifyNebularBundle(options) {
   if (!Array.isArray(capability.permissions) || !capability.permissions.every((/** @type {unknown} */ value) => typeof value === "string")) throw new Error("Bundle capability permissions are invalid.");
   const permissions = capability.permissions.map((/** @type {string} */ value) => value.replace(/^allow-/u, "").replace(/-/gu, "_"));
   const inventorySource = await readFile(join(STUDIO_ROOT, "src-tauri/src/command_inventory.rs"), "utf8");
-  const declaration = /^pub\(crate\) static STUDIO_COMMAND_NAMES: &\[&str\] = &\[([\s\S]*?)\];\s*$/u.exec(inventorySource);
-  if (!declaration || !/^(?:\s*"studio_[a-z_]+",)*\s*$/u.test(declaration[1] ?? "")) throw new Error("Owning command inventory syntax is unsupported.");
-  const expectedAcl = [...(declaration[1] ?? "").matchAll(/"(studio_[a-z_]+)"/gu)].map((match) => match[1]);
-  if (expectedAcl.length === 0 || new Set(expectedAcl).size !== expectedAcl.length || JSON.stringify(permissions) !== JSON.stringify(expectedAcl)) throw new Error("Bundle capability ACL differs from the owning command inventory.");
+  const expectedAcl = verifyCommandInventory(inventorySource, permissions);
   const bundleVersion = execFileSync("plutil", ["-extract", "CFBundleShortVersionString", "raw", join(contents, "Info.plist")], {encoding:"utf8"}).trim();
   if (bundleVersion !== tauri.version) throw new Error("Bundle version differs from the owning application version.");
   const signingInspection = spawnSync("codesign", ["-dv", "--verbose=4", appPath], { encoding: "utf8" });
