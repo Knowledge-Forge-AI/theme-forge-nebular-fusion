@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "tf-paired-profile-v2",
+  "name": "terminal-nova",
+  "version": "0.1.0",
+  "description": "Terminal Nova paired cyan/amber console identity",
+  "color": {
+    "light": {
+      "canvas": "#fff8f0",
+      "canvasText": "#262a33",
+      "surface": "#fffdfa",
+      "surfaceText": "#262a33",
+      "elevatedSurface": "#fffdfa",
+      "elevatedSurfaceText": "#262a33",
+      "primaryAction": "#126475",
+      "primaryActionText": "#fff8f0",
+      "secondaryAction": "#eee4da",
+      "secondaryActionText": "#262a33",
+      "mutedSurface": "#eee4da",
+      "mutedText": "#625a55",
+      "highlight": "#9c3e0b",
+      "highlightText": "#fff8f0",
+      "danger": "#b42318",
+      "dangerText": "#ffffff",
+      "border": "#9d9187",
+      "fieldBorder": "#9d9187",
+      "focus": "#126475",
+      "selection": "#d8f2f3",
+      "selectionText": "#104552"
+    },
+    "dark": {
+      "canvas": "#111318",
+      "canvasText": "#eee9e3",
+      "surface": "#191c23",
+      "surfaceText": "#eee9e3",
+      "elevatedSurface": "#191c23",
+      "elevatedSurfaceText": "#eee9e3",
+      "primaryAction": "#69d3e4",
+      "primaryActionText": "#111318",
+      "secondaryAction": "#262a33",
+      "secondaryActionText": "#eee9e3",
+      "mutedSurface": "#262a33",
+      "mutedText": "#b9b4ad",
+      "highlight": "#ff8a3d",
+      "highlightText": "#111318",
+      "danger": "#f87171",
+      "dangerText": "#111318",
+      "border": "#50535d",
+      "fieldBorder": "#50535d",
+      "focus": "#69d3e4",
+      "selection": "#14333c",
+      "selectionText": "#c0f0f5"
+    }
+  },
+  "typography": {
+    "body": {
+      "family": "system-ui"
+    },
+    "heading": {
+      "family": "monospace"
+    },
+    "ui": {
+      "family": "monospace"
+    },
+    "code": {
+      "family": "monospace"
+    }
+  },
+  "radius": {
+    "control": "4px",
+    "surface": "4px"
+  },
+  "targetOverrides": {
+    "version": "v2",
+    "solarSail": {
+      "palette": {
+        "light": {
+          "chart1": "#126475",
+          "chart2": "#9c3e0b",
+          "chart3": "#146534",
+          "chart4": "#625a55",
+          "chart5": "#524598",
+          "sidebar": "#f5ede5",
+          "sidebarForeground": "#262a33",
+          "sidebarPrimary": "#126475",
+          "sidebarPrimaryForeground": "#fff8f0",
+          "sidebarAccent": "#ffeadc",
+          "sidebarAccentForeground": "#612909",
+          "sidebarBorder": "#9d9187",
+          "sidebarRing": "#126475"
+        },
+        "dark": {
+          "chart1": "#69d3e4",
+          "chart2": "#ff8a3d",
+          "chart3": "#7dd3a0",
+          "chart4": "#b9b4ad",
+          "chart5": "#c6b2f3",
+          "sidebar": "#15181e",
+          "sidebarForeground": "#eee9e3",
+          "sidebarPrimary": "#69d3e4",
+          "sidebarPrimaryForeground": "#111318",
+          "sidebarAccent": "#3a231c",
+          "sidebarAccentForeground": "#ffcfad",
+          "sidebarBorder": "#50535d",
+          "sidebarRing": "#69d3e4"
+        }
+      }
+    },
+    "loom": {
+      "tokenSetKey": "forge-console",
+      "primaryFamily": "cyan",
+      "secondaryFamily": "orange",
+      "defaultAccent": "orange"
+    }
+  }
+}

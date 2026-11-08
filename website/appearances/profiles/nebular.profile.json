@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "tf-paired-profile-v2",
+  "name": "nebular",
+  "version": "0.1.0",
+  "description": "Nebular purple and gold paired appearance candidate for product review",
+  "color": {
+    "light": {
+      "canvas": "#f8f6ff",
+      "canvasText": "#252039",
+      "surface": "#fffdfa",
+      "surfaceText": "#252039",
+      "elevatedSurface": "#ffffff",
+      "elevatedSurfaceText": "#252039",
+      "primaryAction": "#6741b8",
+      "primaryActionText": "#ffffff",
+      "secondaryAction": "#e9e2f5",
+      "secondaryActionText": "#32264a",
+      "mutedSurface": "#ede8f6",
+      "mutedText": "#675d78",
+      "highlight": "#805b16",
+      "highlightText": "#ffffff",
+      "danger": "#b42335",
+      "dangerText": "#ffffff",
+      "border": "#b5a9cc",
+      "fieldBorder": "#8f7fa9",
+      "focus": "#6741b8",
+      "selection": "#e5d5ff",
+      "selectionText": "#3a2362"
+    },
+    "dark": {
+      "canvas": "#151020",
+      "canvasText": "#eee8f8",
+      "surface": "#21182f",
+      "surfaceText": "#eee8f8",
+      "elevatedSurface": "#2a203b",
+      "elevatedSurfaceText": "#eee8f8",
+      "primaryAction": "#c9adff",
+      "primaryActionText": "#241437",
+      "secondaryAction": "#302541",
+      "secondaryActionText": "#eee8f8",
+      "mutedSurface": "#302541",
+      "mutedText": "#c1b4d2",
+      "highlight": "#e9c274",
+      "highlightText": "#2c1b08",
+      "danger": "#ff9b9b",
+      "dangerText": "#311119",
+      "border": "#66567e",
+      "fieldBorder": "#8b77a8",
+      "focus": "#c9adff",
+      "selection": "#493464",
+      "selectionText": "#f4eaff"
+    }
+  },
+  "typography": {
+    "body": {
+      "family": "system-ui"
+    },
+    "heading": {
+      "family": "system-ui"
+    },
+    "ui": {
+      "family": "system-ui"
+    },
+    "code": {
+      "family": "monospace"
+    }
+  },
+  "radius": {
+    "control": "8px",
+    "surface": "12px"
+  },
+  "targetOverrides": {
+    "version": "v2",
+    "solarSail": {
+      "palette": {
+        "light": {
+          "chart1": "#6741b8",
+          "chart2": "#805b16",
+          "chart3": "#157359",
+          "chart4": "#79688e",
+          "chart5": "#b4474e",
+          "sidebar": "#f0ebf9",
+          "sidebarForeground": "#252039",
+          "sidebarPrimary": "#6741b8",
+          "sidebarPrimaryForeground": "#ffffff",
+          "sidebarAccent": "#ebd9ad",
+          "sidebarAccentForeground": "#593e0b",
+          "sidebarBorder": "#b5a9cc",
+          "sidebarRing": "#6741b8"
+        },
+        "dark": {
+          "chart1": "#c9adff",
+          "chart2": "#e9c274",
+          "chart3": "#82d5b7",
+          "chart4": "#c1b4d2",
+          "chart5": "#ff9b9b",
+          "sidebar": "#1b1427",
+          "sidebarForeground": "#eee8f8",
+          "sidebarPrimary": "#c9adff",
+          "sidebarPrimaryForeground": "#241437",
+          "sidebarAccent": "#49391d",
+          "sidebarAccentForeground": "#f5dfb0",
+          "sidebarBorder": "#66567e",
+          "sidebarRing": "#c9adff"
+        }
+      }
+    },
+    "loom": {
+      "tokenSetKey": "nebular",
+      "primaryFamily": "purple",
+      "secondaryFamily": "gold",
+      "defaultAccent": "purple"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="favicon-title favicon-desc">
+  <title id="favicon-title">Nebular Fusion</title>
+  <desc id="favicon-desc">Theme Forge star glyph and NF wordmark.</desc>
+  <rect width="64" height="64" rx="14" fill="#151022" />
+  <path d="M10 47h44" stroke="#b29af4" stroke-width="2" opacity=".72" />
+  <text x="32" y="34" text-anchor="middle" fill="#f3d493" font-family="Georgia, 'Times New Roman', serif" font-size="24" font-weight="700">✦</text>
+  <text x="32" y="53" text-anchor="middle" fill="#f7f0df" font-family="ui-sans-serif, system-ui, sans-serif" font-size="9" font-weight="700" letter-spacing="2">NF</text>
+</svg>

@@ -1,0 +1,184 @@
+{
+  "schemaVersion": "tf-paired-profile-v2",
+  "name": "graphic-designer",
+  "version": "0.1.0",
+  "description": "Neutral document-inspection pair with accurate work surfaces, restrained chrome, and separation between document colors and interface colors",
+  "color": {
+    "light": {
+      "canvas": "#f2f3f5",
+      "canvasText": "#20252b",
+      "surface": "#ffffff",
+      "surfaceText": "#20252b",
+      "elevatedSurface": "#ffffff",
+      "elevatedSurfaceText": "#20252b",
+      "primaryAction": "#3f5f7a",
+      "primaryActionText": "#ffffff",
+      "secondaryAction": "#e3e6ea",
+      "secondaryActionText": "#20252b",
+      "mutedSurface": "#eceef1",
+      "mutedText": "#59616b",
+      "highlight": "#7a5c28",
+      "highlightText": "#ffffff",
+      "danger": "#b42318",
+      "dangerText": "#ffffff",
+      "border": "#b9c0c8",
+      "fieldBorder": "#8e99a5",
+      "focus": "#3f5f7a",
+      "hover": "#dde4ea",
+      "active": "#ccd6df",
+      "selection": "#d8e8f2",
+      "selectionText": "#24394a"
+    },
+    "dark": {
+      "canvas": "#1b1d20",
+      "canvasText": "#eceff1",
+      "surface": "#25282c",
+      "surfaceText": "#eceff1",
+      "elevatedSurface": "#30343a",
+      "elevatedSurfaceText": "#f6f7f8",
+      "primaryAction": "#9bc7e6",
+      "primaryActionText": "#16232e",
+      "secondaryAction": "#353a40",
+      "secondaryActionText": "#eceff1",
+      "mutedSurface": "#30343a",
+      "mutedText": "#b8c0c8",
+      "highlight": "#d8b576",
+      "highlightText": "#2a2114",
+      "danger": "#ff8c8c",
+      "dangerText": "#310e0e",
+      "border": "#4d555e",
+      "fieldBorder": "#69737e",
+      "focus": "#9bc7e6",
+      "hover": "#424a53",
+      "active": "#515b66",
+      "selection": "#2e4c60",
+      "selectionText": "#e2f3ff"
+    }
+  },
+  "typography": {
+    "body": {
+      "family": "system-ui",
+      "size": "16px",
+      "lineHeight": 1.6
+    },
+    "heading": {
+      "family": "serif",
+      "size": "1.4rem",
+      "lineHeight": 1.25
+    },
+    "ui": {
+      "family": "system-ui",
+      "size": "0.9rem",
+      "lineHeight": 1.4
+    },
+    "code": {
+      "family": "monospace",
+      "size": "0.9rem",
+      "lineHeight": 1.55
+    }
+  },
+  "radius": {
+    "control": "4px",
+    "surface": "6px",
+    "overlay": "8px"
+  },
+  "spacing": {
+    "base": "8px",
+    "density": "spacious"
+  },
+  "elevation": {
+    "emphasis": "flat",
+    "borderWidth": "1px",
+    "borderStyle": "solid"
+  },
+  "focus": {
+    "color": {
+      "light": "#3f5f7a",
+      "dark": "#9bc7e6"
+    },
+    "width": "2px",
+    "offset": "3px"
+  },
+  "code": {
+    "syntax": {
+      "light": {
+        "comment": "#65707b",
+        "string": "#2e6b74",
+        "number": "#8a5a00",
+        "constant": "#5d4e8a",
+        "keyword": "#7c3f61",
+        "function": "#305e85",
+        "type": "#3a6b53",
+        "variable": "#20252b",
+        "punctuation": "#55606b",
+        "tag": "#914141",
+        "attribute": "#6a5a22"
+      },
+      "dark": {
+        "comment": "#aeb8c0",
+        "string": "#8fd3d5",
+        "number": "#e4c07a",
+        "constant": "#c8b8ee",
+        "keyword": "#e5a9c3",
+        "function": "#a7cbea",
+        "type": "#9ddbb5",
+        "variable": "#eceff1",
+        "punctuation": "#b3bdc6",
+        "tag": "#f1a6a6",
+        "attribute": "#e8d49b"
+      }
+    },
+    "frame": "editor",
+    "copy": "minimal"
+  },
+  "reading": {
+    "measure": "50rem"
+  },
+  "navigation": {
+    "prominence": "quiet",
+    "density": "spacious"
+  },
+  "targetOverrides": {
+    "version": "v2",
+    "solarSail": {
+      "palette": {
+        "light": {
+          "chart1": "#3f5f7a",
+          "chart2": "#7a5c28",
+          "chart3": "#3a6b53",
+          "chart4": "#59616b",
+          "chart5": "#5d4e8a",
+          "sidebar": "#eceef1",
+          "sidebarForeground": "#20252b",
+          "sidebarPrimary": "#3f5f7a",
+          "sidebarPrimaryForeground": "#ffffff",
+          "sidebarAccent": "#dde4ea",
+          "sidebarAccentForeground": "#24394a",
+          "sidebarBorder": "#b9c0c8",
+          "sidebarRing": "#3f5f7a"
+        },
+        "dark": {
+          "chart1": "#9bc7e6",
+          "chart2": "#d8b576",
+          "chart3": "#9ddbb5",
+          "chart4": "#b8c0c8",
+          "chart5": "#c8b8ee",
+          "sidebar": "#202328",
+          "sidebarForeground": "#eceff1",
+          "sidebarPrimary": "#9bc7e6",
+          "sidebarPrimaryForeground": "#16232e",
+          "sidebarAccent": "#424a53",
+          "sidebarAccentForeground": "#e2f3ff",
+          "sidebarBorder": "#4d555e",
+          "sidebarRing": "#9bc7e6"
+        }
+      }
+    },
+    "loom": {
+      "tokenSetKey": "forge-console",
+      "primaryFamily": "cyan",
+      "secondaryFamily": "orange",
+      "defaultAccent": "cyan"
+    }
+  }
+}

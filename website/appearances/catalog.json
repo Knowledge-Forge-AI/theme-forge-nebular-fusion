@@ -1,0 +1,36 @@
+{
+  "schema": "theme-forge.site-appearance-index.v1",
+  "sourceCatalogSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+  "families": [
+    {
+      "id": "terminal-nova",
+      "label": "Terminal Nova",
+      "review": "Development preview"
+    },
+    {
+      "id": "nebular",
+      "label": "Nebular",
+      "review": "Development preview"
+    },
+    {
+      "id": "developer",
+      "label": "Developer",
+      "review": "Development preview"
+    },
+    {
+      "id": "graphic-designer",
+      "label": "Graphic Designer",
+      "review": "Development preview"
+    },
+    {
+      "id": "anime",
+      "label": "Anime",
+      "review": "Development preview"
+    },
+    {
+      "id": "gamer",
+      "label": "Gamer",
+      "review": "Development preview"
+    }
+  ]
+}

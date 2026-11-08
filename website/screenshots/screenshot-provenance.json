@@ -1,0 +1,23 @@
+{
+  "schema": "theme-forge.site-browser-proof-provenance.v1",
+  "asset": {
+    "path": "screenshots/gamer-dark-shell.jpg",
+    "bytes": 64908,
+    "sha256": "37bf3f2c2ceb26cd0baeb493f2444707d8cf1e4fc87c2c261359f18f2e6f43ed",
+    "mediaType": "image/jpeg",
+    "width": 1265,
+    "height": 712
+  },
+  "source": {
+    "fixtureSchema": "theme-forge.actual-app-browser-fixture.v1",
+    "fixtureManifestSha256": "487b69d20ce0f7c800f88c7b4fd0b24ce6bac298099156b00e8fc3bcb469e020",
+    "actualApp": "Theme Forge App preview",
+    "externalSlotAsset": "/appearance-owned-slot.css",
+    "captureBoundary": "Browser-rendered source fixture with an explicit mock boundary banner; native ports remain mocked."
+  },
+  "presentation": {
+    "label": "Browser-rendered next-cycle preview",
+    "caption": "Actual App/external CSSOM fixture capture; browser-only, native ports mocked, development preview, not the published Nebular Fusion 0.7.1 interface.",
+    "qualificationBoundary": "This source projection does not establish native, hosted, deployment, rights, release, or final visual acceptance."
+  }
+}
