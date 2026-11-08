@@ -1,0 +1,51 @@
+{
+  "schema": "theme-forge.site-appearance-projection.v1",
+  "inventoryDigest": "d9f94a7f5ce0730098d840e409ca588caefc2e05c45fbec02d749d25f418fb51",
+  "sourceCatalogSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+  "members": [
+    {
+      "output": "catalog.json",
+      "producerMember": "catalog.json#site-index-v1",
+      "bytes": 794,
+      "sha256": "617979da9045eca6864e974b797a387a0bf324eeb12904360152639b3a68f6a5"
+    },
+    {
+      "output": "terminal-nova.css",
+      "producerMember": "terminal-nova/application.css",
+      "bytes": 4227,
+      "sha256": "e4f8327022953c78996bf799385feae0ad7caff850eeaf9b198a7a6c5eb5ff7f"
+    },
+    {
+      "output": "nebular.css",
+      "producerMember": "nebular/application.css",
+      "bytes": 4228,
+      "sha256": "616ffa3e0001cf146d552fcb5cca18b177febabf9ca406151578db53fd3d84cb"
+    },
+    {
+      "output": "developer.css",
+      "producerMember": "developer/application.css",
+      "bytes": 4250,
+      "sha256": "6952118016681724443152d5a27c3bbe231e1ad804c33076432dd62b7379f88d"
+    },
+    {
+      "output": "graphic-designer.css",
+      "producerMember": "graphic-designer/application.css",
+      "bytes": 4246,
+      "sha256": "5bd1f7de357259b389bfcdeab25044b5b8044ef4ad9a54388a762b4227001d12"
+    },
+    {
+      "output": "anime.css",
+      "producerMember": "anime/application.css",
+      "bytes": 4247,
+      "sha256": "3e6bcb1635261da524f66eace082d7878c548db832f8e7816ac2c26fd55a6cbb"
+    },
+    {
+      "output": "gamer.css",
+      "producerMember": "gamer/application.css",
+      "bytes": 4250,
+      "sha256": "c89d11e1c225127c4288a7a6b3f2a5f096d3cb8ee96225e47fea7897643919d6"
+    }
+  ],
+  "inputCatalogKind": "generated-appearance-catalog-candidate; raw source identity is bound inside that catalog",
+  "qualification": "Generated development candidates; no native, final visual or release acceptance"
+}

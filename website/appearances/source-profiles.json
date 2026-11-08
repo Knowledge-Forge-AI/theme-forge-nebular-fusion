@@ -1,0 +1,54 @@
+{
+  "schema": "theme-forge.appearance-source-manifest.v1",
+  "inventoryDigest": "d9f94a7f5ce0730098d840e409ca588caefc2e05c45fbec02d749d25f418fb51",
+  "members": [
+    {
+      "path": "appearances/profiles/anime.profile.json",
+      "size": 4731,
+      "sha256": "af5a25686b15935226937209e2e4d020a3a5db229bd087dcc82637128ec6edda",
+      "schema": "tf-paired-profile-v2",
+      "name": "anime",
+      "version": "0.1.0"
+    },
+    {
+      "path": "appearances/profiles/developer.profile.json",
+      "size": 4734,
+      "sha256": "7b873b36bf4f0d141e70b72a11dbc6dac7f8250de0b2479b84fe014d629597a8",
+      "schema": "tf-paired-profile-v2",
+      "name": "developer",
+      "version": "0.1.0"
+    },
+    {
+      "path": "appearances/profiles/gamer.profile.json",
+      "size": 4724,
+      "sha256": "f5880e7d49d6f8f3550c7ad2f338b0fc6036c7b70f053534da1947428cd4a303",
+      "schema": "tf-paired-profile-v2",
+      "name": "gamer",
+      "version": "0.1.0"
+    },
+    {
+      "path": "appearances/profiles/graphic-designer.profile.json",
+      "size": 4742,
+      "sha256": "a8e06be7ebda519fcc2181d7daa8f4dbb86ca473cc3245ea710af27ba0c56232",
+      "schema": "tf-paired-profile-v2",
+      "name": "graphic-designer",
+      "version": "0.1.0"
+    },
+    {
+      "path": "appearances/profiles/nebular.profile.json",
+      "size": 3134,
+      "sha256": "fbe0dd3e46ca587f15e3ff221cf24b23e16321b7cca32c28bd1a7d31c20f9c88",
+      "schema": "tf-paired-profile-v2",
+      "name": "nebular",
+      "version": "0.1.0"
+    },
+    {
+      "path": "appearances/profiles/terminal-nova.profile.json",
+      "size": 3123,
+      "sha256": "fe3c5e92ef17171bb018356e72d31e825291d81bb225a167885adea5dcf330bf",
+      "schema": "tf-paired-profile-v2",
+      "name": "terminal-nova",
+      "version": "0.1.0"
+    }
+  ]
+}

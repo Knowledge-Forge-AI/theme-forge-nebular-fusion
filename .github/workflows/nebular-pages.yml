@@ -1,0 +1,193 @@
+name: Nebular Fusion Pages
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/nebular-pages.yml"
+      - "website/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/nebular-pages.yml"
+      - "website/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nebular-pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-and-build:
+    name: Validate and build Nebular static site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22.23.4
+
+      - name: Check the dependency-free static builder
+        run: node --check website/tools/build-static-site.mjs
+
+      - name: Run the focused static builder tests
+        run: node --test website/test/static-build.test.mjs
+
+      - name: Build a fresh static artifact
+        run: node website/tools/build-static-site.mjs --output website/dist
+
+      - name: Check every deterministic public manifest member
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { lstatSync, readdirSync, readFileSync } from "node:fs";
+          import path from "node:path";
+
+          const root = path.resolve("website/dist");
+          const expectedPaths = [
+            "404.html",
+            "brand/BRAND-ASSETS.md",
+            "brand/README-BRAND.md",
+            "favicon.svg",
+            "index.html",
+            "robots.txt",
+            "social-preview.png",
+            "social-preview.svg",
+            "src/main.mjs",
+            "src/state.mjs",
+            "styles.css",
+            "screenshots/gamer-dark-shell.jpg",
+            "screenshots/screenshot-provenance.json",
+            "appearances/anime.css",
+            "appearances/catalog.json",
+            "appearances/developer.css",
+            "appearances/gamer.css",
+            "appearances/graphic-designer.css",
+            "appearances/nebular.css",
+            "appearances/provenance.json",
+            "appearances/profiles/anime.profile.json",
+            "appearances/profiles/developer.profile.json",
+            "appearances/profiles/gamer.profile.json",
+            "appearances/profiles/graphic-designer.profile.json",
+            "appearances/profiles/nebular.profile.json",
+            "appearances/profiles/terminal-nova.profile.json",
+            "appearances/specimen.html",
+            "appearances/source-profiles.json",
+            "appearances/terminal-nova.css",
+          ].sort();
+          const exactKeys = (value, expected) => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+            const actual = Object.keys(value).sort();
+            const wanted = [...expected].sort();
+            return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+          };
+          const manifestBytes = readFileSync(path.join(root, "manifest.json"));
+          const serialized = manifestBytes.toString("utf8");
+          const manifest = JSON.parse(serialized);
+          if (!exactKeys(manifest, ["artifactCount", "manifest", "members", "schema"])) {
+            throw new Error("Nebular manifest top-level keys are not the admitted set");
+          }
+          if (manifest.schema !== "theme-forge.static-site-build.v1" || manifest.manifest !== "manifest.json" || manifest.artifactCount !== 29 || !Array.isArray(manifest.members) || manifest.members.length !== 29) {
+            throw new Error("Nebular static manifest header mismatch");
+          }
+          const seen = new Set();
+          for (const member of manifest.members) {
+            if (!exactKeys(member, ["bytes", "mode", "path", "sha256"])) {
+              throw new Error("Nebular manifest member keys are not the admitted set");
+            }
+            if (typeof member.bytes !== "number" || !Number.isInteger(member.bytes) || member.bytes < 0 || typeof member.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(member.sha256)) {
+              throw new Error(`Nebular manifest member numeric/digest metadata is invalid: ${member.path}`);
+            }
+            if (typeof member.path !== "string" || member.path.startsWith("/") || member.path.includes("\\") || member.path.split("/").some((part) => !part || part === "." || part === "..") || seen.has(member.path)) {
+              throw new Error("Nebular manifest contains an unsafe or duplicate path");
+            }
+            if (member.mode !== "0644") throw new Error(`Nebular manifest member mode is not 0644: ${member.path}`);
+            seen.add(member.path);
+            const filePath = path.join(root, ...member.path.split("/"));
+            const stat = lstatSync(filePath);
+            if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Nebular member is not a regular file: ${member.path}`);
+            const bytes = readFileSync(filePath);
+            const sha256 = createHash("sha256").update(bytes).digest("hex");
+            const mode = (stat.mode & 0o777).toString(8).padStart(4, "0");
+            if (member.bytes !== bytes.length || member.sha256 !== sha256 || mode !== "0644") {
+              throw new Error(`Nebular manifest member metadata mismatch: ${member.path}`);
+            }
+          }
+          const rebuilt = {
+            schema: manifest.schema,
+            manifest: manifest.manifest,
+            artifactCount: manifest.artifactCount,
+            members: [...manifest.members]
+              .sort((left, right) => left.path.localeCompare(right.path))
+              .map(({ path: memberPath, bytes, sha256, mode }) => ({ path: memberPath, bytes, sha256, mode })),
+          };
+          if (serialized !== `${JSON.stringify(rebuilt, null, 2)}\n`) {
+            throw new Error("Nebular manifest is not the deterministic admitted serialization");
+          }
+          const actual = [];
+          function walk(relative = "") {
+            const directory = relative ? path.join(root, ...relative.split("/")) : root;
+            for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+              const child = relative ? `${relative}/${entry.name}` : entry.name;
+              if (entry.isSymbolicLink()) throw new Error(`Nebular artifact contains a symlink: ${child}`);
+              if (entry.isDirectory()) walk(child);
+              else if (entry.isFile() && child !== "manifest.json") actual.push(child);
+              else if (!entry.isFile()) throw new Error(`Nebular artifact contains a non-file: ${child}`);
+            }
+          }
+          walk();
+          actual.sort();
+          if (actual.length !== expectedPaths.length || actual.some((value, index) => value !== expectedPaths[index])) {
+            throw new Error("Nebular artifact file set does not equal the complete public manifest contract");
+          }
+          if (seen.size !== expectedPaths.length || [...seen].sort().some((value, index) => value !== expectedPaths[index])) {
+            throw new Error("Nebular manifest member set does not equal the complete public contract");
+          }
+          const privateMarkers = [
+            "/home/",
+            "/Users/",
+            "agent-scratch",
+            "timestamp",
+            "username",
+            "credential",
+            "private-url",
+            process.env.GITHUB_WORKSPACE,
+            process.env.RUNNER_TEMP,
+          ].filter(Boolean);
+          if (privateMarkers.some((marker) => serialized.includes(marker))) {
+            throw new Error("Nebular static manifest contains a local/private marker");
+          }
+          NODE
+          test -f website/dist/index.html
+          test -f website/dist/404.html
+
+      - name: Upload Nebular Pages artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: website/dist
+
+  deploy:
+    name: Deploy Nebular Pages
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-and-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the reviewed artifact
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
