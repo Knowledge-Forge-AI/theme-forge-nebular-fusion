@@ -158,6 +158,7 @@ const EXPECTED_BROWSER_PROOF = Object.freeze({
 const MANIFEST_NAME = "manifest.json";
 const MANIFEST_SCHEMA = "theme-forge.static-site-build.v1";
 const STAGE_PREFIX = ".tfnf-static-stage-";
+const PAYLOAD_PREFIX = ".tfnf-static-payload-";
 const STAGE_MARKER = ".tfnf-static-stage-owner";
 const FILE_MODE = 0o644;
 const DIRECTORY_MODE = 0o755;
@@ -421,29 +422,53 @@ function createManifest(sourceBytes) {
   };
 }
 
-function writeStage(stageDirectory, sourceBytes) {
+function writeStage(payloadDirectory, sourceBytes) {
   for (const relativePath of PUBLIC_MEMBERS) {
-    const destination = path.join(stageDirectory, ...relativePath.split("/"));
+    const destination = path.join(payloadDirectory, ...relativePath.split("/"));
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: DIRECTORY_MODE });
     writeOwnedFile(destination, sourceBytes.get(relativePath));
   }
   const manifest = `${JSON.stringify(createManifest(sourceBytes), null, 2)}\n`;
-  writeOwnedFile(path.join(stageDirectory, MANIFEST_NAME), Buffer.from(manifest, "utf8"));
+  writeOwnedFile(path.join(payloadDirectory, MANIFEST_NAME), Buffer.from(manifest, "utf8"));
 }
 
 function createStage(outputParent) {
   let stageDirectory;
+  let stageStat;
+  let payloadDirectory;
+  let payloadStat;
   try {
     stageDirectory = fs.mkdtempSync(path.join(outputParent, STAGE_PREFIX));
+    stageStat = fs.lstatSync(stageDirectory);
+    if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) fail("staging-failed");
     fs.chmodSync(stageDirectory, DIRECTORY_MODE);
+    const chmodStageStat = fs.lstatSync(stageDirectory);
+    if (!sameDirectoryLocation(stageStat, chmodStageStat)) fail("staging-failed");
+    stageStat = chmodStageStat;
     const marker = path.join(stageDirectory, STAGE_MARKER);
     const token = crypto.randomUUID();
     fs.writeFileSync(marker, `${token}\n`, { flag: "wx", mode: 0o600 });
     fs.chmodSync(marker, 0o600);
-    return { stageDirectory, token };
+    payloadDirectory = fs.mkdtempSync(path.join(outputParent, PAYLOAD_PREFIX));
+    payloadStat = fs.lstatSync(payloadDirectory);
+    if (payloadStat.isSymbolicLink() || !payloadStat.isDirectory()) fail("staging-failed");
+    fs.chmodSync(payloadDirectory, DIRECTORY_MODE);
+    const chmodPayloadStat = fs.lstatSync(payloadDirectory);
+    if (!sameDirectoryLocation(payloadStat, chmodPayloadStat)) fail("staging-failed");
+    payloadStat = chmodPayloadStat;
+    return { stageDirectory, payloadDirectory, payloadStat, token };
   } catch {
-    if (stageDirectory) {
-      try { fs.rmSync(stageDirectory, { recursive: true, force: true }); } catch { /* best effort for owned stage */ }
+    if (payloadDirectory && payloadStat && payloadStat.isDirectory() && !payloadStat.isSymbolicLink()) {
+      try {
+        const currentPayloadStat = fs.lstatSync(payloadDirectory);
+        if (sameDirectoryIdentity(payloadStat, currentPayloadStat)) fs.rmSync(payloadDirectory, { recursive: true, force: true });
+      } catch { /* preserve an unverified or foreign payload */ }
+    }
+    if (stageDirectory && stageStat && stageStat.isDirectory() && !stageStat.isSymbolicLink()) {
+      try {
+        const currentStageStat = fs.lstatSync(stageDirectory);
+        if (sameDirectoryIdentity(stageStat, currentStageStat)) fs.rmSync(stageDirectory, { recursive: true, force: true });
+      } catch { /* preserve an unverified or foreign owner stage */ }
     }
     fail("staging-failed");
   }
@@ -463,6 +488,10 @@ function sameDirectoryIdentity(left, right) {
   return left.dev === right.dev
     && left.ino === right.ino
     && left.mode === right.mode;
+}
+
+function sameDirectoryLocation(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 function closeDescriptor(fd) {
@@ -497,8 +526,7 @@ function openVerifiedStageMarker(stageDirectory, token) {
   if (expectedBytes.length === 0 || expectedBytes.length > STAGE_MARKER_MAX_BYTES) fail("staging-failed");
 
   let fd;
-  let bindingFd;
-  let retainDescriptors = false;
+  let retainDescriptor = false;
   try {
     fd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
     const opened = fs.fstatSync(fd);
@@ -512,23 +540,19 @@ function openVerifiedStageMarker(stageDirectory, token) {
       fail("staging-failed");
     }
 
-    // Re-open the leaf by path and require the same inode before the pathname mutation.
-    // Node does not expose unlinkat(2); the final unlink is therefore still a bounded
-    // best-effort operation, but a replacement observed before it is refused.
-    bindingFd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
-    const binding = fs.fstatSync(bindingFd);
-    if (binding.isSymbolicLink() || !binding.isFile() || !sameRegularFileIdentity(binding, afterRead)) fail("staging-failed");
+    // Re-stat the pathname without following it and require the same inode before
+    // the owning stage directory is removed. Node does not expose unlinkat(2), so
+    // a replacement after this check remains a bounded namespace-race limitation.
+    const pathStat = fs.lstatSync(marker);
+    if (pathStat.isSymbolicLink() || !pathStat.isFile() || !sameRegularFileIdentity(pathStat, afterRead)) fail("staging-failed");
 
-    retainDescriptors = true;
-    return { fd, bindingFd, marker, stat: afterRead };
+    retainDescriptor = true;
+    return { fd, marker, stat: afterRead };
   } catch (error) {
     if (error instanceof StaticBuildError) throw error;
     fail("staging-failed");
   } finally {
-    if (!retainDescriptors) {
-      closeDescriptor(bindingFd);
-      closeDescriptor(fd);
-    }
+    if (!retainDescriptor) closeDescriptor(fd);
   }
 }
 
@@ -537,53 +561,63 @@ function withVerifiedStageMarker(stageDirectory, token, callback) {
   try {
     return callback(descriptor);
   } finally {
-    closeDescriptor(descriptor.bindingFd);
     closeDescriptor(descriptor.fd);
   }
 }
 
-function assertStageMarkerAbsent(stageDirectory) {
-  if (!Number.isInteger(NOFOLLOW) || NOFOLLOW <= 0 || !Number.isInteger(NONBLOCK) || NONBLOCK <= 0) {
-    fail("source-platform-unsupported");
-  }
-  const marker = path.join(stageDirectory, STAGE_MARKER);
-  let fd;
+function assertOwnerStageContents(stageDirectory) {
+  const entries = fs.readdirSync(stageDirectory, { withFileTypes: true });
+  if (entries.length !== 1 || entries[0].name !== STAGE_MARKER || !entries[0].isFile()) fail("staging-failed");
+}
+
+function removeOwnedStage(stageDirectory, token) {
   try {
-    fd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
-    fail("staging-failed");
+    const stageStat = fs.lstatSync(stageDirectory);
+    if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) fail("staging-failed");
+    withVerifiedStageMarker(stageDirectory, token, () => {
+      const currentStageStat = fs.lstatSync(stageDirectory);
+      if (currentStageStat.isSymbolicLink() || !currentStageStat.isDirectory() || !sameDirectoryIdentity(stageStat, currentStageStat)) {
+        fail("staging-failed");
+      }
+      assertOwnerStageContents(stageDirectory);
+      fs.rmSync(stageDirectory, { recursive: true, force: true });
+    });
+    try {
+      fs.lstatSync(stageDirectory);
+      fail("staging-failed");
+    } catch (error) {
+      if (error instanceof StaticBuildError) throw error;
+      if (error?.code !== "ENOENT") fail("staging-failed");
+    }
   } catch (error) {
     if (error instanceof StaticBuildError) throw error;
-    if (error?.code !== "ENOENT") fail("staging-failed");
-  } finally {
-    closeDescriptor(fd);
+    fail("staging-failed");
   }
 }
 
-function cleanupStage(stageDirectory, token, markerRemoved = false) {
+function cleanupStage(stageDirectory, token) {
   if (!stageDirectory) return;
   try {
-    const stageStat = fs.lstatSync(stageDirectory);
-    if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) return;
-    if (!markerRemoved) {
-      removeStageMarker(stageDirectory, token);
-    }
-    const currentStageStat = fs.lstatSync(stageDirectory);
-    if (currentStageStat.isSymbolicLink() || !currentStageStat.isDirectory() || !sameDirectoryIdentity(stageStat, currentStageStat)) return;
-    assertStageMarkerAbsent(stageDirectory);
-    fs.rmSync(stageDirectory, { recursive: true, force: true });
+    removeOwnedStage(stageDirectory, token);
   } catch {
     // Never turn cleanup into a recursive delete of an unverified path.
   }
 }
 
-function removeStageMarker(stageDirectory, token) {
+function cleanupPayload(payloadDirectory, payloadStat) {
+  if (!payloadDirectory || !payloadStat) return;
   try {
-    withVerifiedStageMarker(stageDirectory, token, ({ marker }) => {
-      fs.unlinkSync(marker);
-      assertStageMarkerAbsent(stageDirectory);
-    });
-  } catch (error) {
-    if (error instanceof StaticBuildError) throw error;
+    const currentPayloadStat = fs.lstatSync(payloadDirectory);
+    if (currentPayloadStat.isSymbolicLink() || !currentPayloadStat.isDirectory() || !sameDirectoryIdentity(payloadStat, currentPayloadStat)) return;
+    fs.rmSync(payloadDirectory, { recursive: true, force: true });
+  } catch {
+    // Never turn cleanup into a recursive delete of an unverified path.
+  }
+}
+
+function assertPayloadDirectoryOwned(payloadDirectory, payloadStat) {
+  const currentPayloadStat = fs.lstatSync(payloadDirectory);
+  if (currentPayloadStat.isSymbolicLink() || !currentPayloadStat.isDirectory() || !sameDirectoryIdentity(payloadStat, currentPayloadStat)) {
     fail("staging-failed");
   }
 }
@@ -608,18 +642,18 @@ export function buildStaticSite({ sourceRoot = SITE_ROOT, outputDir } = {}) {
   assertOutputAbsent(absoluteOutputDirectory);
 
   const outputParent = path.dirname(absoluteOutputDirectory);
-  const { stageDirectory, token } = createStage(outputParent);
-  let markerRemoved = false;
-  let stagePublished = false;
+  const { stageDirectory, payloadDirectory, payloadStat, token } = createStage(outputParent);
+  let ownerStageRemoved = false;
+  let payloadPublished = false;
   try {
-    writeStage(stageDirectory, sourceBytes);
+    writeStage(payloadDirectory, sourceBytes);
     if (outputDirectoryIsPresent(absoluteOutputDirectory)) fail("output-exists");
-    removeStageMarker(stageDirectory, token);
-    markerRemoved = true;
-    fs.chmodSync(stageDirectory, DIRECTORY_MODE);
+    removeOwnedStage(stageDirectory, token);
+    ownerStageRemoved = true;
+    assertPayloadDirectoryOwned(payloadDirectory, payloadStat);
     try {
-      fs.renameSync(stageDirectory, absoluteOutputDirectory);
-      stagePublished = true;
+      fs.renameSync(payloadDirectory, absoluteOutputDirectory);
+      payloadPublished = true;
     } catch (error) {
       if (error?.code === "EEXIST" || error?.code === "ENOTEMPTY" || error?.code === "EISDIR") fail("output-exists");
       fail("publish-failed");
@@ -634,7 +668,8 @@ export function buildStaticSite({ sourceRoot = SITE_ROOT, outputDir } = {}) {
     if (error instanceof StaticBuildError) throw error;
     fail("build-failed");
   } finally {
-    if (!stagePublished) cleanupStage(stageDirectory, token, markerRemoved);
+    if (!ownerStageRemoved) cleanupStage(stageDirectory, token);
+    if (!payloadPublished) cleanupPayload(payloadDirectory, payloadStat);
   }
 }
 

@@ -52,6 +52,10 @@ function stageNames(root) {
   return fs.readdirSync(root).filter((name) => name.startsWith(".tfnf-static-stage-"));
 }
 
+function payloadNames(root) {
+  return fs.readdirSync(root).filter((name) => name.startsWith(".tfnf-static-payload-"));
+}
+
 function loadInstallContract(versionOverrides = {}, sourceText = fs.readFileSync(path.join(siteRoot, "src", "main.mjs"), "utf8")) {
   const start = sourceText.indexOf("const CANDIDATE_VERSION");
   const end = sourceText.indexOf("const WORKFLOW_TITLES");
@@ -254,6 +258,7 @@ test("rejects appearance hash drift and cleans only its owned stage", () => {
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "appearance-hash-mismatch");
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     removeFixture(fixture);
   }
@@ -267,6 +272,7 @@ test("rejects a source profile hash drift through the public source manifest", (
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "appearance-source-hash-mismatch");
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     removeFixture(fixture);
   }
@@ -282,6 +288,7 @@ test("rejects source profile manifest tampering before staging", () => {
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "appearance-source-hash-mismatch");
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     removeFixture(fixture);
   }
@@ -304,6 +311,7 @@ test("rejects coordinated source profile and manifest tampering before staging",
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "appearance-source-hash-mismatch");
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     removeFixture(fixture);
   }
@@ -318,6 +326,7 @@ test("rejects removal of the screenshot release boundary before staging", () => 
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "browser-proof-presentation-mismatch");
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     removeFixture(fixture);
   }
@@ -381,6 +390,7 @@ test("preserves the foreign target when the owned stage marker is replaced by a 
     assert.equal(fs.readFileSync(foreignTarget, "utf8"), "foreign-marker-content\n");
     assert.equal(stageNames(fixture.root).length, 1);
     assert.equal(fs.lstatSync(path.join(fixture.root, stageNames(fixture.root)[0], markerName)).isSymbolicLink(), true);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     fs.chmodSync = originalChmodSync;
     removeFixture(fixture);
@@ -406,6 +416,7 @@ test("preserves a non-regular replacement of the owned stage marker", () => {
     assert.equal(replaced, true);
     assert.equal(stageNames(fixture.root).length, 1);
     assert.equal(fs.lstatSync(path.join(fixture.root, stageNames(fixture.root)[0], markerName)).isDirectory(), true);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     fs.chmodSync = originalChmodSync;
     removeFixture(fixture);
@@ -416,32 +427,104 @@ test("refuses a marker leaf replaced after descriptor open and keeps both owned 
   const fixture = createFixture();
   const markerName = ".tfnf-static-stage-owner";
   const originalOpenSync = fs.openSync;
+  const originalFstatSync = fs.fstatSync;
   let replaced = false;
   let markerOpenCount = 0;
+  let markerFd;
   fs.openSync = function patchedOpenSync(filePath, ...args) {
     const fd = originalOpenSync.call(fs, filePath, ...args);
     const flags = args[0];
     const isMarkerVerifierOpen = typeof flags === "number"
       && (flags & fs.constants.O_NOFOLLOW) !== 0
       && path.basename(filePath) === markerName;
-    if (isMarkerVerifierOpen) markerOpenCount += 1;
-    if (isMarkerVerifierOpen && !replaced) {
-      replaced = true;
-      fs.renameSync(filePath, `${filePath}.original`);
-      fs.writeFileSync(filePath, "foreign-marker-content\n");
+    if (isMarkerVerifierOpen) {
+      markerOpenCount += 1;
+      markerFd = fd;
     }
     return fd;
+  };
+  fs.fstatSync = function patchedFstatSync(fd, ...args) {
+    const result = originalFstatSync.call(fs, fd, ...args);
+    if (fd === markerFd && !replaced) {
+      replaced = true;
+      const markerPath = path.join(fixture.root, stageNames(fixture.root)[0], markerName);
+      fs.renameSync(markerPath, `${markerPath}.original`);
+      fs.writeFileSync(markerPath, "foreign-marker-content\n");
+    }
+    return result;
   };
   try {
     assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
     assert.equal(replaced, true);
-    assert.ok(markerOpenCount >= 2);
+    assert.equal(markerOpenCount, 2);
     assert.equal(stageNames(fixture.root).length, 1);
     const stageDirectory = path.join(fixture.root, stageNames(fixture.root)[0]);
     assert.equal(fs.readFileSync(path.join(stageDirectory, markerName), "utf8"), "foreign-marker-content\n");
     assert.equal(fs.readFileSync(path.join(stageDirectory, `${markerName}.original`), "utf8").endsWith("\n"), true);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     fs.openSync = originalOpenSync;
+    fs.fstatSync = originalFstatSync;
+    removeFixture(fixture);
+  }
+});
+
+test("refuses a foreign payload directory swap before publication", () => {
+  const fixture = createFixture();
+  const originalChmodSync = fs.chmodSync;
+  let swapped = false;
+  let foreignPayloadDirectory;
+  let originalPayloadDirectory;
+  fs.chmodSync = function patchedChmodSync(filePath, ...args) {
+    const result = originalChmodSync.call(fs, filePath, ...args);
+    const payloadDirectory = path.dirname(filePath);
+    if (!swapped && path.basename(filePath) === "manifest.json" && path.basename(payloadDirectory).startsWith(".tfnf-static-payload-")) {
+      swapped = true;
+      foreignPayloadDirectory = payloadDirectory;
+      originalPayloadDirectory = `${payloadDirectory}.original`;
+      fs.renameSync(payloadDirectory, originalPayloadDirectory);
+      fs.mkdirSync(payloadDirectory);
+      fs.writeFileSync(path.join(payloadDirectory, "foreign-sentinel.txt"), "foreign-payload\n");
+    }
+    return result;
+  };
+  try {
+    assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
+    assert.equal(swapped, true);
+    assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
+    assert.equal(fs.readFileSync(path.join(foreignPayloadDirectory, "foreign-sentinel.txt"), "utf8"), "foreign-payload\n");
+    assert.equal(fs.existsSync(originalPayloadDirectory), true);
+    assert.equal(stageNames(fixture.root).length, 0);
+  } finally {
+    fs.chmodSync = originalChmodSync;
+    removeFixture(fixture);
+  }
+});
+
+test("preserves an owner stage with an unexpected extra entry", () => {
+  const fixture = createFixture();
+  const markerName = ".tfnf-static-stage-owner";
+  const originalChmodSync = fs.chmodSync;
+  let injected = false;
+  let stageDirectory;
+  fs.chmodSync = function patchedChmodSync(filePath, ...args) {
+    const result = originalChmodSync.call(fs, filePath, ...args);
+    if (!injected && path.basename(filePath) === markerName) {
+      injected = true;
+      stageDirectory = path.dirname(filePath);
+      fs.writeFileSync(path.join(stageDirectory, "unexpected-owner-entry"), "foreign-owner\n");
+    }
+    return result;
+  };
+  try {
+    assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
+    assert.equal(injected, true);
+    assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
+    assert.equal(fs.readFileSync(path.join(stageDirectory, "unexpected-owner-entry"), "utf8"), "foreign-owner\n");
+    assert.equal(stageNames(fixture.root).length, 1);
+    assert.deepEqual(payloadNames(fixture.root), []);
+  } finally {
+    fs.chmodSync = originalChmodSync;
     removeFixture(fixture);
   }
 });
@@ -465,6 +548,7 @@ test("cleans an owned stage after a post-create write failure with an intact mar
     assert.equal(failed, true);
     assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
     assert.deepEqual(stageNames(fixture.root), []);
+    assert.deepEqual(payloadNames(fixture.root), []);
   } finally {
     fs.chmodSync = originalChmodSync;
     removeFixture(fixture);
