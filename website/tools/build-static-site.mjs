@@ -162,6 +162,8 @@ const STAGE_MARKER = ".tfnf-static-stage-owner";
 const FILE_MODE = 0o644;
 const DIRECTORY_MODE = 0o755;
 const NOFOLLOW = fs.constants.O_NOFOLLOW;
+const NONBLOCK = fs.constants.O_NONBLOCK;
+const STAGE_MARKER_MAX_BYTES = 128;
 
 export class StaticBuildError extends Error {
   constructor(code) {
@@ -447,24 +449,127 @@ function createStage(outputParent) {
   }
 }
 
+function sameRegularFileIdentity(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode
+    && left.nlink === right.nlink
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
+}
+
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.mode === right.mode;
+}
+
+function closeDescriptor(fd) {
+  if (fd === undefined) return;
+  try {
+    fs.closeSync(fd);
+  } catch {
+    // The descriptor is already unusable; the caller is still failing closed.
+  }
+}
+
+function readBoundedMarker(fd, expectedBytes) {
+  const bytes = Buffer.alloc(expectedBytes.length);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const count = fs.readSync(fd, bytes, offset, bytes.length - offset, offset);
+    if (count === 0) fail("staging-failed");
+    offset += count;
+  }
+  if (fs.readSync(fd, Buffer.alloc(1), 0, 1, offset) !== 0) fail("staging-failed");
+  return bytes;
+}
+
+function openVerifiedStageMarker(stageDirectory, token) {
+  if (typeof token !== "string") fail("staging-failed");
+  if (!Number.isInteger(NOFOLLOW) || NOFOLLOW <= 0 || !Number.isInteger(NONBLOCK) || NONBLOCK <= 0) {
+    fail("source-platform-unsupported");
+  }
+
+  const marker = path.join(stageDirectory, STAGE_MARKER);
+  const expectedBytes = Buffer.from(`${token}\n`, "utf8");
+  if (expectedBytes.length === 0 || expectedBytes.length > STAGE_MARKER_MAX_BYTES) fail("staging-failed");
+
+  let fd;
+  let bindingFd;
+  let retainDescriptors = false;
+  try {
+    fd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    const opened = fs.fstatSync(fd);
+    if (opened.isSymbolicLink() || !opened.isFile() || opened.size !== expectedBytes.length || opened.size > STAGE_MARKER_MAX_BYTES) {
+      fail("staging-failed");
+    }
+
+    const bytes = readBoundedMarker(fd, expectedBytes);
+    const afterRead = fs.fstatSync(fd);
+    if (!sameRegularFileIdentity(opened, afterRead) || !afterRead.isFile() || afterRead.size !== expectedBytes.length || !bytes.equals(expectedBytes)) {
+      fail("staging-failed");
+    }
+
+    // Re-open the leaf by path and require the same inode before the pathname mutation.
+    // Node does not expose unlinkat(2); the final unlink is therefore still a bounded
+    // best-effort operation, but a replacement observed before it is refused.
+    bindingFd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    const binding = fs.fstatSync(bindingFd);
+    if (binding.isSymbolicLink() || !binding.isFile() || !sameRegularFileIdentity(binding, afterRead)) fail("staging-failed");
+
+    retainDescriptors = true;
+    return { fd, bindingFd, marker, stat: afterRead };
+  } catch (error) {
+    if (error instanceof StaticBuildError) throw error;
+    fail("staging-failed");
+  } finally {
+    if (!retainDescriptors) {
+      closeDescriptor(bindingFd);
+      closeDescriptor(fd);
+    }
+  }
+}
+
+function withVerifiedStageMarker(stageDirectory, token, callback) {
+  const descriptor = openVerifiedStageMarker(stageDirectory, token);
+  try {
+    return callback(descriptor);
+  } finally {
+    closeDescriptor(descriptor.bindingFd);
+    closeDescriptor(descriptor.fd);
+  }
+}
+
+function assertStageMarkerAbsent(stageDirectory) {
+  if (!Number.isInteger(NOFOLLOW) || NOFOLLOW <= 0 || !Number.isInteger(NONBLOCK) || NONBLOCK <= 0) {
+    fail("source-platform-unsupported");
+  }
+  const marker = path.join(stageDirectory, STAGE_MARKER);
+  let fd;
+  try {
+    fd = fs.openSync(marker, fs.constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+    fail("staging-failed");
+  } catch (error) {
+    if (error instanceof StaticBuildError) throw error;
+    if (error?.code !== "ENOENT") fail("staging-failed");
+  } finally {
+    closeDescriptor(fd);
+  }
+}
+
 function cleanupStage(stageDirectory, token, markerRemoved = false) {
   if (!stageDirectory) return;
   try {
     const stageStat = fs.lstatSync(stageDirectory);
     if (stageStat.isSymbolicLink() || !stageStat.isDirectory()) return;
-    const marker = path.join(stageDirectory, STAGE_MARKER);
     if (!markerRemoved) {
-      const markerStat = fs.lstatSync(marker);
-      if (markerStat.isSymbolicLink() || !markerStat.isFile()) return;
-      if (fs.readFileSync(marker, "utf8") !== `${token}\n`) return;
-    } else {
-      try {
-        fs.lstatSync(marker);
-        return;
-      } catch (error) {
-        if (error?.code !== "ENOENT") return;
-      }
+      removeStageMarker(stageDirectory, token);
     }
+    const currentStageStat = fs.lstatSync(stageDirectory);
+    if (currentStageStat.isSymbolicLink() || !currentStageStat.isDirectory() || !sameDirectoryIdentity(stageStat, currentStageStat)) return;
+    assertStageMarkerAbsent(stageDirectory);
     fs.rmSync(stageDirectory, { recursive: true, force: true });
   } catch {
     // Never turn cleanup into a recursive delete of an unverified path.
@@ -472,11 +577,11 @@ function cleanupStage(stageDirectory, token, markerRemoved = false) {
 }
 
 function removeStageMarker(stageDirectory, token) {
-  const marker = path.join(stageDirectory, STAGE_MARKER);
   try {
-    const stat = fs.lstatSync(marker);
-    if (stat.isSymbolicLink() || !stat.isFile() || fs.readFileSync(marker, "utf8") !== `${token}\n`) fail("staging-failed");
-    fs.unlinkSync(marker);
+    withVerifiedStageMarker(stageDirectory, token, ({ marker }) => {
+      fs.unlinkSync(marker);
+      assertStageMarkerAbsent(stageDirectory);
+    });
   } catch (error) {
     if (error instanceof StaticBuildError) throw error;
     fail("staging-failed");
