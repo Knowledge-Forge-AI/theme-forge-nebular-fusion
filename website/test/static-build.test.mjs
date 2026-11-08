@@ -359,6 +359,118 @@ test("rejects symlinked public inputs without following them", () => {
   }
 });
 
+test("preserves the foreign target when the owned stage marker is replaced by a symlink", () => {
+  const fixture = createFixture();
+  const markerName = ".tfnf-static-stage-owner";
+  const foreignTarget = path.join(fixture.root, "foreign-marker-target");
+  const originalChmodSync = fs.chmodSync;
+  let replaced = false;
+  fs.writeFileSync(foreignTarget, "foreign-marker-content\n");
+  fs.chmodSync = function patchedChmodSync(filePath, ...args) {
+    const result = originalChmodSync.call(fs, filePath, ...args);
+    if (!replaced && path.basename(filePath) === markerName) {
+      fs.unlinkSync(filePath);
+      fs.symlinkSync(foreignTarget, filePath);
+      replaced = true;
+    }
+    return result;
+  };
+  try {
+    assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
+    assert.equal(replaced, true);
+    assert.equal(fs.readFileSync(foreignTarget, "utf8"), "foreign-marker-content\n");
+    assert.equal(stageNames(fixture.root).length, 1);
+    assert.equal(fs.lstatSync(path.join(fixture.root, stageNames(fixture.root)[0], markerName)).isSymbolicLink(), true);
+  } finally {
+    fs.chmodSync = originalChmodSync;
+    removeFixture(fixture);
+  }
+});
+
+test("preserves a non-regular replacement of the owned stage marker", () => {
+  const fixture = createFixture();
+  const markerName = ".tfnf-static-stage-owner";
+  const originalChmodSync = fs.chmodSync;
+  let replaced = false;
+  fs.chmodSync = function patchedChmodSync(filePath, ...args) {
+    const result = originalChmodSync.call(fs, filePath, ...args);
+    if (!replaced && path.basename(filePath) === markerName) {
+      fs.unlinkSync(filePath);
+      fs.mkdirSync(filePath);
+      replaced = true;
+    }
+    return result;
+  };
+  try {
+    assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
+    assert.equal(replaced, true);
+    assert.equal(stageNames(fixture.root).length, 1);
+    assert.equal(fs.lstatSync(path.join(fixture.root, stageNames(fixture.root)[0], markerName)).isDirectory(), true);
+  } finally {
+    fs.chmodSync = originalChmodSync;
+    removeFixture(fixture);
+  }
+});
+
+test("refuses a marker leaf replaced after descriptor open and keeps both owned states", () => {
+  const fixture = createFixture();
+  const markerName = ".tfnf-static-stage-owner";
+  const originalOpenSync = fs.openSync;
+  let replaced = false;
+  let markerOpenCount = 0;
+  fs.openSync = function patchedOpenSync(filePath, ...args) {
+    const fd = originalOpenSync.call(fs, filePath, ...args);
+    const flags = args[0];
+    const isMarkerVerifierOpen = typeof flags === "number"
+      && (flags & fs.constants.O_NOFOLLOW) !== 0
+      && path.basename(filePath) === markerName;
+    if (isMarkerVerifierOpen) markerOpenCount += 1;
+    if (isMarkerVerifierOpen && !replaced) {
+      replaced = true;
+      fs.renameSync(filePath, `${filePath}.original`);
+      fs.writeFileSync(filePath, "foreign-marker-content\n");
+    }
+    return fd;
+  };
+  try {
+    assertBuildError(() => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }), "staging-failed");
+    assert.equal(replaced, true);
+    assert.ok(markerOpenCount >= 2);
+    assert.equal(stageNames(fixture.root).length, 1);
+    const stageDirectory = path.join(fixture.root, stageNames(fixture.root)[0]);
+    assert.equal(fs.readFileSync(path.join(stageDirectory, markerName), "utf8"), "foreign-marker-content\n");
+    assert.equal(fs.readFileSync(path.join(stageDirectory, `${markerName}.original`), "utf8").endsWith("\n"), true);
+  } finally {
+    fs.openSync = originalOpenSync;
+    removeFixture(fixture);
+  }
+});
+
+test("cleans an owned stage after a post-create write failure with an intact marker", () => {
+  const fixture = createFixture();
+  const originalChmodSync = fs.chmodSync;
+  let failed = false;
+  fs.chmodSync = function patchedChmodSync(filePath, ...args) {
+    if (!failed && path.basename(filePath) === "index.html") {
+      failed = true;
+      throw new Error("controlled post-create failure");
+    }
+    return originalChmodSync.call(fs, filePath, ...args);
+  };
+  try {
+    assert.throws(
+      () => buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: path.join(fixture.root, "output") }),
+      (error) => error instanceof StaticBuildError,
+    );
+    assert.equal(failed, true);
+    assert.equal(fs.existsSync(path.join(fixture.root, "output")), false);
+    assert.deepEqual(stageNames(fixture.root), []);
+  } finally {
+    fs.chmodSync = originalChmodSync;
+    removeFixture(fixture);
+  }
+});
+
 test("preserves a foreign existing output directory", () => {
   const fixture = createFixture();
   try {
