@@ -112,8 +112,8 @@ test("builds the fixed public allowlist with a deterministic manifest", () => {
     assert.match(browserProof.presentation.caption, /native ports mocked/);
     const indexHtml = fs.readFileSync(path.join(outputOne, "index.html"), "utf8");
     assert.match(indexHtml, /0\.8\.0 release/);
-    assert.match(indexHtml, /published through GitHub native archives, npm, and the Homebrew Apple Silicon formula/);
-    assert.match(indexHtml, /PyPI, Nix, APT, DNF, and pacman remain on 0\.7\.1/);
+    assert.match(indexHtml, /published through GitHub native archives, npm, the Homebrew Apple Silicon formula, PyPI, and Nix/);
+    assert.match(indexHtml, /APT, DNF, and pacman remain on 0\.7\.1/);
     assert.match(indexHtml, /automated native checks have passed on all three supported targets/);
     assert.match(indexHtml, /This exact-byte capture comes from the Theme Forge App\/external CSSOM source fixture\. It is a browser-rendered development preview with an explicit mock boundary, not a screenshot of a published Nebular Fusion release interface\./);
     assert.match(indexHtml, /not the published Nebular Fusion 0\.7\.1 interface\./);
@@ -134,9 +134,9 @@ test("keeps every generated install route on its exact published channel version
   assert.equal(contract.CANDIDATE_VERSION, "0.8.0");
   assert.deepStrictEqual({ ...contract.PUBLISHED_CHANNEL_VERSIONS }, {
     npm: "0.8.0",
-    pip: "0.7.1",
+    pip: "0.8.0",
     homebrew: "0.8.0",
-    nix: "0.7.1",
+    nix: "0.8.0",
     apt: "0.7.1",
     dnf: "0.7.1",
     pacman: "0.7.1",
@@ -144,8 +144,8 @@ test("keeps every generated install route on its exact published channel version
   });
   for (const version of Object.values(contract.PUBLISHED_CHANNEL_VERSIONS)) assert.match(version, /^\d+\.\d+\.\d+$/);
   const platforms = ["darwin-arm64", "linux-arm64", "linux-x64"];
-  const promotedChannels = new Set(["npm", "homebrew", "native"]);
-  const heldChannels = new Set(["pip", "nix", "apt", "dnf", "pacman"]);
+  const promotedChannels = new Set(["npm", "pip", "homebrew", "nix", "native"]);
+  const heldChannels = new Set(["apt", "dnf", "pacman"]);
   const versionedCommandChannels = new Set(["npm", "pip", "native"]);
   let caseCount = 0;
 
@@ -196,9 +196,9 @@ test("binds the static release chip and dynamic install renderer to each channel
   assert.match(renderSource, /version\.textContent = info\.publishedVersion/u);
 });
 
-test("default contract binds the three promoted public surfaces to 0.8.0 receipts", () => {
+test("default contract binds the five promoted public surfaces to 0.8.0 receipts", () => {
   const contract = loadInstallContract();
-  for (const channel of ["npm", "homebrew", "native"]) {
+  for (const channel of ["npm", "pip", "homebrew", "nix", "native"]) {
     assert.equal(contract.PUBLISHED_CHANNEL_VERSIONS[channel], "0.8.0");
     assert.equal(contract.INSTALL_CHANNELS[channel].publishedVersion, "0.8.0");
     assert.match(contract.INSTALL_CHANNELS[channel].publicationStatus, channel === "native" ? /0\.8\.0 native archive is published/ : /0\.8\.0 is published/);
@@ -209,7 +209,7 @@ test("default contract binds the three promoted public surfaces to 0.8.0 receipt
   assert.match(contract.INSTALL_CHANNELS.homebrew.description, /Cask remains withheld/);
   assert.match(contract.INSTALL_CHANNELS.native.source, /releases\/tag\/v0\.8\.0/);
   assert.match(contract.INSTALL_CHANNELS.native.command("darwin-arm64"), /releases\/download\/v0\.8\.0/);
-  for (const channel of ["pip", "nix", "apt", "dnf", "pacman"]) {
+  for (const channel of ["apt", "dnf", "pacman"]) {
     assert.equal(contract.PUBLISHED_CHANNEL_VERSIONS[channel], "0.7.1");
     assert.match(contract.INSTALL_CHANNELS[channel].publicationStatus, /0\.8\.0 publication hold/);
   }
@@ -218,11 +218,11 @@ test("default contract binds the three promoted public surfaces to 0.8.0 receipt
 test("default contract observes a source-only pip version change", () => {
   const sourcePath = path.join(siteRoot, "src", "main.mjs");
   const source = fs.readFileSync(sourcePath, "utf8");
-  const changed = source.replace('pip: "0.7.1"', 'pip: "0.8.0"');
+  const changed = source.replace('pip: "0.8.0"', 'pip: "0.8.1"');
   assert.notEqual(changed, source);
   const contract = loadInstallContract({}, changed);
-  assert.equal(contract.PUBLISHED_CHANNEL_VERSIONS.pip, "0.8.0");
-  assert.match(contract.INSTALL_CHANNELS.pip.command("darwin-arm64"), /theme-forge-nebular-fusion==0\.8\.0/);
+  assert.equal(contract.PUBLISHED_CHANNEL_VERSIONS.pip, "0.8.1");
+  assert.match(contract.INSTALL_CHANNELS.pip.command("darwin-arm64"), /theme-forge-nebular-fusion==0\.8\.1/);
   assert.equal(contract.PUBLISHED_CHANNEL_VERSIONS.npm, "0.8.0");
   assert.match(contract.INSTALL_CHANNELS.npm.command("darwin-arm64"), /0\.8\.0/);
 });
@@ -242,7 +242,7 @@ test("isolates later npm and native publication versions from held channels", ()
   assert.match(native.publicationStatus, /0\.8\.0 native archive is published for this channel/);
   assert.equal(contract.INSTALL_CHANNELS.homebrew.publishedVersion, "0.8.0");
   assert.match(contract.INSTALL_CHANNELS.homebrew.publicationStatus, /0\.8\.0 is published/);
-  for (const channel of ["pip", "nix", "apt", "dnf", "pacman"]) {
+  for (const channel of ["apt", "dnf", "pacman"]) {
     const held = contract.INSTALL_CHANNELS[channel];
     assert.equal(held.publishedVersion, "0.7.1");
     assert.match(held.publicationStatus, /0\.8\.0 publication hold/);
