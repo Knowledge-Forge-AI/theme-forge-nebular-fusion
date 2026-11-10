@@ -580,3 +580,27 @@ test("preserves a foreign output symlink", () => {
     removeFixture(fixture);
   }
 });
+
+test("pacman configuration resolves both architectures to published signed databases", () => {
+  const contract = loadInstallContract();
+  const publishedDatabaseUrls = new Set([
+    "https://tf.rs9.knowledge-forge.ai/arch/x86_64/knowledge-forge-ai.db",
+    "https://tf.rs9.knowledge-forge.ai/arch/x86_64/knowledge-forge-ai.db.sig",
+    "https://tf.rs9.knowledge-forge.ai/arch/aarch64/knowledge-forge-ai.db",
+    "https://tf.rs9.knowledge-forge.ai/arch/aarch64/knowledge-forge-ai.db.sig",
+  ]);
+  for (const [platform, architecture] of [["linux-x64", "x86_64"], ["linux-arm64", "aarch64"]]) {
+    const command = contract.INSTALL_CHANNELS.pacman.command(platform);
+    const configArgument = command.match(/printf '([^']+)' \| sudo tee -a \/etc\/pacman\.conf/u);
+    assert.ok(configArgument, "pacman route must contain its rendered repository config");
+    const config = configArgument[1].replaceAll("\\n", "\n");
+    const section = config.match(/^\[([^\]]+)\]$/mu);
+    const server = config.match(/^Server = (\S+)$/mu);
+    assert.ok(section && server, "repository section and server are required");
+    const databaseUrl = `${server[1].replace("$arch", architecture)}/${section[1]}.db`;
+    assert.ok(publishedDatabaseUrls.has(databaseUrl), `database not published: ${databaseUrl}`);
+    assert.ok(publishedDatabaseUrls.has(`${databaseUrl}.sig`), "database signature must be published");
+    assert.match(config, /^SigLevel = Required$/mu);
+    assert.match(command, /sudo pacman -Syu theme-forge-nebular-fusion/u);
+  }
+});

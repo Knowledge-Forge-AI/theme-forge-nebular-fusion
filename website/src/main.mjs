@@ -141,7 +141,7 @@ const INSTALL_CHANNELS = Object.freeze({
     title: "Add the signed Arch repository.",
     available: ["linux-arm64", "linux-x64"],
     publishedVersion: PUBLISHED_CHANNEL_VERSIONS.pacman,
-    command: () => `curl -fsSL ${SIGNING_KEY} -o /tmp/theme-forge-packages.asc\ntest "$(gpg --show-keys --with-colons /tmp/theme-forge-packages.asc | awk -F: '$1 == "fpr" { print $10; exit }')" = "${SIGNING_FINGERPRINT}"\nsudo pacman-key --add /tmp/theme-forge-packages.asc\nsudo pacman-key --lsign-key ${SIGNING_FINGERPRINT}\nprintf '\\n[theme-forge]\\nServer = ${LINUX_REPOSITORY}/arch/$arch\\nSigLevel = Required\\n' | sudo tee -a /etc/pacman.conf\nsudo pacman -Syu theme-forge-nebular-fusion`,
+    command: () => `curl -fsSL ${SIGNING_KEY} -o /tmp/theme-forge-packages.asc\ntest "$(gpg --show-keys --with-colons /tmp/theme-forge-packages.asc | awk -F: '$1 == "fpr" { print $10; exit }')" = "${SIGNING_FINGERPRINT}"\nsudo pacman-key --add /tmp/theme-forge-packages.asc\nsudo pacman-key --lsign-key ${SIGNING_FINGERPRINT}\nprintf '\\n[knowledge-forge-ai]\\nServer = ${LINUX_REPOSITORY}/arch/$arch\\nSigLevel = Required\\n' | sudo tee -a /etc/pacman.conf\nsudo pacman -Syu theme-forge-nebular-fusion`,
     description: "The signed Arch repository includes x86_64 and aarch64 packages. The example verifies the primary certificate before local trust, requires signed package and database metadata, and uses a full -Syu transaction to avoid partial upgrades; AUR publication is not part of this channel.",
     availability: "Available for Linux ARM64 and Linux AMD64 through the signed Arch repository.",
     publicationStatus: publicationStatus("pacman", "Arch package"),
