@@ -18,9 +18,9 @@ const PUBLISHED_CHANNEL_VERSIONS = Object.freeze({
   pip: "0.8.0",
   homebrew: "0.8.0",
   nix: "0.8.0",
-  apt: "0.7.1",
-  dnf: "0.7.1",
-  pacman: "0.7.1",
+  apt: "0.8.0",
+  dnf: "0.8.0",
+  pacman: "0.8.0",
   native: "0.8.0",
 });
 const githubReleaseUrl = (version) => `https://github.com/Knowledge-Forge-AI/theme-forge-nebular-fusion/releases/tag/v${version}`;
@@ -28,7 +28,7 @@ const githubReleaseDownloadUrl = (version) => `https://github.com/Knowledge-Forg
 const pypiProjectUrl = (version) => `https://pypi.org/project/theme-forge-nebular-fusion/${version}/`;
 const LINUX_REPOSITORY = "https://tf.rs9.knowledge-forge.ai";
 const SIGNING_KEY = `${LINUX_REPOSITORY}/keys/knowledge-forge-ai-packages.asc`;
-const PACKAGE_RELEASE_URL = "https://github.com/Knowledge-Forge-AI/theme-forge-packages/releases/tag/packages-current-202611";
+const PACKAGE_RELEASE_URL = "https://github.com/Knowledge-Forge-AI/theme-forge-packages/releases/tag/packages-current-202611-nebular080";
 const SIGNING_FINGERPRINT = "7D03EE84F8C7025FD2F3D772BF89DF6643C2F1AF";
 
 const publicationStatus = (channel, noun) => {

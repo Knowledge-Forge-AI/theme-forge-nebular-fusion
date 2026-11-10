@@ -6,7 +6,7 @@ Nebular Fusion is the Theme Forge desktop workbench for inspecting paired brand 
 
 The selected identity strategy is **Full Terminal Nova**: the wordmark, star glyph, deep-violet surface, warm-gold accent, and paired-system voice are treated as one coherent identity system. This is a brand strategy selection, not a claim that every appearance family is included in the released package.
 
-The released site describes Nebular Fusion 0.7.1 as software. The appearance catalog shown on the site is explicitly a separate next-cycle preview; it is not presented as a 0.7.1 package feature.
+The released site documents Nebular Fusion 0.8.0 and identifies each installation channel by its matching verified publication record. The appearance catalog is a read-only specimen preview; family collection, application selection, editing and persistence remain outside this static site.
 
 ## Usage boundaries
 
