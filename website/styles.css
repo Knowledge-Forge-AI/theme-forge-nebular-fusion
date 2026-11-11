@@ -12,7 +12,10 @@
   --site-faint: #867999;
   --site-border: rgba(240, 223, 196, 0.18);
   --site-border-strong: rgba(240, 223, 196, 0.34);
+  --site-art-gold: #e7b458;
+  --site-art-gold-soft: #f3d493;
   --site-gold: #e7b458;
+  --site-on-gold: #27182a;
   --site-gold-soft: #f3d493;
   --site-violet: #b29af4;
   --site-cyan: #77d8d5;
@@ -23,47 +26,49 @@
   --radius-lg: 1.15rem;
   --radius-pill: 999px;
   --max-width: 78rem;
-  --serif: Georgia, "Times New Roman", serif;
+  --serif: "Iowan Old Style", Palatino, Georgia, serif;
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", Consolas, monospace;
 }
 
 :root[data-site-theme="light"] {
   color-scheme: light;
-  --site-bg: #f5efe8;
-  --site-bg-raised: #fbf8f3;
-  --site-surface: #ede5dc;
-  --site-surface-strong: #e5dbd0;
+  --site-bg: #ded4e9;
+  --site-bg-raised: #e9dfef;
+  --site-surface: #d1c4e0;
+  --site-surface-strong: #c5b4d8;
   --site-ink: #241c31;
   --site-ink-soft: #423650;
-  --site-muted: #685a71;
-  --site-faint: #8b7d90;
+  --site-muted: #594367;
+  --site-faint: #5f4b70;
   --site-border: rgba(43, 27, 54, 0.16);
   --site-border-strong: rgba(43, 27, 54, 0.3);
-  --site-gold: #9a6717;
-  --site-gold-soft: #70470b;
+  --site-gold: #70470b;
+  --site-on-gold: #eee2f0;
+  --site-gold-soft: #67420c;
   --site-violet: #5a3fa0;
-  --site-cyan: #0b7774;
+  --site-cyan: #145d5b;
   --shadow-deep: 0 28px 80px rgba(59, 39, 58, 0.14);
 }
 
 @media (prefers-color-scheme: light) {
   :root[data-site-theme="system"] {
     color-scheme: light;
-    --site-bg: #f5efe8;
-    --site-bg-raised: #fbf8f3;
-    --site-surface: #ede5dc;
-    --site-surface-strong: #e5dbd0;
+    --site-bg: #ded4e9;
+    --site-bg-raised: #e9dfef;
+    --site-surface: #d1c4e0;
+    --site-surface-strong: #c5b4d8;
     --site-ink: #241c31;
     --site-ink-soft: #423650;
-    --site-muted: #685a71;
-    --site-faint: #8b7d90;
+    --site-muted: #594367;
+    --site-faint: #5f4b70;
     --site-border: rgba(43, 27, 54, 0.16);
     --site-border-strong: rgba(43, 27, 54, 0.3);
-    --site-gold: #9a6717;
-    --site-gold-soft: #70470b;
+    --site-gold: #70470b;
+  --site-on-gold: #eee2f0;
+    --site-gold-soft: #67420c;
     --site-violet: #5a3fa0;
-    --site-cyan: #0b7774;
+    --site-cyan: #145d5b;
     --shadow-deep: 0 28px 80px rgba(59, 39, 58, 0.14);
   }
 }
@@ -154,7 +159,7 @@ input:focus-visible {
   padding: 0.55rem 0.8rem;
   border-radius: var(--radius-sm);
   background: var(--site-gold);
-  color: #22152b;
+  color: var(--site-on-gold);
   font-weight: 700;
   text-decoration: none;
   transition: transform 150ms ease;
@@ -402,7 +407,7 @@ input:focus-visible {
 
 .button-primary {
   background: var(--site-gold);
-  color: #27182a;
+  color: var(--site-on-gold);
 }
 
 .button-primary:hover {
@@ -1249,7 +1254,7 @@ input:focus-visible {
   overflow: hidden;
   padding: 1rem;
   background: #29203d;
-  color: var(--site-gold);
+  color: var(--site-art-gold);
 }
 
 .workflow-panel-art::before,
@@ -1278,7 +1283,7 @@ input:focus-visible {
 .workflow-panel-art span {
   position: relative;
   z-index: 1;
-  color: var(--site-gold-soft);
+  color: var(--site-art-gold-soft);
   font-family: var(--serif);
   font-size: clamp(2rem, 4vw, 3.8rem);
   font-style: italic;
@@ -1919,3 +1924,8 @@ input:focus-visible {
     color: HighlightText;
   }
 }
+
+/* The illustrative workbench keeps its dark canvas in both page modes. */
+.mock-window { --site-gold: var(--site-art-gold); --site-gold-soft: var(--site-art-gold-soft); }
+/* Its light specimen is an independent focus-color island. */
+.mini-preview-light { --site-gold: var(--mini-light-accent); --site-gold-soft: var(--mini-light-accent); }
