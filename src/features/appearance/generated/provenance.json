@@ -1,66 +1,66 @@
 {
   "schema": "theme-forge.application-appearance-projection.v1",
-  "inventoryDigest": "d9f94a7f5ce0730098d840e409ca588caefc2e05c45fbec02d749d25f418fb51",
-  "catalogSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+  "inventoryDigest": "d172e64015c2f3af32b8824924f2e3472925ce3fa6950442dd9e580a71490b19",
+  "catalogSha256": "f51b16aff3a2db5b7581bc5729bf4a582cb4cb216faa230baf6a62df6625807d",
   "defaultFamily": "nebular",
   "members": [
     {
       "producerMember": "runtime-baselines.ts",
       "output": "runtime-baselines.ts",
       "bytes": 26498,
-      "sha256": "11714787ea2cdf79a3ad25a2bd71affe5ab51948071e2edf99d9d50575ccf12f"
+      "sha256": "f05509896737a9ba1d18389ad1bb104bd3c1f8b18415e05367606771012c54b2"
     },
     {
       "producerMember": "catalog.json",
       "output": "source-catalog.json",
-      "bytes": 286807,
-      "sha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351"
+      "bytes": 362847,
+      "sha256": "f51b16aff3a2db5b7581bc5729bf4a582cb4cb216faa230baf6a62df6625807d"
     },
     {
       "producerMember": "terminal-nova/application.css",
       "output": "terminal-nova.css",
       "bytes": 4227,
-      "sha256": "e4f8327022953c78996bf799385feae0ad7caff850eeaf9b198a7a6c5eb5ff7f"
+      "sha256": "5641b58d3402647ac983206a5dd602438b3d1e9ac98d5c0faafeeb98512e2a30"
     },
     {
       "producerMember": "nebular/application.css",
       "output": "nebular.css",
       "bytes": 4228,
-      "sha256": "616ffa3e0001cf146d552fcb5cca18b177febabf9ca406151578db53fd3d84cb"
+      "sha256": "355a316747a38672fb277f3e707472cb00bec9ddbc54602c42a35ab66778de8b"
     },
     {
       "producerMember": "developer/application.css",
       "output": "developer.css",
       "bytes": 4250,
-      "sha256": "6952118016681724443152d5a27c3bbe231e1ad804c33076432dd62b7379f88d"
+      "sha256": "75e0d61a1603f5b20ccc5d33b4db28e7ba20e8ca4bb2c44734f70b89bc770a98"
     },
     {
       "producerMember": "graphic-designer/application.css",
       "output": "graphic-designer.css",
       "bytes": 4246,
-      "sha256": "5bd1f7de357259b389bfcdeab25044b5b8044ef4ad9a54388a762b4227001d12"
+      "sha256": "48b08b6b272014a78253bbe3e651de2f5ed3c3940a910021292359505191f2ad"
     },
     {
       "producerMember": "anime/application.css",
       "output": "anime.css",
       "bytes": 4247,
-      "sha256": "3e6bcb1635261da524f66eace082d7878c548db832f8e7816ac2c26fd55a6cbb"
+      "sha256": "26a2e8511bdc4e4f44e2e49a453bdaf4df29a6436ba916a9668a192b556e378a"
     },
     {
       "producerMember": "gamer/application.css",
       "output": "gamer.css",
       "bytes": 4250,
-      "sha256": "c89d11e1c225127c4288a7a6b3f2a5f096d3cb8ee96225e47fea7897643919d6"
+      "sha256": "d9a4b847242a9d62179f1d84b8cacc946435755d4a677fd8a2b2ca1d242b382d"
     }
   ],
   "derivedMembers": [
     {
       "producerMember": "catalog.json",
-      "sourceSha256": "0e635f5efc8d0df6867601530c26a919e992f9dc5170666b39fbbb0847a39351",
+      "sourceSha256": "f51b16aff3a2db5b7581bc5729bf4a582cb4cb216faa230baf6a62df6625807d",
       "output": "catalog-index.json",
       "transform": "family-index-v1",
       "bytes": 567,
-      "sha256": "116af591e845204a0f139279b8f30ed219f59990a3a4df76d6c76c7167c9bc7a"
+      "sha256": "7032491c58e77b5a1ce0490a3e7c53a331d727784774c42a3482b572d326809e"
     }
   ],
   "nonDefaultCssFiles": "Verification projections; runtime selection imports the generated baseline object",
