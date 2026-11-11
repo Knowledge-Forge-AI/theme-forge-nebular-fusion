@@ -1929,3 +1929,13 @@ input:focus-visible {
 .mock-window { --site-gold: var(--site-art-gold); --site-gold-soft: var(--site-art-gold-soft); }
 /* Its light specimen is an independent focus-color island. */
 .mini-preview-light { --site-gold: var(--mini-light-accent); --site-gold-soft: var(--mini-light-accent); }
+
+/* Original project mascot: website presentation only. */
+.project-mascot { display: grid; grid-template-columns: minmax(12rem, .8fr) minmax(0, 1.2fr); align-items: center; gap: clamp(1.5rem, 5vw, 5rem); margin-block: 3rem; padding-block: 2rem; border-block: 1px solid currentColor; }
+.project-mascot figure { margin: 0; text-align: center; }
+.project-mascot img { display: block; width: auto; height: auto; max-width: 100%; max-height: 28rem; margin-inline: auto; object-fit: contain; }
+.project-mascot figcaption { margin-top: .8rem; font-size: .875rem; line-height: 1.5; }
+.project-mascot h2 { margin: 0 0 1rem; font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.1; }
+.project-mascot p { max-width: 38rem; line-height: 1.65; }
+.project-mascot .mascot-eyebrow { margin: 0 0 .75rem; font: .8rem/1.4 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+@media (max-width: 640px) { .project-mascot { grid-template-columns: minmax(0, 1fr); gap: 1.5rem; } .project-mascot img { max-height: 22rem; } .project-mascot .mascot-copy { text-align: start; } }

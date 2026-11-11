@@ -12,6 +12,7 @@ export const PUBLIC_MEMBERS = Object.freeze([
   "brand/README-BRAND.md",
   "favicon.svg",
   "index.html",
+  "orihime.webp",
   "robots.txt",
   "social-preview.png",
   "social-preview.svg",
