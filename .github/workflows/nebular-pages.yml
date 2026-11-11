@@ -59,6 +59,7 @@ jobs:
             "brand/README-BRAND.md",
             "favicon.svg",
             "index.html",
+            "orihime.webp",
             "robots.txt",
             "social-preview.png",
             "social-preview.svg",
@@ -96,7 +97,7 @@ jobs:
           if (!exactKeys(manifest, ["artifactCount", "manifest", "members", "schema"])) {
             throw new Error("Nebular manifest top-level keys are not the admitted set");
           }
-          if (manifest.schema !== "theme-forge.static-site-build.v1" || manifest.manifest !== "manifest.json" || manifest.artifactCount !== 29 || !Array.isArray(manifest.members) || manifest.members.length !== 29) {
+          if (manifest.schema !== "theme-forge.static-site-build.v1" || manifest.manifest !== "manifest.json" || manifest.artifactCount !== 30 || !Array.isArray(manifest.members) || manifest.members.length !== 30) {
             throw new Error("Nebular static manifest header mismatch");
           }
           const seen = new Set();

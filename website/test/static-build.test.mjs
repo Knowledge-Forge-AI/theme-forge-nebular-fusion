@@ -89,8 +89,8 @@ test("builds the fixed public allowlist with a deterministic manifest", () => {
     const first = buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: outputOne });
     const second = buildStaticSite({ sourceRoot: fixture.sourceRoot, outputDir: outputTwo });
 
-    assert.equal(first.memberCount, 29);
-    assert.equal(first.outputFileCount, 30);
+    assert.equal(first.memberCount, 30);
+    assert.equal(first.outputFileCount, 31);
     assert.deepEqual(first.manifest, second.manifest);
     assert.deepEqual(walkFiles(outputOne), walkFiles(outputTwo));
     assert.deepEqual(
@@ -102,6 +102,7 @@ test("builds the fixed public allowlist with a deterministic manifest", () => {
     assert.ok(first.manifest.members.some((member) => member.path === "appearances/source-profiles.json"));
     assert.ok(first.manifest.members.some((member) => member.path === "screenshots/gamer-dark-shell.jpg"));
     assert.ok(first.manifest.members.some((member) => member.path === "screenshots/screenshot-provenance.json"));
+    assert.ok(first.manifest.members.some((member) => member.path === "orihime.webp"));
     const browserProof = JSON.parse(fs.readFileSync(path.join(outputOne, "screenshots/screenshot-provenance.json"), "utf8"));
     assert.equal(browserProof.asset.path, "screenshots/gamer-dark-shell.jpg");
     assert.equal(browserProof.asset.bytes, 64908);

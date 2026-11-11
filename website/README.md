@@ -44,7 +44,8 @@ overwrites an existing output; choose a fresh sibling directory for each
 build. It stages the files beside the requested output and publishes the stage
 with one directory rename after source and provenance checks pass.
 
-The generated directory contains 29 fixed public payload files and a
+The generated directory contains 30 fixed public payload files, including the
+website-only Orihime mascot, and a
 generated `manifest.json`. The manifest is sorted by public relative path and
 records each payload's byte count, SHA-256, and `0644` mode. It contains no
 local source path, timestamp, username, or release-version decision. The
