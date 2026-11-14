@@ -493,7 +493,7 @@ function publicReceipt({ manifest, inputs, materialRoute, phases, archiveSha256,
  * The returned receipt is intentionally path-free; buildInputsPath/privateRoot
  * are caller-owned locators and must not be uploaded as public evidence.
  */
-export async function prepareHostInputs(spec, { env = process.env, ports, maintained } = {}) {
+export async function prepareHostInputs(spec, { env = { ...process.env }, ports, maintained } = {}) {
   validateSpec(spec, env);
   requireMaintained(maintained);
   requirePorts(ports);
@@ -839,7 +839,7 @@ async function loadBridge(path) {
   return bridge;
 }
 
-export async function runCli(argv, { load = loadBridge, env = process.env } = {}) {
+export async function runCli(argv, { load = loadBridge, env = { ...process.env } } = {}) {
   let args;
   try {
     args = parseCliArgs(argv);

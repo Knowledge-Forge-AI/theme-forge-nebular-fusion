@@ -373,7 +373,7 @@ function validateCommand(program, args, cwd, environment) {
  * capture is transient and must be consumed by the caller before public
  * evidence is written; raw child text is never placed in a result record.
  */
-export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COMMAND_TIMEOUT_MS, capture = "none", spawnImpl = spawn }) {
+export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COMMAND_TIMEOUT_MS, capture = "none", phase, spawnImpl = spawn }) {
   validateCommand(program, args, cwd, env);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > COMMAND_TIMEOUT_MS) fail("COMMAND_TIMEOUT");
   if (!["none", "text", "json"].includes(capture)) fail("COMMAND_CAPTURE");
@@ -396,7 +396,10 @@ export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COM
       const text = new TextDecoder("utf-8", {fatal:true}).decode(Buffer.concat(chunks));
       if (capture === "text") output.text = text;
       else output.json = JSON.parse(text);
-    } catch { output.failure = "INVALID_RESULT"; }
+    } catch {
+      // Diagnostic capture must preserve this phase's old exit-zero semantics.
+      if (!(phase === "prepare-host-inputs" && result.exitCode === 0)) output.failure = "INVALID_RESULT";
+    }
   }
   return Object.freeze(output);
 }
@@ -406,11 +409,101 @@ function resultOk(result, code) {
   return result;
 }
 
+// Only exact known refusal names from the frozen host preparer may be public.
+// JSON remains transient; neither messages, raw streams nor private values escape.
+const HOST_PREPARATION_REFUSALS = new Set([
+  "HOST_INPUT_API_ARCHIVE_PORT",
+  "HOST_INPUT_API_COMMAND_PORT",
+  "HOST_INPUT_ARCHIVE_PORT",
+  "HOST_INPUT_BRIDGE",
+  "HOST_INPUT_BUILD_INPUTS_WRITE",
+  "HOST_INPUT_BUNDLE",
+  "HOST_INPUT_BUNDLE_ARCHIVE",
+  "HOST_INPUT_BUNDLE_COMPONENT",
+  "HOST_INPUT_BUNDLE_EXTRACT",
+  "HOST_INPUT_BUNDLE_INVENTORY",
+  "HOST_INPUT_BUNDLE_LAYOUT",
+  "HOST_INPUT_BUNDLE_MANIFEST",
+  "HOST_INPUT_BUNDLE_MANIFEST_PATH",
+  "HOST_INPUT_CARGO_CONFIG",
+  "HOST_INPUT_CARGO_CONFIG_WRITE",
+  "HOST_INPUT_CARGO_FETCH_COMMAND",
+  "HOST_INPUT_CARGO_FETCH_FAILED",
+  "HOST_INPUT_CARGO_FETCH_OUTPUT_LIMIT",
+  "HOST_INPUT_CARGO_FETCH_TIMEOUT",
+  "HOST_INPUT_CARGO_LOCATORS",
+  "HOST_INPUT_CARGO_REMAP",
+  "HOST_INPUT_CARGO_SOURCE",
+  "HOST_INPUT_CLI_MODE",
+  "HOST_INPUT_COMMAND_LIMIT",
+  "HOST_INPUT_COMPONENT_DIGEST",
+  "HOST_INPUT_COMPONENT_OUTPUT",
+  "HOST_INPUT_COMPONENT_PACKAGE",
+  "HOST_INPUT_COMPONENT_SOURCE",
+  "HOST_INPUT_COMPONENT_SOURCES",
+  "HOST_INPUT_COPY",
+  "HOST_INPUT_DESTINATION",
+  "HOST_INPUT_EMBEDDED_RUNTIME",
+  "HOST_INPUT_ENVIRONMENT",
+  "HOST_INPUT_INTERNAL",
+  "HOST_INPUT_LOCATOR_WRITE",
+  "HOST_INPUT_MAINTAINED_API",
+  "HOST_INPUT_MATERIAL_BINDING",
+  "HOST_INPUT_NPM_FRONTEND_COMMAND",
+  "HOST_INPUT_NPM_FRONTEND_FAILED",
+  "HOST_INPUT_NPM_FRONTEND_OUTPUT",
+  "HOST_INPUT_NPM_FRONTEND_OUTPUT_LIMIT",
+  "HOST_INPUT_NPM_FRONTEND_TIMEOUT",
+  "HOST_INPUT_NPM_PREVIEW_COMMAND",
+  "HOST_INPUT_NPM_PREVIEW_FAILED",
+  "HOST_INPUT_NPM_PREVIEW_OUTPUT",
+  "HOST_INPUT_NPM_PREVIEW_OUTPUT_LIMIT",
+  "HOST_INPUT_NPM_PREVIEW_TIMEOUT",
+  "HOST_INPUT_PREVIEW_PACKAGE",
+  "HOST_INPUT_PREVIEW_SOURCE",
+  "HOST_INPUT_PRODUCER_IDENTITY",
+  "HOST_INPUT_RECEIPT_WRITE",
+  "HOST_INPUT_RUNNER_GUARD",
+  "HOST_INPUT_RUNNER_TEMP",
+  "HOST_INPUT_RUSTUP_HOME",
+  "HOST_INPUT_RUSTUP_ROOT",
+  "HOST_INPUT_RUST_TARGET_LIB",
+  "HOST_INPUT_SDKROOT",
+  "HOST_INPUT_SPEC",
+  "HOST_INPUT_STAGING_PATH_COVERAGE",
+  "HOST_INPUT_STUDIO_DIGEST",
+  "HOST_INPUT_STUDIO_INVENTORY",
+  "HOST_INPUT_STUDIO_PACKAGE",
+  "HOST_INPUT_TOOLCHAINS",
+  "HOST_INPUT_TOOLCHAIN_CARGO",
+  "HOST_INPUT_TOOLCHAIN_COMPILER",
+  "HOST_INPUT_TOOLCHAIN_LINKER",
+  "HOST_INPUT_TOOLCHAIN_NODE",
+  "HOST_INPUT_TOOLCHAIN_NPM",
+  "HOST_INPUT_TOOLCHAIN_OBSERVATION",
+  "HOST_INPUT_TOOLCHAIN_PKGCONFIG",
+  "HOST_INPUT_TOOLCHAIN_RUST",
+  "HOST_INPUT_TOOLCHAIN_SYSTEMLIBRARIES",
+  "HOST_INPUT_USAGE",
+  "HOST_INPUT_WORKSPACE"
+]);
+export function hostPreparationFailureCode(result) {
+  const fallback = "PREPARE_HOST_INPUTS_FAILED";
+  if (!isRecord(result) || result.failure != null || result.cleanup !== "leader-close-observed"
+      || ![1, 2, 3].includes(result.exitCode) || !isRecord(result.json)) return fallback;
+  const keys = Object.keys(result.json).sort();
+  if (keys.length !== 2 || keys[0] !== "code" || keys[1] !== "status"
+      || result.json.status !== "refused" || !HOST_PREPARATION_REFUSALS.has(result.json.code)) return fallback;
+  const expectedExit = result.json.code === "HOST_INPUT_USAGE" ? 2 : result.json.code === "HOST_INPUT_INTERNAL" ? 3 : 1;
+  if (result.exitCode !== expectedExit) return fallback;
+  return `PREPARE_HOST_INPUTS_${result.json.code}`;
+}
+
 async function phaseRun(state, phase, runner, command) {
   const expected = PHASES[state.phaseIndex + 1];
   if (expected !== phase && state.completed.at(-1) !== phase) fail("PHASE_ORDER");
   const result = await runner({ ...command, phase });
-  resultOk(result, `${phase.replaceAll("-", "_").toUpperCase()}_FAILED`);
+  resultOk(result, phase === "prepare-host-inputs" ? hostPreparationFailureCode(result) : `${phase.replaceAll("-", "_").toUpperCase()}_FAILED`);
   if (expected === phase) {
     state.phaseIndex += 1;
     state.completed.push(phase);
@@ -709,7 +802,7 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
 
   const bootstrapAuthority = join(spec.paths.bootstrapTools, "node-runtime-authority.mjs");
   await phaseRun(state, "bootstrap-node-auth", resultRunner, command(spec.tools.bootstrapNode, [bootstrapAuthority, "--authenticate-download", spec.paths.nodeDownload, "--output-node", spec.paths.authenticatedNode, "--output", spec.paths.nodeReceipt], spec.paths.bootstrapStudio, commandEnv));
-  await phaseRun(state, "prepare-host-inputs", resultRunner, command(spec.paths.authenticatedNode, [spec.tools.hostInputs, "--spec", spec.host.spec, "--bridge", spec.host.bridge, "--receipt", spec.host.receipt, "--locator", spec.host.locator], spec.paths.bootstrapStudio, commandEnv));
+  await phaseRun(state, "prepare-host-inputs", resultRunner, command(spec.paths.authenticatedNode, [spec.tools.hostInputs, "--spec", spec.host.spec, "--bridge", spec.host.bridge, "--receipt", spec.host.receipt, "--locator", spec.host.locator], spec.paths.bootstrapStudio, commandEnv, "json"));
 
   const locator = await readJson(spec.host.locator, "HOST_LOCATOR");
   if (locator.schema !== "nebular-host-input-locator-v1") fail("HOST_LOCATOR");
