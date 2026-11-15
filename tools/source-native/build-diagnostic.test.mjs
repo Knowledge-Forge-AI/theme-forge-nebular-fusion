@@ -320,3 +320,47 @@ test('listing diagnostic-parser failure cannot alter the command refusal',async(
   assert.equal(error.code,'TEST_LIST_GUARD');assert.equal(formatCampaignFailure(error).includes('never-display-test-list'),false);return true;
  });
 });
+
+
+// Payload-path diagnostics classify only closed source-owned reasons.
+const {payloadPathScanFailure}=await import('./controller.mjs');
+const privatePayloadMarker='PRIVATE_PAYLOAD_MEMBER_NEVER_EMIT';
+
+for(const [name,error,stage,reason] of [
+ ['module',new Error(privatePayloadMarker),'MODULE','MODULE_UNAVAILABLE'],
+ ['prefix',new Error('Shipped member retains a known build-path prefix: '+privatePayloadMarker),'SCAN','PREFIX_MATCH'],
+ ['symlink',new Error('Shipped symlink escapes artifact'),'SCAN','SYMLINK_ESCAPE'],
+ ['prefix-set',new Error('Explicit build-path prefixes required'),'SCAN','INVALID_PREFIX_SET'],
+ ['special',new Error('Shipped special member is unsupported'),'SCAN','UNSUPPORTED_MEMBER'],
+ ['io',Object.assign(new Error(privatePayloadMarker),{code:'ENOENT',path:privatePayloadMarker}),'SCAN','IO_FAILURE'],
+ ['unknown',new Error(privatePayloadMarker),'SCAN','UNCLASSIFIED'],
+])test('payload closed classification '+name,()=>{
+ const failure=payloadPathScanFailure(error,stage);
+ assert.equal(failure.code,'PAYLOAD_PATH_SCAN');
+ assert.equal(formatCampaignFailure(failure),`SOURCE_NATIVE_PAYLOAD_PATH_SCAN\nSOURCE_NATIVE_PAYLOAD_SCAN_STAGE_${stage}\nSOURCE_NATIVE_PAYLOAD_SCAN_REASON_${reason}`);
+ assert.ok(!formatCampaignFailure(failure).includes(privatePayloadMarker));
+ assert.ok(!Object.values(failure).includes(error));
+});
+
+test('payload classifier does not invoke getters and survives proxy refusal',()=>{
+ let reads=0;const getter={get message(){reads++;throw new Error(privatePayloadMarker)},get code(){reads++;return 'ENOENT'}};
+ assert.equal(payloadPathScanFailure(getter,'SCAN').payloadScanReason,'UNCLASSIFIED');assert.equal(reads,0);
+ const proxy=new Proxy({},{getOwnPropertyDescriptor(){throw new Error(privatePayloadMarker)}});
+ assert.equal(payloadPathScanFailure(proxy,'SCAN').payloadScanReason,'UNCLASSIFIED');
+ for(const value of [null,undefined,17,true,privatePayloadMarker])assert.equal(payloadPathScanFailure(value,'SCAN').payloadScanReason,'UNCLASSIFIED');
+});
+
+test('payload formatter rejects invalid pairs and unrelated failure properties',()=>{
+ for(const [stage,reason] of [['MODULE','PREFIX_MATCH'],['SCAN','MODULE_UNAVAILABLE'],[privatePayloadMarker,'UNCLASSIFIED'],['SCAN',privatePayloadMarker]]){
+  const failure=payloadPathScanFailure(null,'other');failure.payloadScanStage=stage;failure.payloadScanReason=reason;
+  assert.equal(formatCampaignFailure(failure),'SOURCE_NATIVE_PAYLOAD_PATH_SCAN');
+ }
+ const other=new CampaignError('NATIVE_TESTS');other.payloadScanStage='SCAN';other.payloadScanReason='PREFIX_MATCH';
+ assert.equal(formatCampaignFailure(other),'SOURCE_NATIVE_NATIVE_TESTS');
+});
+
+test('payload huge private suffix stays out of bounded diagnostic output',()=>{
+ const failure=payloadPathScanFailure(new Error('Shipped member retains a known build-path prefix: '+privatePayloadMarker.repeat(65536)),'SCAN');
+ const output=formatCampaignFailure(failure);assert.ok(output.length<200);assert.ok(!output.includes(privatePayloadMarker));
+});
+

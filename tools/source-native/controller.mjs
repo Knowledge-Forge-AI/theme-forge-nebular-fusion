@@ -604,6 +604,37 @@ export function requireTestListCommandResult(result, stage) {
   }
 }
 
+const PAYLOAD_SCAN_REASONS = new Set(["PREFIX_MATCH", "SYMLINK_ESCAPE", "INVALID_PREFIX_SET", "UNSUPPORTED_MEMBER", "IO_FAILURE", "UNCLASSIFIED"]);
+const PAYLOAD_SCAN_IO_CODES = new Set(["ENOENT", "EACCES", "ENOTDIR", "ELOOP", "EMFILE", "ENFILE", "EIO", "ENOSPC"]);
+
+function ownDiagnosticString(error, key) {
+  try {
+    if ((typeof error !== "object" && typeof error !== "function") || error === null) return null;
+    const descriptor = Object.getOwnPropertyDescriptor(error, key);
+    return descriptor && Object.hasOwn(descriptor, "value") && typeof descriptor.value === "string" ? descriptor.value : null;
+  } catch { return null; }
+}
+
+export function payloadPathScanFailure(error, stage) {
+  const failure = new CampaignError("PAYLOAD_PATH_SCAN");
+  if (stage === "MODULE") {
+    failure.payloadScanStage = "MODULE";
+    failure.payloadScanReason = "MODULE_UNAVAILABLE";
+  } else if (stage === "SCAN") {
+    const message = ownDiagnosticString(error, "message");
+    const code = ownDiagnosticString(error, "code");
+    let reason = "UNCLASSIFIED";
+    if (message?.startsWith("Shipped member retains a known build-path prefix: ")) reason = "PREFIX_MATCH";
+    else if (message === "Shipped symlink escapes artifact") reason = "SYMLINK_ESCAPE";
+    else if (message === "Explicit build-path prefixes required") reason = "INVALID_PREFIX_SET";
+    else if (message === "Shipped special member is unsupported") reason = "UNSUPPORTED_MEMBER";
+    else if (PAYLOAD_SCAN_IO_CODES.has(code)) reason = "IO_FAILURE";
+    failure.payloadScanStage = "SCAN";
+    failure.payloadScanReason = reason;
+  }
+  return failure;
+}
+
 export function formatCampaignFailure(error) {
   const code = error instanceof CampaignError ? error.code : "INTERNAL";
   const boundary = error instanceof CampaignError && PREPARATION_BOUNDARIES.has(error.preparationBoundary)
@@ -621,7 +652,11 @@ export function formatCampaignFailure(error) {
     ? "\nSOURCE_NATIVE_TEST_LIST_CLEANUP_UNCONFIRMED" : "";
   const testDiagnostic = testFailure ? validateBuildDiagnostic(error.testListDiagnostic) : null;
   const testHints = testDiagnostic ? `\nSOURCE_NATIVE_TEST_LIST_DIAGNOSTIC ${JSON.stringify(testDiagnostic)}` : "";
-  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}`;
+  const payloadPair = error instanceof CampaignError && error.code === "PAYLOAD_PATH_SCAN"
+    && ((error.payloadScanStage === "MODULE" && error.payloadScanReason === "MODULE_UNAVAILABLE")
+      || (error.payloadScanStage === "SCAN" && PAYLOAD_SCAN_REASONS.has(error.payloadScanReason)));
+  const payloadHint = payloadPair ? `\nSOURCE_NATIVE_PAYLOAD_SCAN_STAGE_${error.payloadScanStage}\nSOURCE_NATIVE_PAYLOAD_SCAN_REASON_${error.payloadScanReason}` : "";
+  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}`;
 }
 
 export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
@@ -979,9 +1014,9 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   // The maintained builder scans its work/source paths. This outer scan also
   // covers the fresh toolchain/preparation roots owned by this controller.
   const scanner = await import(pathToFileURL(join(spec.paths.bootstrapTools,"scan-shipped-paths.mjs")).href).catch(() => null);
-  if (!scanner?.scanShippedPaths) fail("PAYLOAD_PATH_SCAN");
+  if (!scanner?.scanShippedPaths) throw payloadPathScanFailure(null,"MODULE");
   try {await scanner.scanShippedPaths(payloadRoot,[dirname(spec.paths.bootstrapRoot),dirname(buildInputsPath),env.RUNNER_TEMP,env.HOME,spec.source.checkout],{preserveSpellings:true});}
-  catch {fail("PAYLOAD_PATH_SCAN");}
+  catch(error) {throw payloadPathScanFailure(error,"SCAN");}
   state.phaseIndex += 1;
   state.completed.push("payload-path-scan");
 
