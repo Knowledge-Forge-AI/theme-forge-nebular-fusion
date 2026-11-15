@@ -5,7 +5,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { HOST_INPUT_SCHEMA, createCargoConfig } from "./host-inputs.mjs";
-import { hostPreparationFailureCode, runFixedCommand } from "./controller.mjs";
+import { CampaignError, hostPreparationFailureCode, hostPreparationBoundary, requirePhaseResult, formatCampaignFailure, runFixedCommand } from "./controller.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const candidate = join(root, "host-inputs.mjs");
@@ -72,4 +72,73 @@ test("real subprocess parsing preserves clean success and classifies only the bo
  const success=await runFixedCommand({...options,args:["-e",'console.log("fixture non-JSON success")']});assert.equal(success.exitCode,0);assert.equal(success.failure,null);
  const strict=await runFixedCommand({...options,phase:"bootstrap-extract",args:["-e",'console.log("fixture non-JSON success")']});assert.equal(strict.failure,"INVALID_RESULT");
  const usage=await runFixedCommand({...options,args:[candidate]});assert.equal(usage.exitCode,2);assert.equal(hostPreparationFailureCode(usage),"PREPARE_HOST_INPUTS_HOST_INPUT_USAGE");assert.equal(Object.hasOwn(usage,"text"),false);assert.equal(Object.hasOwn(usage,"stderr"),false);
+});
+
+test("closed process categories have explicit cleanup-first precedence",()=>{
+ const base={failure:null,exitCode:1,signal:null,cleanup:"leader-close-observed"};
+ const cases=[
+  [null,"INCOHERENT_RESULT"],
+  [{...base,cleanup:"unconfirmed",failure:"TIMEOUT"},"UNCONFIRMED_CLEANUP"],
+  ...[["LIMIT","PORT_LIMIT"],["SPAWN","SPAWN_FAILURE"],["ERROR","CHILD_ERROR"],["TIMEOUT","TIMEOUT"],["OUTPUT_LIMIT","OUTPUT_LIMIT"],["INVALID_RESULT","INVALID_RESULT"]].map(([failure,label])=>[{...base,failure},label]),
+  [{...base,failure:"untrusted-private-value"},"UNKNOWN_PROCESS_FAILURE"],
+  [{...base,json:{status:"refused",code:"HOST_INPUT_USAGE"},exitCode:2},"ACCEPTED_INNER_REFUSAL"],
+  [{...base,exitCode:0},"COMPLETED"],
+  [{...base,exitCode:null,signal:"untrusted-signal-text"},"SIGNALED"],
+  [{...base,exitCode:null,signal:"SIGTERM",failure:"INVALID_RESULT"},"SIGNALED"],
+  [base,"UNACCEPTED_NONZERO"],
+  [{...base,exitCode:null},"INCOHERENT_RESULT"],
+ ];
+ for(const [result,label] of cases){
+  assert.equal(hostPreparationBoundary(result),label);
+  if(label==="COMPLETED")assert.equal(requirePhaseResult(result,"prepare-host-inputs"),result);
+  else assert.throws(()=>requirePhaseResult(result,"prepare-host-inputs"),error=>{
+   assert.ok(error instanceof CampaignError);assert.equal(error.preparationBoundary,label);
+   const prior=hostPreparationFailureCode(result);assert.equal(error.code,prior);
+   assert.equal(formatCampaignFailure(error),`SOURCE_NATIVE_${prior}\nSOURCE_NATIVE_PREPARATION_BOUNDARY_${label}`);
+   return true;
+  });
+ }
+});
+
+test("new category is prep-only and rejects untrusted annotation values",()=>{
+ const result={failure:"TIMEOUT",exitCode:null,cleanup:"unconfirmed",stdout:"private text",stderr:"private text"};
+ assert.throws(()=>requirePhaseResult(result,"bootstrap-extract"),error=>{
+  assert.equal(Object.hasOwn(error,"preparationBoundary"),false);
+  assert.equal(formatCampaignFailure(error),"SOURCE_NATIVE_BOOTSTRAP_EXTRACT_FAILED");return true;
+ });
+ const error=new CampaignError("PREPARE_HOST_INPUTS_FAILED");error.preparationBoundary="private text";
+ assert.equal(formatCampaignFailure(error),"SOURCE_NATIVE_PREPARE_HOST_INPUTS_FAILED");
+ assert.equal(formatCampaignFailure(new Error("private text")),"SOURCE_NATIVE_INTERNAL");
+});
+
+test("actual child boundary classifies clean success, refusal, malformed output and unknown code",async()=>{
+ const options={program:process.execPath,cwd:root,env:{PATH:"/usr/bin:/bin"},capture:"json",phase:"prepare-host-inputs",timeoutMs:5000};
+ const cases=[
+  ["",0,"COMPLETED"],
+  ['console.log("untrusted extra success text")',0,"COMPLETED"],
+  ['console.log(JSON.stringify({status:"refused",code:"HOST_INPUT_USAGE"}));process.exitCode=2',2,"ACCEPTED_INNER_REFUSAL"],
+  ['console.log("untrusted malformed text");process.exitCode=1',1,"INVALID_RESULT"],
+  ['console.log(JSON.stringify({status:"refused",code:"untrusted unknown text"}));process.exitCode=1',1,"UNACCEPTED_NONZERO"],
+ ];
+ for(const [script,exit,label] of cases){
+  const result=await runFixedCommand({...options,args:["-e",script]});
+  assert.equal(result.exitCode,exit);assert.equal(hostPreparationBoundary(result),label);
+  if(exit===0)assert.equal(requirePhaseResult(result,"prepare-host-inputs"),result);
+  else assert.throws(()=>requirePhaseResult(result,"prepare-host-inputs"),error=>{
+   const rendered=formatCampaignFailure(error);assert.ok(rendered.endsWith(label));assert.equal(rendered.includes("untrusted"),false);return true;
+  });
+ }
+});
+
+test("actual self-signal and missing executable remain failed without raw diagnostics",async()=>{
+ const options={program:process.execPath,cwd:root,env:{PATH:"/usr/bin:/bin"},capture:"json",phase:"prepare-host-inputs",timeoutMs:5000};
+ const signaled=await runFixedCommand({...options,args:["-e",'process.kill(process.pid,"SIGTERM")']});
+ assert.equal(hostPreparationBoundary(signaled),"SIGNALED");
+ const f=await fixture();
+ const missing=await runFixedCommand({...options,program:join(f.path,"node-authenticated"),args:[]});
+ assert.equal(missing.failure,"ERROR");assert.equal(missing.cleanup,"unconfirmed");
+ assert.equal(hostPreparationBoundary(missing),"UNCONFIRMED_CLEANUP");
+ for(const result of [signaled,missing])assert.throws(()=>requirePhaseResult(result,"prepare-host-inputs"),error=>{
+  assert.equal(error.code,"PREPARE_HOST_INPUTS_FAILED");const rendered=formatCampaignFailure(error);assert.equal(rendered.includes(root),false);assert.equal(rendered.includes("ENOENT"),false);return true;
+ });
 });

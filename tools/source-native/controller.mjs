@@ -499,11 +499,60 @@ export function hostPreparationFailureCode(result) {
   return `PREPARE_HOST_INPUTS_${result.json.code}`;
 }
 
+// A closed process category supplements the existing failure code. Child text,
+// OS errors, paths, argv and environment are never rendered by this boundary.
+const PREPARATION_BOUNDARIES = new Set([
+  "INCOHERENT_RESULT", "UNCONFIRMED_CLEANUP", "PORT_LIMIT", "SPAWN_FAILURE",
+  "CHILD_ERROR", "TIMEOUT", "OUTPUT_LIMIT", "INVALID_RESULT",
+  "UNKNOWN_PROCESS_FAILURE", "ACCEPTED_INNER_REFUSAL", "COMPLETED",
+  "SIGNALED", "UNACCEPTED_NONZERO",
+]);
+
+export function hostPreparationBoundary(result) {
+  if (!isRecord(result)) return "INCOHERENT_RESULT";
+  if (result.cleanup !== "leader-close-observed") return "UNCONFIRMED_CLEANUP";
+  if (result.failure != null) {
+    // JSON decoding after a signal can itself report INVALID_RESULT. Preserve
+    // the stronger already-recorded signal observation without changing it.
+    if (result.failure === "INVALID_RESULT" && result.exitCode === null
+        && typeof result.signal === "string" && result.signal.length > 0) return "SIGNALED";
+    const names = new Map([
+      ["LIMIT", "PORT_LIMIT"], ["SPAWN", "SPAWN_FAILURE"], ["ERROR", "CHILD_ERROR"],
+      ["TIMEOUT", "TIMEOUT"], ["OUTPUT_LIMIT", "OUTPUT_LIMIT"], ["INVALID_RESULT", "INVALID_RESULT"],
+    ]);
+    return names.get(result.failure) ?? "UNKNOWN_PROCESS_FAILURE";
+  }
+  if (hostPreparationFailureCode(result) !== "PREPARE_HOST_INPUTS_FAILED") return "ACCEPTED_INNER_REFUSAL";
+  // Prep's existing exit-zero behavior deliberately defers locator validation.
+  if (result.exitCode === 0) return "COMPLETED";
+  if (result.exitCode === null && typeof result.signal === "string" && result.signal.length > 0) return "SIGNALED";
+  if (Number.isInteger(result.exitCode) && result.exitCode !== 0) return "UNACCEPTED_NONZERO";
+  return "INCOHERENT_RESULT";
+}
+
+export function requirePhaseResult(result, phase) {
+  try {
+    return resultOk(result, phase === "prepare-host-inputs" ? hostPreparationFailureCode(result) : `${phase.replaceAll("-", "_").toUpperCase()}_FAILED`);
+  } catch (error) {
+    if (phase === "prepare-host-inputs" && error instanceof CampaignError) {
+      error.preparationBoundary = hostPreparationBoundary(result);
+    }
+    throw error;
+  }
+}
+
+export function formatCampaignFailure(error) {
+  const code = error instanceof CampaignError ? error.code : "INTERNAL";
+  const boundary = error instanceof CampaignError && PREPARATION_BOUNDARIES.has(error.preparationBoundary)
+    ? `\nSOURCE_NATIVE_PREPARATION_BOUNDARY_${error.preparationBoundary}` : "";
+  return `SOURCE_NATIVE_${code}${boundary}`;
+}
+
 async function phaseRun(state, phase, runner, command) {
   const expected = PHASES[state.phaseIndex + 1];
   if (expected !== phase && state.completed.at(-1) !== phase) fail("PHASE_ORDER");
   const result = await runner({ ...command, phase });
-  resultOk(result, phase === "prepare-host-inputs" ? hostPreparationFailureCode(result) : `${phase.replaceAll("-", "_").toUpperCase()}_FAILED`);
+  requirePhaseResult(result, phase);
   if (expected === phase) {
     state.phaseIndex += 1;
     state.completed.push(phase);
@@ -969,8 +1018,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
     const result = await runCampaign(parsed,{env:process.env});
     process.stdout.write(`${JSON.stringify({ schema: CONTROLLER_SCHEMA, status: result.status, phases: result.phases })}\n`);
   } catch (error) {
-    const code = error instanceof CampaignError ? error.code : "INTERNAL";
-    process.stderr.write(`SOURCE_NATIVE_${code}\n`);
+    process.stderr.write(`${formatCampaignFailure(error)}\n`);
     process.exitCode = 1;
   }
 }
