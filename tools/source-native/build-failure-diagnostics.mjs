@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import {SOURCE_FILES} from './build-failure-source-files.mjs';
 
 export {SOURCE_FILES};
-export const INPUT_ARCHIVE_SHA256='e5cf72cb056262a7f78ff1efeec00d33e36c5cc62adba83b0f17a0a8218e64d1';
+export const INPUT_ARCHIVE_SHA256='f58e12fe7c1056ba932b5ce2c6c5241b4b82b7b42669cbb12b3f66b12fcd0ab9';
 export const MAX_DIAGNOSTIC_BYTES=256*1024;
 export const DIAGNOSTIC_SCHEMA='nebular-build-failure-hints-v1';
 // build-app.mjs maps its staged workspace to this fixed virtual prefix.
