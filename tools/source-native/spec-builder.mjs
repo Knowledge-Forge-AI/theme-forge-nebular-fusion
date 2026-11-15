@@ -132,7 +132,7 @@ export async function buildSpec({ env = process.env } = {}) {
   const hostSpec = {
     schema: "nebular-host-input-preparation-v1",
     mode: "actual",
-    bundle: { archivePath: sourceArchive, archiveSha256: "06aebd33e8a65d44f0d129d696d5de8fa21efa84b8e8064db5b562cfe9cf4fe0", manifestRelativePath: "bundle-manifest.json" },
+    bundle: { archivePath: sourceArchive, archiveSha256: "e5cf72cb056262a7f78ff1efeec00d33e36c5cc62adba83b0f17a0a8218e64d1", manifestRelativePath: "bundle-manifest.json" },
     toolchains: { node, npm: npmCli, rust, cargo, compiler, linker, pkgConfig, systemLibraries: rustTargetLibDir, rustTargetLibDir, embeddedRuntime: paths.authenticatedNode },
     rustupRoot: rustupHome,
     rustupHome,
@@ -152,7 +152,7 @@ export async function buildSpec({ env = process.env } = {}) {
     retentionDays: RETENTION_DAYS,
     paths,
     tools,
-    inputs: { archive: sourceArchive, archiveSha256: "06aebd33e8a65d44f0d129d696d5de8fa21efa84b8e8064db5b562cfe9cf4fe0", archiveBytes: 8827498, archivePath: "authenticated-inputs/source-native/native-material-inputs59.tar.gz", verifier: { binding: { path: verifierBinding }, tarball: { path: verifierTarball, sha256: "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b" } } },
+    inputs: { archive: sourceArchive, archiveSha256: "e5cf72cb056262a7f78ff1efeec00d33e36c5cc62adba83b0f17a0a8218e64d1", archiveBytes: 8827502, archivePath: "authenticated-inputs/source-native/native-material-inputs59.tar.gz", verifier: { binding: { path: verifierBinding }, tarball: { path: verifierTarball, sha256: "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b" } } },
     host: { spec: join(campaign, "host-spec.json"), bridge: absolute(env.NEBULAR_HOST_BRIDGE ?? join(repo, "tools/source-native/host-bridge.mjs")), receipt: join(campaign, "host-receipt.json"), locator: join(campaign, "host-locator.json") },
     source: { checkout: repo, ...sourceIdentity },
     output,
