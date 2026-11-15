@@ -28,7 +28,7 @@ import { dirname, basename, join, relative, resolve, sep, isAbsolute } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const CONTROLLER_SCHEMA = "nebular.source-native-campaign66-controller-v1";
-export const EVIDENCE_SCHEMA = "nebular.source-native-campaign66-evidence-v1";
+export const EVIDENCE_SCHEMA = "nebular.source-native-campaign66-material-evidence-v1";
 export const REPOSITORY = "Knowledge-Forge-AI/theme-forge-nebular-fusion";
 export const REVIEWED_REF = "refs/heads/qualification/material-source-20261114";
 export const TARGET = "darwin-arm64";
@@ -71,6 +71,52 @@ export const REQUIRED_SOURCE_PIN_TESTS = Object.freeze([
   "sidecar::artifact::tests::source_build_scene_and_loom_pins_use_closed_typed_bindings",
   "sidecar::artifact::tests::source_build_compiled_pins_reject_resealed_native_identity",
 ]);
+
+export const REQUIRED_MATERIAL_TESTS = Object.freeze([
+  "release_smoke::tests::material_selection_is_single_use_and_not_a_directory_override",
+  "release_smoke::io::tests::material_fixture_rejects_links_modes_empty_large_and_nonregular_entries",
+]);
+const MATERIAL_STEPS = Object.freeze(["material-shell", "material-open-v2", "material-controls", "material-preview-light", "material-preview-dark", "material-invalidated", "material-recompile", "material-reset"]);
+
+const MATERIAL_FAILURE_REASONS = new Set(["CONFIG_REJECTED", "STAGE_TIMEOUT", "CONTROL_REJECTED", "CUSTODY_REJECTED", "PREVIEW_REJECTED", "INTERNAL_FAILURE"]);
+const MATERIAL_FAILURE_STAGES = [...MATERIAL_STEPS, "material-driver"];
+
+/** Labels are untrusted hints from one fixed public fixture, never failure disposition. */
+export function annotateMaterialSmokeFailure(error, receipt, source) {
+  if (!(error instanceof CampaignError)) return error;
+  try {
+    if (!["raw-archive", "npm-package"].includes(source) || receipt?.schema !== "nebular.release-smoke-receipt-v1"
+      || receipt.scenario !== "M" || receipt.status !== "fail" || receipt.driver?.scenario !== "M"
+      || !Array.isArray(receipt.driver.steps) || receipt.driver.steps.length > 9) return error;
+    const failed = receipt.driver.steps.find(step=>step?.ok === false);
+    if (!failed || !MATERIAL_FAILURE_STAGES.includes(failed.id) || !MATERIAL_FAILURE_REASONS.has(failed.detail)) return error;
+    error.materialSmokeSource = source;
+    error.materialSmokeStage = failed.id;
+    error.materialSmokeReason = failed.detail;
+  } catch { /* Malformed or partial diagnostic state must not replace the refusal. */ }
+  return error;
+}
+
+/** Accept exactly the two source-bound M runs, without forwarding raw receipt text. */
+export function validateMaterialSmokeRuns(runs, executableSha256) {
+  if (!Array.isArray(runs) || runs.length !== 2 || !SHA256.test(executableSha256)) fail("PUBLIC_MATERIAL_SMOKE");
+  const expected = ["raw-archive", "npm-package"];
+  if (new Set(runs.map(row=>row?.source)).size !== 2 || expected.some(source=>!runs.some(row=>row?.source===source))) fail("PUBLIC_MATERIAL_SMOKE");
+  const records = [];
+  for (const run of runs) {
+    if (run?.schema !== "nebular.native-rc-smoke-run-v1" || run.platform !== TARGET || run.scenario !== "M" || run.status !== "pass"
+      || run.executable?.sha256 !== executableSha256 || !Array.isArray(run.problems) || run.problems.length !== 0
+      || run.receipt?.status !== "pass" || !SHA256.test(run.receipt?.sha256 ?? "")
+      || run.checks?.materialSourceUnchanged !== true
+      || !Array.isArray(run.checks?.orphans) || run.checks.orphans.length !== 0
+      || !Array.isArray(run.checks?.persistentUserState?.changed) || run.checks.persistentUserState.changed.length !== 0) fail("PUBLIC_MATERIAL_SMOKE");
+    const steps=run.receipt.steps;
+    if (!Array.isArray(steps) || steps.length !== MATERIAL_STEPS.length
+      || steps.some((row,index)=>row?.id !== MATERIAL_STEPS[index] || row.ok !== true || row.via !== "dom")) fail("PUBLIC_MATERIAL_SMOKE");
+    records.push({source:run.source,receiptSha256:run.receipt.sha256,stepsPassed:steps.length,sourceUnchanged:true});
+  }
+  return Object.freeze({status:"passed-process-observation",runs:records,visualTranslucency:"not-claimed"});
+}
 
 const TEST_LIST_STAGES = new Set(["INSTALLED_MODES", "SOURCE_PINS"]);
 const DIAGNOSTIC_COMMAND_PHASES = new Set(["build-candidate", "test-list-installed-modes", "test-list-source-pins"]);
@@ -235,8 +281,8 @@ export function validateSpec(spec, env = process.env) {
   absolute(spec.inputs.verifier.tarball.path, "SPEC_VERIFIER_TARBALL");
   digest(spec.inputs.verifier.tarball.sha256, "SPEC_VERIFIER_DIGEST");
   if (spec.inputs.verifier.tarball.sha256 !== "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b") fail("SPEC_VERIFIER_DIGEST");
-  if (spec.inputs.archiveSha256 !== "0590773e52a7c4e5c7c324c92c662374444a25a5f297ff82d4b33e28f1feab3c") fail("SPEC_ARCHIVE_DIGEST");
-  if (spec.inputs.archiveBytes !== 8840488) fail("SPEC_ARCHIVE_SIZE");
+  if (spec.inputs.archiveSha256 !== "aa909485e710749fa23eef90f6ffb122b6cb9f57e6e9a4f9bc1284fb9173a050") fail("SPEC_ARCHIVE_DIGEST");
+  if (spec.inputs.archiveBytes !== 8846220) fail("SPEC_ARCHIVE_SIZE");
   if (!isRecord(spec.host)) fail("SPEC_HOST");
   for (const key of ["spec", "bridge", "receipt", "locator"]) absolute(spec.host[key], `SPEC_HOST_${key.toUpperCase()}`);
   if (!isRecord(spec.source) || typeof spec.source.commit !== "string") fail("SPEC_SOURCE");
@@ -708,7 +754,13 @@ export function formatCampaignFailure(error) {
     && PAYLOAD_MEMBER_CLASSES.has(error.payloadMemberClass)
     && (PAYLOAD_PREFIX_SOURCES.includes(error.payloadPrefixSource) || error.payloadPrefixSource === "UNCLASSIFIED");
   const locationHint = locationPair ? `\nSOURCE_NATIVE_PAYLOAD_MEMBER_CLASS_${error.payloadMemberClass}\nSOURCE_NATIVE_PAYLOAD_PREFIX_SOURCE_${error.payloadPrefixSource}` : "";
-  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}${locationHint}`;
+  const materialPair = error instanceof CampaignError
+    && ["raw-archive", "npm-package"].includes(error.materialSmokeSource)
+    && MATERIAL_FAILURE_STAGES.includes(error.materialSmokeStage)
+    && MATERIAL_FAILURE_REASONS.has(error.materialSmokeReason);
+  const materialHint = materialPair
+    ? `\nSOURCE_NATIVE_MATERIAL_SOURCE_${error.materialSmokeSource === "raw-archive" ? "RAW_ARCHIVE" : "NPM_PACKAGE"}\nSOURCE_NATIVE_MATERIAL_STAGE_${error.materialSmokeStage}\nSOURCE_NATIVE_MATERIAL_REASON_${error.materialSmokeReason}` : "";
+  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}${locationHint}${materialHint}`;
 }
 
 export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
@@ -795,7 +847,7 @@ export function parseRustTestSummary(text, expected) {
 export function validateRustTestList(text, names, guard) {
   if (typeof text !== "string" || Buffer.byteLength(text) > MAX_COMMAND_OUTPUT) fail("RUST_TEST_LIST");
   const lines=text.split(/\r?\n/u).filter(Boolean);
-  if (lines.length !== names.length+1 || lines.at(-1) !== `${names.length} tests, 0 benchmarks`) fail("RUST_TEST_LIST");
+  if (lines.length !== names.length+1 || lines.at(-1) !== `${names.length} ${names.length === 1 ? "test" : "tests"}, 0 benchmarks`) fail("RUST_TEST_LIST");
   const observed=lines.slice(0,-1).map(line=>line.endsWith(": test")?line.slice(0,-6):null);
   if (new Set(observed).size !== names.length || names.some(name=>!observed.includes(name))) fail("RUST_TEST_LIST");
   const record = guard(text);
@@ -885,7 +937,7 @@ async function materializePublicArtifacts(spec, packageRecord) {
   return Object.freeze({ directory: "public", files: copies.map(([, destination]) => destination.slice(spec.paths.publicDir.length + 1)).sort(), allowlist: [...publicArtifactAllowlist()] });
 }
 
-export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification, nestedSeal, packageRecord, realUserState }) {
+export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification, nestedSeal, packageRecord, realUserState, materialSmoke }) {
   if (!bridge || bridge.nativeAcceptance !== "not-claimed") fail("PUBLIC_BRIDGE");
   if (bridge.status !== "source-receipt-bridged" || bridge.provenance?.fixtureOnly !== false
       || bridge.provenance?.gitObservation !== "checkout-rev-parse"
@@ -894,11 +946,20 @@ export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, test
   if (!tests?.installedModes || !tests?.sourcePins || tests.installedModes.status !== "passed-process-observation" || tests.sourcePins.status !== "passed-process-observation"
       || tests.installedModes.passed !== 4 || tests.installedModes.failed !== 0 || tests.installedModes.expected !== 4
       || tests.sourcePins.passed !== 2 || tests.sourcePins.failed !== 0 || tests.sourcePins.expected !== 2) fail("PUBLIC_TESTS");
+  if (tests.materialFixture?.status !== "passed-process-observation" || tests.materialFixture.expected !== 2
+      || tests.materialFixture.passed !== 2 || tests.materialFixture.failed !== 0
+      || !Array.isArray(tests.materialFixture.tests) || tests.materialFixture.tests.length !== 2
+      || REQUIRED_MATERIAL_TESTS.some(name=>!tests.materialFixture.tests.some(row=>row.name===name&&row.passed===1&&row.failed===0))) fail("PUBLIC_TESTS");
+  if (materialSmoke?.status !== "passed-process-observation" || materialSmoke.visualTranslucency !== "not-claimed"
+      || !Array.isArray(materialSmoke.runs) || materialSmoke.runs.length !== 2
+      || new Set(materialSmoke.runs.map(row=>row.source)).size !== 2
+      || ["raw-archive","npm-package"].some(source=>!materialSmoke.runs.some(row=>row.source===source))
+      || materialSmoke.runs.some(row=>!SHA256.test(row.receiptSha256??"")||row.stepsPassed!==8||row.sourceUnchanged!==true)) fail("PUBLIC_MATERIAL_SMOKE");
   if (qualification?.status !== "pass" || !Array.isArray(qualification.checks) || qualification.checks.length === 0
       || qualification.checks.some(row=>row.ok!==true)) fail("PUBLIC_QUALIFICATION");
   if (nestedSeal?.status !== "pass" || nestedSeal.schema !== "nebular.source-native-packaging-verification-v1"
       || nestedSeal.authorityStatus !== "held-self-derived-record" || nestedSeal.manualConfirmation !== "not-performed") fail("PUBLIC_PACKAGING_SEAL");
-  if (realUserState?.method !== "fixed-app-namespace-absence-metadata" || realUserState.locations !== 63 || realUserState.observations !== 3 || realUserState.status !== "passed") fail("PUBLIC_USER_STATE");
+  if (realUserState?.method !== "fixed-app-namespace-absence-metadata" || realUserState.locations !== 63 || realUserState.observations !== 5 || realUserState.status !== "passed") fail("PUBLIC_USER_STATE");
   if (bridge.version !== spec.candidateVersion || sourceReceipt.version !== spec.candidateVersion
       || packageRecord?.version !== spec.candidateVersion || bridge.source.commit !== spec.source.commit
       || bridge.sourceCandidate !== sourceReceipt.sourceCandidate || bridge.sourceReceiptIdentity !== sourceReceipt.identity
@@ -908,13 +969,14 @@ export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, test
     status: "held-source-native",
     nativeAcceptance: "not-claimed",
     hosted: true,
-    qualificationScope: "macos-arm64-source-build-and-core-scenario-a",
-    deferredChecks: ["material-controls-gui", "appearance-pair", "paired-v2", "linux-native"],
+    qualificationScope: "macos-arm64-source-build-core-a-and-native-material-m",
+    deferredChecks: ["material-visual-compositing", "appearance-pair", "paired-v2-complete", "linux-native"],
     publication: false,
     productionSigning: false,
     developerAdHocSeal: "existing-build-step",
     manualConfirmation: "not-performed",
     realUserState: {...realUserState},
+    materialSmoke,
     repository: context.repository,
     ref: context.ref,
     candidateVersion: spec.candidateVersion,
@@ -1055,11 +1117,21 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   const sourceRun = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", "sidecar::artifact::tests::source_build_", "--", "--test-threads=1"], rust.cwd, scrubEnvironment(rust.environment), "text"));
   resultOk(sourceRun, "NATIVE_TESTS");
   const sourceSummary = parseRustTestSummary(sourceRun.text ?? "", source.tests);
+  const materialTests = [];
+  for (const name of REQUIRED_MATERIAL_TESTS) {
+    const listing = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", name, "--", "--exact", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+    resultOk(listing, "NATIVE_TESTS");
+    const present = validateRustTestList(listing.text, [name], () => ({tests:1,status:"present-not-yet-executed"}));
+    const executed = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", name, "--", "--exact", "--test-threads=1"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+    resultOk(executed, "NATIVE_TESTS");
+    materialTests.push({name,...parseRustTestSummary(executed.text ?? "",present.tests)});
+  }
   state.phaseIndex += 1;
   state.completed.push("native-tests");
   const tests = {
     installedModes: { ...installedSummary, expected: installed.tests, status: "passed-process-observation" },
     sourcePins: { ...sourceSummary, expected: source.tests, status: "passed-process-observation" },
+    materialFixture: {status:"passed-process-observation",expected:2,passed:materialTests.reduce((n,row)=>n+row.passed,0),failed:materialTests.reduce((n,row)=>n+row.failed,0),tests:materialTests},
     nativeAcceptance: "not-claimed",
   };
 
@@ -1100,14 +1172,28 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   for (const [label, launchRoot, sourceLabel, scenario] of [
     ["darwin-arm64-A-raw", join(spec.paths.smoke, "raw"), "raw-archive", "A"],
     ["darwin-arm64-A-npm", join(spec.paths.smoke, "npm/package/payload"), "npm-package", "A"],
+    ["darwin-arm64-M-raw", join(spec.paths.smoke, "raw"), "raw-archive", "M"],
+    ["darwin-arm64-M-npm", join(spec.paths.smoke, "npm/package/payload"), "npm-package", "M"],
   ]) {
     // Keep the legacy observer campaign-scoped. The outer metadata-only
     // observer checks the real account without hashing any profile contents.
-    await phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-smoke.mjs"), "--platform", TARGET, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", candidateSource, "--evidence", spec.output.smokeDir, "--source", sourceLabel, "--label", label], sourceRoot, smokeObserverEnvironment(commandEnv,env)));
+    try {
+      await phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-smoke.mjs"), "--platform", TARGET, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", candidateSource, "--evidence", spec.output.smokeDir, "--source", sourceLabel, "--label", label], sourceRoot, smokeObserverEnvironment(commandEnv,env)));
+    } catch (error) {
+      if (scenario === "M") {
+        let receipt = null;
+        try { receipt = await readJson(join(spec.output.smokeDir, `${label}.receipt.json`), "MATERIAL_DIAGNOSTIC"); } catch { /* bounded hint unavailable */ }
+        annotateMaterialSmokeFailure(error, receipt, sourceLabel);
+      }
+      throw error;
+    }
     await assertRunnerAppStateAbsent(userStateLocations,accountHome);
   }
-  // This first-host checkpoint covers core Scenario A only. Paired/material
-  // controls and appearance-pair acceptance remain explicitly separate.
+  // M proves the connected native controls/ack path; visual frame composition stays separate.
+  const materialSmoke = validateMaterialSmokeRuns([
+    await readJson(join(spec.output.smokeDir,"darwin-arm64-M-raw.run.json"),"PUBLIC_MATERIAL_SMOKE"),
+    await readJson(join(spec.output.smokeDir,"darwin-arm64-M-npm.run.json"),"PUBLIC_MATERIAL_SMOKE"),
+  ], packageRecord.raw.executableSha256);
   const sourceReceipt = await readJson(join(candidateRoot, "build-receipt.json"), "SOURCE_RECEIPT");
   if (!maintained?.inventoryTree) fail("MAINTAINED_API");
   await makeLegacyObservation({ spec, authority, sourceReceipt, stagedSource: candidateSource, payloadRoot, maintained });
@@ -1130,8 +1216,8 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   state.phaseIndex += 1;
   state.completed.push("nested-packaging-seal");
   const qualificationRecord = await readJson(spec.output.qualification, "QUALIFICATION");
-  const realUserState={method:"fixed-app-namespace-absence-metadata",locations:63,observations:3,status:"passed"};
-  const evidence = buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification: qualificationRecord, nestedSeal, packageRecord,realUserState });
+  const realUserState={method:"fixed-app-namespace-absence-metadata",locations:63,observations:5,status:"passed"};
+  const evidence = buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification: qualificationRecord, nestedSeal, packageRecord,realUserState,materialSmoke });
   await writeExclusiveJson(spec.output.publicEvidence, evidence, "PUBLIC_EVIDENCE_WRITE");
   await materializePublicArtifacts(spec, packageRecord);
   state.phaseIndex += 1;
