@@ -235,8 +235,8 @@ export function validateSpec(spec, env = process.env) {
   absolute(spec.inputs.verifier.tarball.path, "SPEC_VERIFIER_TARBALL");
   digest(spec.inputs.verifier.tarball.sha256, "SPEC_VERIFIER_DIGEST");
   if (spec.inputs.verifier.tarball.sha256 !== "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b") fail("SPEC_VERIFIER_DIGEST");
-  if (spec.inputs.archiveSha256 !== "5af60b98f2f4163c34f754a855617cc01512715f21d0bfa1ff4053b6bfb4df00") fail("SPEC_ARCHIVE_DIGEST");
-  if (spec.inputs.archiveBytes !== 8839869) fail("SPEC_ARCHIVE_SIZE");
+  if (spec.inputs.archiveSha256 !== "b0849cd7cd9dc55e8f6c5db2d8386a62e97e5cc1d15ca23ea8700bc2c70909ff") fail("SPEC_ARCHIVE_DIGEST");
+  if (spec.inputs.archiveBytes !== 8839948) fail("SPEC_ARCHIVE_SIZE");
   if (!isRecord(spec.host)) fail("SPEC_HOST");
   for (const key of ["spec", "bridge", "receipt", "locator"]) absolute(spec.host[key], `SPEC_HOST_${key.toUpperCase()}`);
   if (!isRecord(spec.source) || typeof spec.source.commit !== "string") fail("SPEC_SOURCE");
@@ -615,7 +615,50 @@ function ownDiagnosticString(error, key) {
   } catch { return null; }
 }
 
-export function payloadPathScanFailure(error, stage) {
+const PAYLOAD_MEMBER_CLASSES = new Set(["GUI_EXECUTABLE", "SIDECAR_RUNTIME", "SIDECAR_RESOURCE", "LOOM_RESOURCE", "SOLAR_RESOURCE", "SCENE_RESOURCE", "RELEASE_NOTICE", "OTHER_BUNDLE_RESOURCE", "OTHER_BUNDLE_MEMBER", "UNCLASSIFIED"]);
+const PAYLOAD_PREFIX_SOURCES = ["CAMPAIGN_ROOT", "BUILD_INPUT_PARENT", "RUNNER_TEMP", "RUNNER_HOME", "CHECKOUT"];
+
+export function payloadMatchLabels(error, prefixes) {
+  const labels = { memberClass: "UNCLASSIFIED", prefixSource: "UNCLASSIFIED" };
+  try {
+    const message = ownDiagnosticString(error, "message");
+    const marker = "Shipped member retains a known build-path prefix: ";
+    if (!message?.startsWith(marker)) return labels;
+    if (message.length > marker.length + 4096) return labels;
+    const name = message.slice(marker.length);
+    const parts = name.split("/");
+    const safe = name.length > 0 && name.length <= 4096 && /^[\x20-\x7e]+$/.test(name)
+      && !name.includes("\\") && parts.every(part => part !== "" && part !== "." && part !== "..");
+    if (safe) {
+      const bundle = "Theme Forge Nebular Fusion.app/Contents/";
+      if (name === bundle + "MacOS/theme-forge-nebular-fusion") labels.memberClass = "GUI_EXECUTABLE";
+      else if (name === bundle + "MacOS/tfsb-studio-service") labels.memberClass = "SIDECAR_RUNTIME";
+      else if (name.startsWith(bundle + "Resources/")) {
+        const resource = name.slice((bundle + "Resources/").length);
+        labels.memberClass = "OTHER_BUNDLE_RESOURCE";
+        for (const [prefix, category] of [["sidecar-payload/", "SIDECAR_RESOURCE"], ["loom-payload/", "LOOM_RESOURCE"], ["loom-adapter/", "LOOM_RESOURCE"], ["solar-sail-payload/", "SOLAR_RESOURCE"], ["solar-sail-adapter/", "SOLAR_RESOURCE"], ["scene-payload/", "SCENE_RESOURCE"], ["release-notices/", "RELEASE_NOTICE"]]) {
+          if (resource.startsWith(prefix)) { labels.memberClass = category; break; }
+        }
+      } else if (name.startsWith(bundle)) labels.memberClass = "OTHER_BUNDLE_MEMBER";
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(error, "knownPrefixIndex");
+    const index = descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : null;
+    if (!Number.isInteger(index) || index < 0 || index >= 10 || !Array.isArray(prefixes) || prefixes.length !== 5) return labels;
+    const needles = [], owners = [];
+    for (let i = 0; i < prefixes.length; i++) {
+      const prefix = prefixes[i];
+      if (!prefix) continue;
+      if (typeof prefix !== "string" || prefix.length > 4096) return labels;
+      for (const spelling of [prefix, resolve(prefix)]) {
+        if (!needles.includes(spelling)) { needles.push(spelling); owners.push(PAYLOAD_PREFIX_SOURCES[i]); }
+      }
+    }
+    if (index < owners.length) labels.prefixSource = owners[index];
+  } catch { /* Untrusted metadata must never replace the existing refusal. */ }
+  return labels;
+}
+
+export function payloadPathScanFailure(error, stage, prefixes) {
   const failure = new CampaignError("PAYLOAD_PATH_SCAN");
   if (stage === "MODULE") {
     failure.payloadScanStage = "MODULE";
@@ -631,6 +674,11 @@ export function payloadPathScanFailure(error, stage) {
     else if (PAYLOAD_SCAN_IO_CODES.has(code)) reason = "IO_FAILURE";
     failure.payloadScanStage = "SCAN";
     failure.payloadScanReason = reason;
+    if (reason === "PREFIX_MATCH" && prefixes !== undefined) {
+      const location = payloadMatchLabels(error, prefixes);
+      failure.payloadMemberClass = location.memberClass;
+      failure.payloadPrefixSource = location.prefixSource;
+    }
   }
   return failure;
 }
@@ -656,7 +704,11 @@ export function formatCampaignFailure(error) {
     && ((error.payloadScanStage === "MODULE" && error.payloadScanReason === "MODULE_UNAVAILABLE")
       || (error.payloadScanStage === "SCAN" && PAYLOAD_SCAN_REASONS.has(error.payloadScanReason)));
   const payloadHint = payloadPair ? `\nSOURCE_NATIVE_PAYLOAD_SCAN_STAGE_${error.payloadScanStage}\nSOURCE_NATIVE_PAYLOAD_SCAN_REASON_${error.payloadScanReason}` : "";
-  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}`;
+  const locationPair = payloadPair && error.payloadScanStage === "SCAN" && error.payloadScanReason === "PREFIX_MATCH"
+    && PAYLOAD_MEMBER_CLASSES.has(error.payloadMemberClass)
+    && (PAYLOAD_PREFIX_SOURCES.includes(error.payloadPrefixSource) || error.payloadPrefixSource === "UNCLASSIFIED");
+  const locationHint = locationPair ? `\nSOURCE_NATIVE_PAYLOAD_MEMBER_CLASS_${error.payloadMemberClass}\nSOURCE_NATIVE_PAYLOAD_PREFIX_SOURCE_${error.payloadPrefixSource}` : "";
+  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}${locationHint}`;
 }
 
 export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
@@ -1015,8 +1067,9 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   // covers the fresh toolchain/preparation roots owned by this controller.
   const scanner = await import(pathToFileURL(join(spec.paths.bootstrapTools,"scan-shipped-paths.mjs")).href).catch(() => null);
   if (!scanner?.scanShippedPaths) throw payloadPathScanFailure(null,"MODULE");
-  try {await scanner.scanShippedPaths(payloadRoot,[dirname(spec.paths.bootstrapRoot),dirname(buildInputsPath),env.RUNNER_TEMP,env.HOME,spec.source.checkout],{preserveSpellings:true});}
-  catch(error) {throw payloadPathScanFailure(error,"SCAN");}
+  const payloadPrefixes = [dirname(spec.paths.bootstrapRoot),dirname(buildInputsPath),env.RUNNER_TEMP,env.HOME,spec.source.checkout];
+  try {await scanner.scanShippedPaths(payloadRoot,payloadPrefixes,{preserveSpellings:true});}
+  catch(error) {throw payloadPathScanFailure(error,"SCAN",payloadPrefixes);}
   state.phaseIndex += 1;
   state.completed.push("payload-path-scan");
 

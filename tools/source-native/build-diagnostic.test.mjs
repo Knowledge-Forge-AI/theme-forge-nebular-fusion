@@ -364,3 +364,61 @@ test('payload huge private suffix stays out of bounded diagnostic output',()=>{
  const output=formatCampaignFailure(failure);assert.ok(output.length<200);assert.ok(!output.includes(privatePayloadMarker));
 });
 
+
+
+const {payloadMatchLabels}=await import('./controller.mjs');
+const {resolve:payloadResolve}=await import('node:path');
+const scanPrefixes=['/fixture/bootstrap','/fixture/intake','/fixture/temp','/fixture/home','/fixture/checkout'];
+const memberRoot='Theme Forge Nebular Fusion.app/Contents/';
+function locatedError(member,index){
+ const error=new Error('Shipped member retains a known build-path prefix: '+member);
+ Object.defineProperty(error,'knownPrefixIndex',{value:index});return error;
+}
+test('payload member classification uses only closed bundle component names',()=>{
+ const cases=[['MacOS/theme-forge-nebular-fusion','GUI_EXECUTABLE'],['MacOS/tfsb-studio-service','SIDECAR_RUNTIME'],['Resources/sidecar-payload/private-member','SIDECAR_RESOURCE'],['Resources/loom-payload/private-member','LOOM_RESOURCE'],['Resources/loom-adapter/private-member','LOOM_RESOURCE'],['Resources/solar-sail-payload/private-member','SOLAR_RESOURCE'],['Resources/solar-sail-adapter/private-member','SOLAR_RESOURCE'],['Resources/scene-payload/private-member','SCENE_RESOURCE'],['Resources/release-notices/private-member','RELEASE_NOTICE'],['Resources/other/private-member','OTHER_BUNDLE_RESOURCE'],['other/private-member','OTHER_BUNDLE_MEMBER']];
+ for(const [suffix,expected] of cases){const labels=payloadMatchLabels(locatedError(memberRoot+suffix,0),scanPrefixes);assert.deepEqual(labels,{memberClass:expected,prefixSource:'CAMPAIGN_ROOT'});assert.ok(!JSON.stringify(labels).includes('private-member'))}
+ assert.equal(payloadMatchLabels(locatedError('unknown/private-member',0),scanPrefixes).memberClass,'UNCLASSIFIED');
+});
+test('payload prefix source tracks the first deduplicated declared spelling',()=>{
+ const names=['CAMPAIGN_ROOT','BUILD_INPUT_PARENT','RUNNER_TEMP','RUNNER_HOME','CHECKOUT'];
+ for(let i=0;i<5;i++)assert.equal(payloadMatchLabels(locatedError(memberRoot+'MacOS/theme-forge-nebular-fusion',i),scanPrefixes).prefixSource,names[i]);
+ const duplicated=[scanPrefixes[0],scanPrefixes[0],undefined,scanPrefixes[3],scanPrefixes[4]];
+ assert.equal(payloadMatchLabels(locatedError('unknown',1),duplicated).prefixSource,'RUNNER_HOME');
+});
+test('payload prefix metadata never invokes getters or retains original properties',()=>{
+ let reads=0;const error=locatedError(memberRoot+'Resources/scene-payload/private',0);
+ const getter=new Error(error.message);Object.defineProperty(getter,'knownPrefixIndex',{get(){reads++;throw new Error('never-display-location')}});
+ const labels=payloadMatchLabels(getter,scanPrefixes);assert.equal(reads,0);assert.equal(labels.prefixSource,'UNCLASSIFIED');
+ const bad=new Proxy({},{getOwnPropertyDescriptor(){throw new Error('never-display-location')}});
+ assert.deepEqual(payloadMatchLabels(bad,scanPrefixes),{memberClass:'UNCLASSIFIED',prefixSource:'UNCLASSIFIED'});
+ assert.deepEqual(Object.keys(labels).sort(),['memberClass','prefixSource']);
+});
+test('payload member traversal and control characters remain unclassified without retention',()=>{
+ for(const name of ['/'+memberRoot+'Resources/a',memberRoot+'Resources/../a',memberRoot+'Resources/./a',memberRoot+'Resources//a',memberRoot+'Resources/a\\b',memberRoot+'Resources/a\nSECRET',memberRoot+'Resources/'+('x'.repeat(4097))]){
+  const labels=payloadMatchLabels(locatedError(name,0),scanPrefixes);assert.equal(labels.memberClass,'UNCLASSIFIED');assert.ok(!JSON.stringify(labels).includes('SECRET'));
+ }
+});
+test('payload location formatting requires the existing prefix refusal and both closed enums',()=>{
+ const failure=payloadPathScanFailure(locatedError(memberRoot+'MacOS/theme-forge-nebular-fusion',3),'SCAN',scanPrefixes);
+ const output=formatCampaignFailure(failure);assert.ok(output.endsWith('SOURCE_NATIVE_PAYLOAD_MEMBER_CLASS_GUI_EXECUTABLE\nSOURCE_NATIVE_PAYLOAD_PREFIX_SOURCE_RUNNER_HOME'));
+ assert.ok(!output.includes(memberRoot));assert.ok(!output.includes(scanPrefixes[3]));
+ for(const [key,value] of [['payloadMemberClass','PRIVATE'],['payloadPrefixSource','PRIVATE']]){
+  const changed=payloadPathScanFailure(locatedError(memberRoot+'MacOS/theme-forge-nebular-fusion',3),'SCAN',scanPrefixes);changed[key]=value;assert.ok(!formatCampaignFailure(changed).includes('PRIVATE'));assert.ok(!formatCampaignFailure(changed).includes('SOURCE_NATIVE_PAYLOAD_MEMBER_CLASS_'));
+ }
+ for(const code of ['NATIVE_TESTS','PAYLOAD_PATH_SCAN']){const changed=new CampaignError(code);changed.payloadScanStage='SCAN';changed.payloadScanReason='IO_FAILURE';changed.payloadMemberClass='GUI_EXECUTABLE';changed.payloadPrefixSource='RUNNER_HOME';assert.ok(!formatCampaignFailure(changed).includes('SOURCE_NATIVE_PAYLOAD_MEMBER_CLASS_'))}
+});
+test('payload location indices and prefix lists fail closed to unclassified',()=>{
+ for(const index of [-1,10,Infinity,NaN,'0',null,1.5])assert.equal(payloadMatchLabels(locatedError('unknown',index),scanPrefixes).prefixSource,'UNCLASSIFIED');
+ for(const prefixes of [undefined,null,[],[1,2,3,4,5],[...scanPrefixes,'extra'],['x'.repeat(4097),...scanPrefixes.slice(1)]])assert.equal(payloadMatchLabels(locatedError('unknown',0),prefixes).prefixSource,'UNCLASSIFIED');
+});
+test('payload source-label mapping matches exact scanner deduplication over bounded corpus',()=>{
+ const names=['CAMPAIGN_ROOT','BUILD_INPUT_PARENT','RUNNER_TEMP','RUNNER_HOME','CHECKOUT'];
+ for(let mask=0;mask<256;mask++){
+  const prefixes=scanPrefixes.map((p,i)=>(mask&(1<<i))?undefined:((mask&32)&&i>0?scanPrefixes[0]:((mask&64)?p+'/../'+p.split('/').at(-1):((mask&128)?p+'/':p))));
+  const needles=[...new Set(prefixes.filter(Boolean).flatMap(p=>[p,payloadResolve(p)]))];
+  for(let index=0;index<needles.length;index++){
+   let expected;for(let i=0;i<5;i++)if(prefixes[i]&&[prefixes[i],payloadResolve(prefixes[i])].includes(needles[index])){expected=names[i];break}
+   assert.equal(payloadMatchLabels(locatedError('unknown',index),prefixes).prefixSource,expected);
+  }
+ }
+});
