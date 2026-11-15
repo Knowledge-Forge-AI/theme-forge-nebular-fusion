@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import { userInfo } from "node:os";
 import { createChildProcessPort } from "./host-inputs.mjs";
+import { classifyBuildOutput, validateBuildDiagnostic, INPUT_ARCHIVE_SHA256 } from "./build-failure-diagnostics.mjs";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -23,7 +24,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, basename, join, relative, resolve, sep } from "node:path";
+import { dirname, basename, join, relative, resolve, sep, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const CONTROLLER_SCHEMA = "nebular.source-native-campaign66-controller-v1";
@@ -373,20 +374,32 @@ function validateCommand(program, args, cwd, environment) {
  * capture is transient and must be consumed by the caller before public
  * evidence is written; raw child text is never placed in a result record.
  */
-export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COMMAND_TIMEOUT_MS, capture = "none", phase, spawnImpl = spawn }) {
+export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COMMAND_TIMEOUT_MS, capture = "none", phase, spawnImpl = spawn, buildDiagnosticRoots = [] }) {
   validateCommand(program, args, cwd, env);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > COMMAND_TIMEOUT_MS) fail("COMMAND_TIMEOUT");
   if (!["none", "text", "json"].includes(capture)) fail("COMMAND_CAPTURE");
   const chunks = [];
+  const buildChunks = [];
+  const collectBuildDiagnostic = phase === "build-candidate" && Array.isArray(buildDiagnosticRoots) && buildDiagnosticRoots.length === 2;
   let stdoutBytes = 0, stderrBytes = 0;
   const port = createChildProcessPort({ timeoutMs, killGraceMs: COMMAND_KILL_GRACE_MS, spawnImpl: (p, argv, options) => {
     const child = spawnImpl(p, argv, options);
     child.stdout?.on("data", data => {
       const bytes = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
       stdoutBytes += bytes.length;
-      if (capture !== "none" && stdoutBytes <= MAX_COMMAND_OUTPUT) chunks.push(Buffer.from(bytes));
+      if (collectBuildDiagnostic) {
+        const available = Math.max(0, MAX_COMMAND_OUTPUT - (stdoutBytes - bytes.length));
+        if (available) chunks.push(Buffer.from(bytes.subarray(0, available)));
+      } else if (capture !== "none" && stdoutBytes <= MAX_COMMAND_OUTPUT) chunks.push(Buffer.from(bytes));
     });
-    child.stderr?.on("data", data => { stderrBytes += Buffer.byteLength(data); });
+    child.stderr?.on("data", data => {
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+      stderrBytes += bytes.length;
+      if (collectBuildDiagnostic) {
+        const available = Math.max(0, MAX_COMMAND_OUTPUT - (stderrBytes - bytes.length));
+        if (available) buildChunks.push(Buffer.from(bytes.subarray(0, available)));
+      }
+    });
     return child;
   }});
   const result = await port.run({ program, args, cwd, env, maxOutputBytes: MAX_COMMAND_OUTPUT, timeoutMs });
@@ -399,6 +412,14 @@ export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COM
     } catch {
       // Diagnostic capture must preserve this phase's old exit-zero semantics.
       if (!(phase === "prepare-host-inputs" && result.exitCode === 0)) output.failure = "INVALID_RESULT";
+    }
+  }
+  if (collectBuildDiagnostic && (result.failure != null || result.exitCode !== 0 || result.cleanup !== "leader-close-observed")) {
+    const partial = stdoutBytes > MAX_COMMAND_OUTPUT || stderrBytes > MAX_COMMAND_OUTPUT || result.cleanup !== "leader-close-observed" || result.failure != null || result.signal != null;
+    try {
+      output.buildDiagnostic = classifyBuildOutput({stdout:Buffer.concat(chunks),stderr:Buffer.concat(buildChunks),roots:buildDiagnosticRoots,partial});
+    } catch {
+      output.buildDiagnostic = {schema:"nebular-build-failure-hints-v1",markers:["DIAGNOSTIC_INPUT_REFUSED"],rustCodes:[],systemCodes:[],sites:[],flags:{longLine:false,unmappedSite:false,partial}};
     }
   }
   return Object.freeze(output);
@@ -530,12 +551,35 @@ export function hostPreparationBoundary(result) {
   return "INCOHERENT_RESULT";
 }
 
+// Build cause and cleanup are separate observations. Frozen builders can launch
+// detached inner groups; unconfirmed cleanup must not erase a known stop cause.
+export function buildProcessBoundary(result) {
+  if (!isRecord(result)) return "INCOHERENT_RESULT";
+  if (result.failure != null) {
+    const names = new Map([
+      ["LIMIT", "PORT_LIMIT"], ["SPAWN", "SPAWN_FAILURE"], ["ERROR", "CHILD_ERROR"],
+      ["TIMEOUT", "TIMEOUT"], ["OUTPUT_LIMIT", "OUTPUT_LIMIT"], ["INVALID_RESULT", "INVALID_RESULT"],
+    ]);
+    return names.get(result.failure) ?? "UNKNOWN_PROCESS_FAILURE";
+  }
+  if (result.exitCode === 0) return "COMPLETED";
+  if (result.exitCode === null && typeof result.signal === "string" && result.signal.length > 0) return "SIGNALED";
+  if (Number.isInteger(result.exitCode) && result.exitCode !== 0) return "UNACCEPTED_NONZERO";
+  return "INCOHERENT_RESULT";
+}
+
 export function requirePhaseResult(result, phase) {
   try {
     return resultOk(result, phase === "prepare-host-inputs" ? hostPreparationFailureCode(result) : `${phase.replaceAll("-", "_").toUpperCase()}_FAILED`);
   } catch (error) {
     if (phase === "prepare-host-inputs" && error instanceof CampaignError) {
       error.preparationBoundary = hostPreparationBoundary(result);
+    }
+    if (phase === "build-candidate" && error instanceof CampaignError) {
+      error.buildBoundary = buildProcessBoundary(result);
+      error.buildCleanupUnconfirmed = result?.cleanup !== "leader-close-observed";
+      const diagnostic = validateBuildDiagnostic(result?.buildDiagnostic);
+      if (diagnostic) error.buildDiagnostic = diagnostic;
     }
     throw error;
   }
@@ -545,7 +589,17 @@ export function formatCampaignFailure(error) {
   const code = error instanceof CampaignError ? error.code : "INTERNAL";
   const boundary = error instanceof CampaignError && PREPARATION_BOUNDARIES.has(error.preparationBoundary)
     ? `\nSOURCE_NATIVE_PREPARATION_BOUNDARY_${error.preparationBoundary}` : "";
-  return `SOURCE_NATIVE_${code}${boundary}`;
+  const diagnostic = error instanceof CampaignError ? validateBuildDiagnostic(error.buildDiagnostic) : null;
+  const buildBoundary = error instanceof CampaignError && PREPARATION_BOUNDARIES.has(error.buildBoundary)
+    ? `\nSOURCE_NATIVE_BUILD_BOUNDARY_${error.buildBoundary}` : "";
+  const buildCleanup = error instanceof CampaignError && error.buildCleanupUnconfirmed === true
+    ? "\nSOURCE_NATIVE_BUILD_CLEANUP_UNCONFIRMED" : "";
+  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}`;
+}
+
+export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
+  if(phase!=="build-candidate"||archiveSha256!==INPUT_ARCHIVE_SHA256||typeof sourceRoot!=="string"||!isAbsolute(sourceRoot)||typeof candidateRoot!=="string"||!isAbsolute(candidateRoot))return {};
+  return {buildDiagnosticRoots:[sourceRoot,join(candidateRoot,"work/source")]};
 }
 
 async function phaseRun(state, phase, runner, command) {
@@ -805,7 +859,8 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
     GITHUB_RUN_ATTEMPT: env.GITHUB_RUN_ATTEMPT,
     GITHUB_WORKSPACE: env.GITHUB_WORKSPACE,
   });
-  const resultRunner = async ({ phase, program, args, cwd, env: phaseEnv = commandEnv, capture = "none" }) => run({ phase, program, args, cwd, env: phaseEnv, capture, timeoutMs: COMMAND_TIMEOUT_MS });
+  let preparedSourceRoot = null;
+  const resultRunner = async ({ phase, program, args, cwd, env: phaseEnv = commandEnv, capture = "none" }) => run({ phase, program, args, cwd, env: phaseEnv, capture, timeoutMs: COMMAND_TIMEOUT_MS, ...buildDiagnosticOptions(phase,spec.inputs.archiveSha256,preparedSourceRoot,spec.paths.candidate) });
 
   const python=await phaseRun(state,"bootstrap-python-readback",resultRunner,command(spec.tools.python,["--version"],spec.paths.bootstrapRoot,commandEnv,"text"));
   if (!/^Python 3\.13\.12\r?\n?$/u.test(python.text??"")) fail("PYTHON_VERSION");
@@ -862,6 +917,7 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   const sourceRoot = absolute(authority.inputs?.sourceRoot, "BUILD_SOURCE_ROOT");
   if (!pathInside(dirname(buildInputsPath), sourceRoot)) fail("BUILD_SOURCE_ROOT");
   const nativeCandidateScript = join(sourceRoot, "tools/native-candidate-build.mjs");
+  preparedSourceRoot = sourceRoot;
   await phaseRun(state, "build-candidate", resultRunner, command(spec.paths.authenticatedNode, [nativeCandidateScript, "--target", TARGET, "--build-inputs", buildInputsPath, "--output", spec.paths.candidate], sourceRoot, commandEnv));
 
   const candidateRoot = resolve(spec.paths.candidate);
