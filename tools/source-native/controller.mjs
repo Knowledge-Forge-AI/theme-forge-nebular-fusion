@@ -72,6 +72,9 @@ export const REQUIRED_SOURCE_PIN_TESTS = Object.freeze([
   "sidecar::artifact::tests::source_build_compiled_pins_reject_resealed_native_identity",
 ]);
 
+const TEST_LIST_STAGES = new Set(["INSTALLED_MODES", "SOURCE_PINS"]);
+const DIAGNOSTIC_COMMAND_PHASES = new Set(["build-candidate", "test-list-installed-modes", "test-list-source-pins"]);
+
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SHA1 = /^[a-f0-9]{40}$/u;
 const SAFE_ENV = new Set([
@@ -380,7 +383,7 @@ export async function runFixedCommand({ program, args, cwd, env, timeoutMs = COM
   if (!["none", "text", "json"].includes(capture)) fail("COMMAND_CAPTURE");
   const chunks = [];
   const buildChunks = [];
-  const collectBuildDiagnostic = phase === "build-candidate" && Array.isArray(buildDiagnosticRoots) && buildDiagnosticRoots.length === 2;
+  const collectBuildDiagnostic = DIAGNOSTIC_COMMAND_PHASES.has(phase) && Array.isArray(buildDiagnosticRoots) && buildDiagnosticRoots.length === 2;
   let stdoutBytes = 0, stderrBytes = 0;
   const port = createChildProcessPort({ timeoutMs, killGraceMs: COMMAND_KILL_GRACE_MS, spawnImpl: (p, argv, options) => {
     const child = spawnImpl(p, argv, options);
@@ -585,6 +588,22 @@ export function requirePhaseResult(result, phase) {
   }
 }
 
+export function requireTestListCommandResult(result, stage) {
+  try {
+    return resultOk(result, "TEST_LIST_GUARD");
+  } catch (error) {
+    const label = stage === "installed-modes" ? "INSTALLED_MODES" : stage === "source-pins" ? "SOURCE_PINS" : null;
+    if (error instanceof CampaignError && label !== null) {
+      error.testListStage = label;
+      error.testListBoundary = buildProcessBoundary(result);
+      error.testListCleanupUnconfirmed = result?.cleanup !== "leader-close-observed";
+      const diagnostic = validateBuildDiagnostic(result?.buildDiagnostic);
+      if (diagnostic) error.testListDiagnostic = diagnostic;
+    }
+    throw error;
+  }
+}
+
 export function formatCampaignFailure(error) {
   const code = error instanceof CampaignError ? error.code : "INTERNAL";
   const boundary = error instanceof CampaignError && PREPARATION_BOUNDARIES.has(error.preparationBoundary)
@@ -594,11 +613,19 @@ export function formatCampaignFailure(error) {
     ? `\nSOURCE_NATIVE_BUILD_BOUNDARY_${error.buildBoundary}` : "";
   const buildCleanup = error instanceof CampaignError && error.buildCleanupUnconfirmed === true
     ? "\nSOURCE_NATIVE_BUILD_CLEANUP_UNCONFIRMED" : "";
-  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}`;
+  const testFailure = error instanceof CampaignError && error.code === "TEST_LIST_GUARD" && TEST_LIST_STAGES.has(error.testListStage);
+  const testStage = testFailure ? `\nSOURCE_NATIVE_TEST_LIST_STAGE_${error.testListStage}` : "";
+  const testBoundary = testFailure && PREPARATION_BOUNDARIES.has(error.testListBoundary)
+    ? `\nSOURCE_NATIVE_TEST_LIST_BOUNDARY_${error.testListBoundary}` : "";
+  const testCleanup = testFailure && error.testListCleanupUnconfirmed === true
+    ? "\nSOURCE_NATIVE_TEST_LIST_CLEANUP_UNCONFIRMED" : "";
+  const testDiagnostic = testFailure ? validateBuildDiagnostic(error.testListDiagnostic) : null;
+  const testHints = testDiagnostic ? `\nSOURCE_NATIVE_TEST_LIST_DIAGNOSTIC ${JSON.stringify(testDiagnostic)}` : "";
+  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}`;
 }
 
 export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
-  if(phase!=="build-candidate"||archiveSha256!==INPUT_ARCHIVE_SHA256||typeof sourceRoot!=="string"||!isAbsolute(sourceRoot)||typeof candidateRoot!=="string"||!isAbsolute(candidateRoot))return {};
+  if(!DIAGNOSTIC_COMMAND_PHASES.has(phase)||archiveSha256!==INPUT_ARCHIVE_SHA256||typeof sourceRoot!=="string"||!isAbsolute(sourceRoot)||typeof candidateRoot!=="string"||!isAbsolute(candidateRoot))return {};
   return {buildDiagnosticRoots:[sourceRoot,join(candidateRoot,"work/source")]};
 }
 
@@ -926,11 +953,11 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   const rust = await rustEnvironment({ authority, candidateRoot, maintained });
   const guardModule = await import(pathToFileURL(spec.tools.guard).href).catch(() => null);
   if (!guardModule?.assertInstalledModeTests || !guardModule.assertSourcePinTests) fail("TEST_GUARD");
-  const installedList = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", "sidecar::artifact::tests::installed_modes_", "--", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"));
-  resultOk(installedList, "TEST_LIST_GUARD");
+  const installedList = await resultRunner({...command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", "sidecar::artifact::tests::installed_modes_", "--", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"), phase: "test-list-installed-modes"});
+  requireTestListCommandResult(installedList, "installed-modes");
   const installed = validateRustTestList(installedList.text, REQUIRED_INSTALLED_MODE_TESTS, guardModule.assertInstalledModeTests);
-  const sourceList = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", "sidecar::artifact::tests::source_build_", "--", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"));
-  resultOk(sourceList, "TEST_LIST_GUARD");
+  const sourceList = await resultRunner({...command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", "sidecar::artifact::tests::source_build_", "--", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"), phase: "test-list-source-pins"});
+  requireTestListCommandResult(sourceList, "source-pins");
   const source = validateRustTestList(sourceList.text, REQUIRED_SOURCE_PIN_TESTS, guardModule.assertSourcePinTests);
   state.phaseIndex += 1;
   state.completed.push("test-list-guard");

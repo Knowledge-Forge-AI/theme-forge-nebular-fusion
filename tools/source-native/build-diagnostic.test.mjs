@@ -4,7 +4,7 @@ import {dirname,join} from 'node:path';
 import {constants as osConstants} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {classifyBuildFailure,classifyBuildOutput,decodeBuildStream,validateBuildDiagnostic,SOURCE_FILES,DIAGNOSTIC_SCHEMA,MAX_DIAGNOSTIC_BYTES,INPUT_ARCHIVE_SHA256} from './build-failure-diagnostics.mjs';
-import {CampaignError,formatCampaignFailure,requirePhaseResult,runFixedCommand,buildDiagnosticOptions} from './controller.mjs';
+import {CampaignError,formatCampaignFailure,requirePhaseResult,runFixedCommand,buildDiagnosticOptions,requireTestListCommandResult} from './controller.mjs';
 
 const roots=['/fixture/canonical','/fixture/candidate/work/source'];
 const rustFile=SOURCE_FILES.find(x=>x.startsWith('src-tauri/src/')&&x.endsWith('.rs'));
@@ -200,4 +200,123 @@ test('best-effort compiler and package phrases yield closed markers without raw 
  for(const marker of ['BUILD_SCRIPT_FAILED','COMPILE_FAILED','OFFLINE_DEPENDENCY','BUNDLE_FAILED','PANIC','FRONTEND_BUILD_FAILED','NPM_ERROR'])assert.ok(d.markers.includes(marker));
  assert.ok(validateBuildDiagnostic(d));assert.equal(JSON.stringify(d).includes('toy'),false);
  for(const line of ['Running beforeBuildCommand','beforeBuildCommand succeeded','npm notice ok'])assert.equal(classify(line).markers.includes('FRONTEND_BUILD_FAILED'),false);
+});
+
+const listPhases=[['test-list-installed-modes','installed-modes','INSTALLED_MODES'],['test-list-source-pins','source-pins','SOURCE_PINS']];
+
+test('test-list diagnostics bind only the two exact listing phases and frozen roots',()=>{
+ for(const [phase] of listPhases){
+  assert.deepEqual(buildDiagnosticOptions(phase,INPUT_ARCHIVE_SHA256,'/fixture/canonical','/fixture/candidate'),{buildDiagnosticRoots:roots});
+  assert.deepEqual(buildDiagnosticOptions(phase,'b'.repeat(64),'/fixture/canonical','/fixture/candidate'),{});
+  assert.deepEqual(buildDiagnosticOptions(phase,INPUT_ARCHIVE_SHA256,'relative','/fixture/candidate'),{});
+ }
+ for(const phase of ['native-tests','test-list-installed-modes-extra','test-list-source-pins-extra',null])assert.deepEqual(buildDiagnosticOptions(phase,INPUT_ARCHIVE_SHA256,'/fixture/canonical','/fixture/candidate'),{});
+});
+
+test('both actual failed listing children retain only bounded public hints',async()=>{
+ for(const [phase,stage,label] of listPhases){
+  const secret='never-display-test-list';
+  const diagnostic=`error[E0308]: ${secret}\n --> ${liveRoots[1]}/${rustFile}:17:3\n`;
+  const result=await runFixedCommand({...options,phase,capture:'text',args:['-e',`process.stdout.write(${JSON.stringify(secret)});process.stderr.write(${JSON.stringify(diagnostic)});process.exitCode=7;`]});
+  assert.equal(result.exitCode,7);assert.equal(result.failure,null);assert.equal(result.text,secret);
+  assert.deepEqual(result.buildDiagnostic.rustCodes,['E0308']);
+  assert.throws(()=>requireTestListCommandResult(result,stage),error=>{
+   const output=formatCampaignFailure(error);
+   assert.equal(error.code,'TEST_LIST_GUARD');
+   assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_STAGE_'+label));
+   assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_BOUNDARY_UNACCEPTED_NONZERO'));
+   assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_DIAGNOSTIC '));
+   assert.equal(output.includes(secret),false);assert.equal(output.includes(cwd),false);
+   return true;
+  });
+ }
+});
+
+test('listing success preserves exact capture and result identity without new hints',async()=>{
+ for(const [phase,stage] of listPhases){
+  const result=await runFixedCommand({...options,phase,capture:'text',args:['-e','process.stdout.write("frozen list\\n");process.stderr.write("never-display-test-list");']});
+  assert.equal(result.text,'frozen list\n');assert.equal(result.exitCode,0);
+  assert.equal(Object.hasOwn(result,'buildDiagnostic'),false);
+  assert.equal(requireTestListCommandResult(result,stage),result);
+ }
+});
+
+test('test-list gates preserve every failed-result disposition and closed boundary labels',()=>{
+ const base={exitCode:0,failure:null,cleanup:'leader-close-observed'};
+ const cases=[
+  [null,'INCOHERENT_RESULT'],[{},'INCOHERENT_RESULT'],
+  [{...base,exitCode:101},'UNACCEPTED_NONZERO'],
+  [{...base,exitCode:null,signal:'SIGKILL'},'SIGNALED'],
+  [{...base,failure:'TIMEOUT'},'TIMEOUT'],
+  [{...base,failure:'OUTPUT_LIMIT'},'OUTPUT_LIMIT'],
+  [{...base,failure:'SPAWN'},'SPAWN_FAILURE'],
+  [{...base,failure:'ERROR'},'CHILD_ERROR'],
+  [{...base,failure:'LIMIT'},'PORT_LIMIT'],
+  [{...base,failure:'INVALID_RESULT'},'INVALID_RESULT'],
+  [{...base,failure:'never-display-test-list'},'UNKNOWN_PROCESS_FAILURE'],
+  [{...base,cleanup:'unconfirmed'},'COMPLETED'],
+ ];
+ for(const [,stage,label] of listPhases){
+  for(const [result,boundary] of cases)assert.throws(()=>requireTestListCommandResult(result,stage),error=>{
+   const output=formatCampaignFailure(error);
+   assert.equal(error.code,'TEST_LIST_GUARD');
+   assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_STAGE_'+label));
+   assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_BOUNDARY_'+boundary));
+   assert.equal(output.includes('SOURCE_NATIVE_TEST_LIST_CLEANUP_UNCONFIRMED'),result?.cleanup!=='leader-close-observed');
+   assert.equal(output.includes('never-display-test-list'),false);
+   return true;
+  });
+  assert.equal(requireTestListCommandResult(base,stage),base);
+ }
+});
+
+test('test-list formatting refuses unknown stages, forged fields and unrelated error kinds',()=>{
+ const secret='never-display-test-list';
+ const hint=classify(`error[E0432]: ${secret}\n --> ${roots[0]}/${rustFile}:8:2\n`);
+ const unknown=new CampaignError('TEST_LIST_GUARD');unknown.testListStage=secret;unknown.testListDiagnostic=hint;
+ assert.equal(formatCampaignFailure(unknown),'SOURCE_NATIVE_TEST_LIST_GUARD');
+ const unrelated=new CampaignError('QUALIFY_FAILED');unrelated.testListStage='SOURCE_PINS';unrelated.testListDiagnostic=hint;
+ assert.equal(formatCampaignFailure(unrelated),'SOURCE_NATIVE_QUALIFY_FAILED');
+ const bad=new CampaignError('TEST_LIST_GUARD');bad.testListStage='SOURCE_PINS';bad.testListBoundary=secret;bad.testListCleanupUnconfirmed=secret;bad.testListDiagnostic={...hint,raw:secret};
+ assert.equal(formatCampaignFailure(bad),'SOURCE_NATIVE_TEST_LIST_GUARD\nSOURCE_NATIVE_TEST_LIST_STAGE_SOURCE_PINS');
+ assert.throws(()=>requireTestListCommandResult({exitCode:1,cleanup:'leader-close-observed'},secret),error=>{
+  assert.equal(formatCampaignFailure(error),'SOURCE_NATIVE_TEST_LIST_GUARD');return true;
+ });
+});
+
+test('invalid listing UTF-8 retains the existing INVALID_RESULT failure',async()=>{
+ const [phase,stage]=listPhases[0];
+ const result=await runFixedCommand({...options,phase,capture:'text',args:['-e','process.stdout.write(Buffer.from([255]));process.stderr.write("error[E0308]: never-display-test-list\\n");']});
+ assert.equal(result.failure,'INVALID_RESULT');assert.equal(result.exitCode,0);
+ assert.equal(Object.hasOwn(result,'buildDiagnostic'),false);
+ assert.throws(()=>requireTestListCommandResult(result,stage),error=>{
+  const output=formatCampaignFailure(error);assert.ok(output.includes('SOURCE_NATIVE_TEST_LIST_BOUNDARY_INVALID_RESULT'));
+  assert.equal(output.includes('never-display-test-list'),false);return true;
+ });
+ const nonzero=await runFixedCommand({...options,phase,capture:'text',args:['-e','process.stdout.write(Buffer.from([255]));process.stderr.write("error[E0308]: never-display-test-list\\n");process.exitCode=1;']});
+ assert.equal(nonzero.failure,'INVALID_RESULT');assert.equal(nonzero.exitCode,1);
+ assert.deepEqual(nonzero.buildDiagnostic.rustCodes,['E0308']);
+ assert.ok(nonzero.buildDiagnostic.markers.includes('DIAGNOSTIC_INPUT_REFUSED'));
+});
+
+test('listing timeout and output overflow remain failed with bounded partial diagnostics',async()=>{
+ const [phase,stage]=listPhases[0];
+ const timeout=await runFixedCommand({...options,phase,timeoutMs:50,capture:'text',args:['-e','setInterval(()=>{},1000);']});
+ assert.equal(timeout.failure,'TIMEOUT');assert.equal(timeout.buildDiagnostic.flags.partial,true);
+ assert.throws(()=>requireTestListCommandResult(timeout,stage),error=>{assert.ok(formatCampaignFailure(error).includes('SOURCE_NATIVE_TEST_LIST_BOUNDARY_TIMEOUT'));return true;});
+ const overflow=await runFixedCommand({...options,phase,capture:'text',args:['-e',`process.stderr.write("x".repeat(${MAX_DIAGNOSTIC_BYTES+1}));setInterval(()=>{},1000);`]});
+ assert.equal(overflow.failure,'OUTPUT_LIMIT');assert.equal(overflow.buildDiagnostic.flags.partial,true);
+ assert.ok(JSON.stringify(overflow.buildDiagnostic).length<4096);
+ assert.throws(()=>requireTestListCommandResult(overflow,stage),error=>{assert.ok(formatCampaignFailure(error).includes('SOURCE_NATIVE_TEST_LIST_BOUNDARY_OUTPUT_LIMIT'));return true;});
+});
+
+test('listing diagnostic-parser failure cannot alter the command refusal',async()=>{
+ const [phase,stage]=listPhases[1];const poisoned=[...liveRoots];
+ Object.defineProperty(poisoned,0,{get(){throw new Error('never-display-test-list')}});
+ const result=await runFixedCommand({...options,phase,capture:'text',buildDiagnosticRoots:poisoned,args:['-e','process.exitCode=1;']});
+ assert.equal(result.exitCode,1);assert.equal(result.failure,null);
+ assert.deepEqual(result.buildDiagnostic.markers,['DIAGNOSTIC_INPUT_REFUSED']);
+ assert.throws(()=>requireTestListCommandResult(result,stage),error=>{
+  assert.equal(error.code,'TEST_LIST_GUARD');assert.equal(formatCampaignFailure(error).includes('never-display-test-list'),false);return true;
+ });
 });
