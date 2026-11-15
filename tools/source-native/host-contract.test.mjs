@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile, rm, lstat } from "node:fs/promises";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { HOST_INPUT_SCHEMA, createCargoConfig } from "./host-inputs.mjs";
 import { CampaignError, hostPreparationFailureCode, hostPreparationBoundary, requirePhaseResult, formatCampaignFailure, runFixedCommand } from "./controller.mjs";
@@ -50,6 +50,25 @@ console.log(JSON.stringify({node:process.versions.node,plainEnvironmentPrototype
   const r=spawnSync(process.execPath,[probe,candidate,f.specPath,f.bridge],{env:f.env,encoding:"utf8",timeout:5000,maxBuffer:16384});assert.equal(r.status,0);const record=JSON.parse(r.stdout);assert.equal(record.node,"22.23.4");assert.equal(typeof record.plainEnvironmentPrototype,"boolean");assert.deepEqual(record.codes,["HOST_INPUT_ARCHIVE_PORT","HOST_INPUT_RUNNER_GUARD","HOST_INPUT_RUNNER_GUARD"]);
   // The inert port guard runs before any preparation directory or external tool.
   for(const name of ["nebular-host-input-preparation","receipt.json","locator.json"]) await assert.rejects(lstat(join(f.path,name)),{code:"ENOENT"});
+});
+
+test("actual CLI completes when its bridge imports the preparer command port",async()=>{
+ const f=await fixture();
+ const body=await readFile(f.bridge,"utf8");
+ await writeFile(f.bridge,`import {createChildProcessPort} from ${JSON.stringify(pathToFileURL(candidate).href)};\nif(typeof createChildProcessPort!=="function")throw Error("missing command port");\n${body}`);
+ const r=spawnSync(process.execPath,[candidate,"--spec",f.specPath,"--bridge",f.bridge,"--receipt",join(f.path,"receipt.json"),"--locator",join(f.path,"locator.json")],{env:f.env,encoding:"utf8",timeout:5000,maxBuffer:16384});
+ assert.equal(r.status,1);assert.equal(r.signal,null);assert.equal(r.error,undefined);
+ assert.equal(r.stderr,"");assert.deepEqual(JSON.parse(r.stdout),{status:"refused",code:"HOST_INPUT_ARCHIVE_PORT"});
+ for(const name of ["nebular-host-input-preparation","receipt.json","locator.json"])await assert.rejects(lstat(join(f.path,name)),{code:"ENOENT"});
+});
+
+test("an unsettled bridge import cannot turn quiescence into CLI success",async()=>{
+ const f=await fixture();const body=await readFile(f.bridge,"utf8");
+ await writeFile(f.bridge,`await new Promise(()=>{});\n${body}`);
+ const r=spawnSync(process.execPath,[candidate,"--spec",f.specPath,"--bridge",f.bridge,"--receipt",join(f.path,"receipt.json"),"--locator",join(f.path,"locator.json")],{env:f.env,encoding:"utf8",timeout:5000,maxBuffer:16384});
+ assert.equal(r.status,3);assert.equal(r.signal,null);assert.equal(r.error,undefined);
+ assert.equal(r.stdout,"");assert.equal(r.stderr,"");
+ for(const name of ["nebular-host-input-preparation","receipt.json","locator.json"])await assert.rejects(lstat(join(f.path,name)),{code:"ENOENT"});
 });
 
 

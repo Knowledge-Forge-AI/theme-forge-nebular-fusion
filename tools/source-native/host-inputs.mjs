@@ -864,12 +864,21 @@ function cliExitCode(result) {
   return 1;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const result = await runCli(process.argv.slice(2));
+function writeCliResult(result) {
   try {
     process.stdout.write(`${JSON.stringify(result.status === "prepared" ? result.receipt : result)}\n`);
     process.exitCode = cliExitCode(result);
   } catch {
     process.exitCode = 3;
   }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  // Finish this module's evaluation before the bridge imports its command port.
+  // A top-level await here makes that ordinary import back-edge a deadlock.
+  // Quiescence before a result remains a failure, never an implicit success.
+  process.exitCode = 3;
+  void runCli(process.argv.slice(2)).then(writeCliResult, () => {
+    writeCliResult({ status: "refused", code: "HOST_INPUT_INTERNAL" });
+  });
 }
