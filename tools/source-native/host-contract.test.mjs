@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { HOST_INPUT_SCHEMA, createCargoConfig } from "./host-inputs.mjs";
 import { CampaignError, hostPreparationFailureCode, hostPreparationBoundary, requirePhaseResult, formatCampaignFailure, runFixedCommand } from "./controller.mjs";
+import { buildPublicEvidence, REQUIRED_APPEARANCE_TESTS, REQUIRED_POLICY_TESTS } from "./controller.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const candidate = join(root, "host-inputs.mjs");
@@ -160,4 +161,76 @@ test("actual self-signal and missing executable remain failed without raw diagno
  for(const result of [signaled,missing])assert.throws(()=>requirePhaseResult(result,"prepare-host-inputs"),error=>{
   assert.equal(error.code,"PREPARE_HOST_INPUTS_FAILED");const rendered=formatCampaignFailure(error);assert.equal(rendered.includes(root),false);assert.equal(rendered.includes("ENOENT"),false);return true;
  });
+});
+
+function combinedPublicEvidenceFixture() {
+  const commit = "1".repeat(40);
+  const archiveSha256 = "2".repeat(64);
+  const packageManifestSha256 = "3".repeat(64);
+  const requiredRustTests = {
+    status: "passed-process-observation", expected: REQUIRED_APPEARANCE_TESTS.length,
+    passed: REQUIRED_APPEARANCE_TESTS.length, failed: 0,
+    tests: REQUIRED_APPEARANCE_TESTS.map((name) => ({ name, passed: 1, failed: 0 })),
+  };
+  const requiredPolicyTests = {
+    status: "passed-process-observation", expected: REQUIRED_POLICY_TESTS.length,
+    passed: REQUIRED_POLICY_TESTS.length, failed: 0,
+    tests: REQUIRED_POLICY_TESTS.map((name) => ({ name, passed: 1, failed: 0 })),
+  };
+  const appearanceSmoke = {
+    schema: "nebular.source-native-appearance-smoke-v1", status: "passed-process-observation",
+    platform: "darwin-arm64", scenario: "P", visualAppearanceQualified: false,
+    requiredRustTests, requiredPolicyTests,
+    runs: [
+      { source: "raw-archive", receiptSha256: "4".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false },
+      { source: "npm-package", receiptSha256: "5".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false },
+    ],
+  };
+  const sourceReceipt = { version: "0.6.1", sourceCandidate: "candidate-source", identity: "source-receipt-identity" };
+  return {
+    spec: { candidateVersion: "0.6.1", source: { commit }, inputs: { archiveSha256 } },
+    context: { repository: "Knowledge-Forge-AI/theme-forge-nebular-fusion", ref: "refs/heads/qualification/material-source-20261114" },
+    sourceReceipt,
+    bridge: {
+      version: "0.6.1", nativeAcceptance: "not-claimed", status: "source-receipt-bridged",
+      provenance: { fixtureOnly: false, gitObservation: "checkout-rev-parse", inputArchiveToSourceCandidate: "extractor-linked-manifest-to-source-candidate" },
+      materialRoute: { authorityStatus: "held-self-derived-record" }, source: { commit }, sourceCandidate: sourceReceipt.sourceCandidate,
+      sourceReceiptSha256: "6".repeat(64), sourceReceiptIdentity: sourceReceipt.identity,
+      inputArchive: { path: "authenticated-inputs/source-native/native-material-inputs59.tar.gz", sha256: archiveSha256, gitBlobSha1: "7".repeat(40) },
+    },
+    tests: {
+      installedModes: { status: "passed-process-observation", expected: 4, passed: 4, failed: 0 },
+      sourcePins: { status: "passed-process-observation", expected: 2, passed: 2, failed: 0 },
+      materialFixture: { status: "passed-process-observation", expected: 2, passed: 2, failed: 0, tests: [
+        { name: "release_smoke::tests::material_selection_is_single_use_and_not_a_directory_override", passed: 1, failed: 0 },
+        { name: "release_smoke::io::tests::material_fixture_rejects_links_modes_empty_large_and_nonregular_entries", passed: 1, failed: 0 },
+      ] },
+      appearancePreferences: requiredRustTests, policy: requiredPolicyTests, nativeAcceptance: "not-claimed",
+    },
+    qualification: { status: "pass", checks: [{ id: "qualified", ok: true }] },
+    nestedSeal: { status: "pass", schema: "nebular.source-native-packaging-verification-v1", authorityStatus: "held-self-derived-record", manualConfirmation: "not-performed" },
+    packageRecord: { version: "0.6.1", packageManifestSha256, raw: { sha256: "8".repeat(64) }, npm: { sha256: "9".repeat(64) } },
+    realUserState: { method: "fixed-app-namespace-absence-metadata", locations: 63, observations: 7, status: "passed" },
+    materialSmoke: { status: "passed-process-observation", visualTranslucency: "not-claimed", runs: [
+      { source: "raw-archive", receiptSha256: "a".repeat(64), stepsPassed: 8, sourceUnchanged: true },
+      { source: "npm-package", receiptSha256: "b".repeat(64), stepsPassed: 8, sourceUnchanged: true },
+    ] },
+    appearanceSmoke,
+  };
+}
+
+test("combined public evidence binds P, 17 lib tests, 9 policy tests, and seven observations", () => {
+  const base = combinedPublicEvidenceFixture();
+  const evidence = buildPublicEvidence(base);
+  assert.equal(evidence.qualificationScope, "macos-arm64-source-build-core-a-native-material-m-and-appearance-p");
+  assert.equal(evidence.appearance.requiredRustTests.expected, 9);
+  assert.equal(evidence.appearance.requiredPolicyTests.expected, 9);
+  assert.equal(evidence.realUserState.observations, 7);
+
+  assert.throws(() => buildPublicEvidence({ ...base, appearanceSmoke: { ...base.appearanceSmoke, runs: [] } }), (error) => error?.code === "PUBLIC_APPEARANCE_SMOKE");
+  assert.throws(() => buildPublicEvidence({ ...base, tests: { ...base.tests, appearancePreferences: { ...base.tests.appearancePreferences, passed: 8, failed: 1 } } }), (error) => error?.code === "PUBLIC_TESTS");
+  assert.throws(() => buildPublicEvidence({ ...base, realUserState: { ...base.realUserState, observations: 5 } }), (error) => error?.code === "PUBLIC_USER_STATE");
+  const materialRuns = base.materialSmoke.runs.map((run) => ({ ...run }));
+  materialRuns[0].stepsPassed = 7;
+  assert.throws(() => buildPublicEvidence({ ...base, materialSmoke: { ...base.materialSmoke, runs: materialRuns } }), (error) => error?.code === "PUBLIC_MATERIAL_SMOKE");
 });

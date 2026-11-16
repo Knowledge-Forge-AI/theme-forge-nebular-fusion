@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {dirname,join} from 'node:path';
 import {constants as osConstants} from 'node:os';
 import {fileURLToPath} from 'node:url';
@@ -12,12 +13,34 @@ const rustId=SOURCE_FILES.indexOf(rustFile);
 const tool='tools/native-candidate-build.mjs';
 const toolId=SOURCE_FILES.indexOf(tool);
 const classify=(stderr,extra={})=>classifyBuildFailure({stdout:'',stderr,roots,...extra});
+const originalSourcePrefixSha256='2bb3f44d47d85cc72232f42d7cde092fcf73e9899d1fc3caeb81446c61f74bd3';
+const appearanceSourceFiles=[
+ 'src-tauri/src/appearance_preferences/contract.rs',
+ 'src-tauri/src/appearance_preferences/mod.rs',
+ 'src-tauri/src/appearance_preferences/storage.rs',
+ 'src-tauri/src/commands/appearance_preferences.rs',
+ 'src-tauri/tests/policy.rs',
+];
 
 test('source IDs are fixed unique relative paths',()=>{
- assert.equal(SOURCE_FILES.length,155);assert.ok(toolId>=0&&rustId>=0);
- assert.deepEqual([...SOURCE_FILES].sort(),SOURCE_FILES);
+ const originalPrefix=SOURCE_FILES.slice(0,155);
+ assert.equal(SOURCE_FILES.length,160);assert.ok(toolId>=0&&rustId>=0);
+ assert.equal(createHash('sha256').update(JSON.stringify(originalPrefix)).digest('hex'),originalSourcePrefixSha256);
+ assert.deepEqual([...originalPrefix].sort(),originalPrefix);
+ assert.deepEqual(SOURCE_FILES.slice(155),appearanceSourceFiles);
  assert.equal(new Set(SOURCE_FILES).size,SOURCE_FILES.length);
  assert.ok(SOURCE_FILES.every(x=>!x.startsWith('/')&&!x.split('/').includes('..')));
+});
+
+test('appearance source IDs classify five new files without retaining paths or messages',()=>{
+ for(const [offset,file] of appearanceSourceFiles.entries()){
+  const secret=`private-appearance-source-${offset}`;
+  const d=classify(`error[E04${String(offset+1).padStart(2,'0')}]: ${secret}\n --> ${roots[0]}/${file}:${offset+1}:2\n`);
+  assert.deepEqual(d.sites,[{file:155+offset,line:offset+1,column:2}]);
+  const publicJson=JSON.stringify(d);
+  assert.equal(publicJson.includes(secret),false);
+  assert.equal(publicJson.includes('/fixture/'),false);
+ }
 });
 
 test('Rust codes and source positions are separate untrusted hint sets',()=>{
@@ -64,7 +87,7 @@ test('classification is capped and deduplicated',()=>{
 
 test('formatter rejects extra keys, unknown labels, paths and invalid numbers',()=>{
  const good=classify(`error[E0432]: private\n --> ${roots[0]}/${rustFile}:1:1`);
- const variants=[{...good,raw:'private-value'},{...good,markers:['private-value']},{...good,rustCodes:['private-value']},{...good,systemCodes:['private-value']},{...good,sites:[{file:155,line:1,column:1}]},{...good,sites:[{file:0,line:0,column:1}]},{...good,sites:[{file:0,line:1,column:Infinity}]},{...good,flags:{...good.flags,raw:'private-value'}},{...good,flags:{...good.flags,partial:'private-value'}}];
+ const variants=[{...good,raw:'private-value'},{...good,markers:['private-value']},{...good,rustCodes:['private-value']},{...good,systemCodes:['private-value']},{...good,sites:[{file:160,line:1,column:1}]},{...good,sites:[{file:0,line:0,column:1}]},{...good,sites:[{file:0,line:1,column:Infinity}]},{...good,flags:{...good.flags,raw:'private-value'}},{...good,flags:{...good.flags,partial:'private-value'}}];
  for(const bad of variants){
   assert.equal(validateBuildDiagnostic(bad),null);const error=new CampaignError('BUILD_CANDIDATE_FAILED');error.buildDiagnostic=bad;
   assert.equal(formatCampaignFailure(error),'SOURCE_NATIVE_BUILD_CANDIDATE_FAILED');

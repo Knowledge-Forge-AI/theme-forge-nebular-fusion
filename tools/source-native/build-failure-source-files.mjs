@@ -1,4 +1,4 @@
-// Source-relative diagnostic IDs bound to input archive fca34ce4; no runtime discovery.
+// Source-relative diagnostic IDs bound to input archive 7db67aae; no runtime discovery.
 export const SOURCE_FILES=Object.freeze([
   "src-tauri/src/app_theme/mod.rs",
   "src-tauri/src/app_theme/payload_authentication.rs",
@@ -154,5 +154,10 @@ export const SOURCE_FILES=Object.freeze([
   "tools/vm-parser7-revision10/support/closure-identity.mjs",
   "tools/vm-parser7-revision10/support/inventory-tree.mjs",
   "tools/vm-parser7-revision10/vm-parser-child.mjs",
-  "tools/vm-parser7-revision10/vm-parser.mjs"
+  "tools/vm-parser7-revision10/vm-parser.mjs",
+  "src-tauri/src/appearance_preferences/contract.rs",
+  "src-tauri/src/appearance_preferences/mod.rs",
+  "src-tauri/src/appearance_preferences/storage.rs",
+  "src-tauri/src/commands/appearance_preferences.rs",
+  "src-tauri/tests/policy.rs"
 ]);
