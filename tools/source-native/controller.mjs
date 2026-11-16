@@ -327,8 +327,8 @@ export function validateSpec(spec, env = process.env) {
   absolute(spec.inputs.verifier.tarball.path, "SPEC_VERIFIER_TARBALL");
   digest(spec.inputs.verifier.tarball.sha256, "SPEC_VERIFIER_DIGEST");
   if (spec.inputs.verifier.tarball.sha256 !== "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b") fail("SPEC_VERIFIER_DIGEST");
-  if (spec.inputs.archiveSha256 !== "6050739ddbeab6d224660a7e83baeb4c969539566635ddfc03fc960fa63eecd0") fail("SPEC_ARCHIVE_DIGEST");
-  if (spec.inputs.archiveBytes !== 8846154) fail("SPEC_ARCHIVE_SIZE");
+  if (spec.inputs.archiveSha256 !== "82b5819fec903614fb55d840316775cd5c7cb8dba6ddb904dad960230b071141") fail("SPEC_ARCHIVE_DIGEST");
+  if (spec.inputs.archiveBytes !== 8846587) fail("SPEC_ARCHIVE_SIZE");
   if (!isRecord(spec.host)) fail("SPEC_HOST");
   for (const key of ["spec", "bridge", "receipt", "locator"]) absolute(spec.host[key], `SPEC_HOST_${key.toUpperCase()}`);
   if (!isRecord(spec.source) || typeof spec.source.commit !== "string") fail("SPEC_SOURCE");
