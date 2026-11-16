@@ -97,6 +97,52 @@ export function annotateMaterialSmokeFailure(error, receipt, source) {
   return error;
 }
 
+// Fixed call-site labels identify the command that refused, never its private argv.
+export const SMOKE_OPERATIONS = Object.freeze([
+  "RAW_EXTRACT", "NPM_EXTRACT", "NPM_VERIFY", "RAW_A", "NPM_A", "RAW_M", "NPM_M",
+]);
+const SMOKE_RECEIPT_STATES = new Set(["UNAVAILABLE", "REJECTED", "PASS", "FAIL"]);
+const CORE_A_STEPS = Object.freeze(["app-shell", "host-start", "host-status", "project-open", "brand-read", "theme-lab-compile", "app-theme-status", "app-theme-compile", "brand-system-view", "host-status-final", "driver"]);
+function smokeInvocation(operation) {
+  if (operation === "RAW_A" || operation === "NPM_A") return {scenario:"A",source:operation === "RAW_A" ? "raw-archive" : "npm-package",stages:CORE_A_STEPS};
+  if (operation === "RAW_M" || operation === "NPM_M") return {scenario:"M",source:operation === "RAW_M" ? "raw-archive" : "npm-package",stages:MATERIAL_FAILURE_STAGES};
+  return null;
+}
+
+/** No messages, paths, step details, facts or child streams are projected. */
+export function annotateSmokeReceipt(error, receipt, operation) {
+  if (!(error instanceof CampaignError) || error.code !== "SMOKE_FAILED") return error;
+  const invocation = smokeInvocation(operation);
+  if (!invocation) return error;
+  error.smokeReceiptState = "REJECTED";
+  try {
+    if (receipt?.schema !== "nebular.release-smoke-receipt-v1" || receipt.scenario !== invocation.scenario
+      || !["pass", "fail"].includes(receipt.status)) return error;
+    error.smokeReceiptState = receipt.status === "pass" ? "PASS" : "FAIL";
+    if (receipt.status !== "fail" || receipt.driver?.scenario !== invocation.scenario
+      || !Array.isArray(receipt.driver.steps) || receipt.driver.steps.length > invocation.stages.length) return error;
+    const failed = receipt.driver.steps.find(step => step?.ok === false);
+    if (failed && invocation.stages.includes(failed.id)) error.smokeDriverStage = failed.id;
+    if (invocation.scenario === "M") annotateMaterialSmokeFailure(error, receipt, invocation.source);
+  } catch { /* Untrusted or partial receipts cannot mask the original exception. */ }
+  return error;
+}
+
+/** Preserve the identical rejection; receipt loading occurs only after a failed launch. */
+export async function runSmokeOperation(operation, execute, loadReceipt = null) {
+  try { return await execute(); }
+  catch (error) {
+    if (error instanceof CampaignError && error.code === "SMOKE_FAILED" && SMOKE_OPERATIONS.includes(operation)) {
+      error.smokeOperation = operation;
+      if (smokeInvocation(operation) && typeof loadReceipt === "function") {
+        error.smokeReceiptState = "UNAVAILABLE";
+        try { annotateSmokeReceipt(error, await loadReceipt(), operation); } catch { /* no raw diagnostics */ }
+      }
+    }
+    throw error;
+  }
+}
+
 /** Accept exactly the two source-bound M runs, without forwarding raw receipt text. */
 export function validateMaterialSmokeRuns(runs, executableSha256) {
   if (!Array.isArray(runs) || runs.length !== 2 || !SHA256.test(executableSha256)) fail("PUBLIC_MATERIAL_SMOKE");
@@ -624,6 +670,10 @@ export function requirePhaseResult(result, phase) {
     if (phase === "prepare-host-inputs" && error instanceof CampaignError) {
       error.preparationBoundary = hostPreparationBoundary(result);
     }
+    if (phase === "smoke" && error instanceof CampaignError) {
+      error.smokeBoundary = buildProcessBoundary(result);
+      error.smokeCleanupUnconfirmed = result?.cleanup !== "leader-close-observed";
+    }
     if (phase === "build-candidate" && error instanceof CampaignError) {
       error.buildBoundary = buildProcessBoundary(result);
       error.buildCleanupUnconfirmed = result?.cleanup !== "leader-close-observed";
@@ -760,7 +810,19 @@ export function formatCampaignFailure(error) {
     && MATERIAL_FAILURE_REASONS.has(error.materialSmokeReason);
   const materialHint = materialPair
     ? `\nSOURCE_NATIVE_MATERIAL_SOURCE_${error.materialSmokeSource === "raw-archive" ? "RAW_ARCHIVE" : "NPM_PACKAGE"}\nSOURCE_NATIVE_MATERIAL_STAGE_${error.materialSmokeStage}\nSOURCE_NATIVE_MATERIAL_REASON_${error.materialSmokeReason}` : "";
-  return `SOURCE_NATIVE_${code}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}${locationHint}${materialHint}`;
+  const smokeFailure = error instanceof CampaignError && error.code === "SMOKE_FAILED"
+    && SMOKE_OPERATIONS.includes(error.smokeOperation);
+  const smokeOperation = smokeFailure ? `\nSOURCE_NATIVE_SMOKE_OPERATION_${error.smokeOperation}` : "";
+  const smokeBoundary = smokeFailure && PREPARATION_BOUNDARIES.has(error.smokeBoundary)
+    ? `\nSOURCE_NATIVE_SMOKE_BOUNDARY_${error.smokeBoundary}` : "";
+  const smokeCleanup = smokeFailure && error.smokeCleanupUnconfirmed === true
+    ? "\nSOURCE_NATIVE_SMOKE_CLEANUP_UNCONFIRMED" : "";
+  const invocation = smokeFailure ? smokeInvocation(error.smokeOperation) : null;
+  const smokeReceipt = invocation && SMOKE_RECEIPT_STATES.has(error.smokeReceiptState)
+    ? `\nSOURCE_NATIVE_SMOKE_RECEIPT_${error.smokeReceiptState}` : "";
+  const smokeStage = smokeReceipt && error.smokeReceiptState === "FAIL" && invocation.stages.includes(error.smokeDriverStage)
+    ? `\nSOURCE_NATIVE_SMOKE_DRIVER_STAGE_${error.smokeDriverStage}` : "";
+  return `SOURCE_NATIVE_${code}${smokeOperation}${smokeBoundary}${smokeCleanup}${smokeReceipt}${smokeStage}${boundary}${buildBoundary}${buildCleanup}${diagnostic ? `\nSOURCE_NATIVE_BUILD_DIAGNOSTIC ${JSON.stringify(diagnostic)}` : ""}${testStage}${testBoundary}${testCleanup}${testHints}${payloadHint}${locationHint}${materialHint}`;
 }
 
 export function buildDiagnosticOptions(phase,archiveSha256,sourceRoot,candidateRoot){
@@ -1161,9 +1223,9 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   await mkdir(join(spec.paths.smoke, "npm"), { recursive: false, mode: 0o700 }).catch(() => fail("SMOKE_DIR"));
   const raw = join(spec.paths.upload, "candidate", packageRecord.raw.filename);
   const npm = join(spec.paths.upload, "candidate", packageRecord.npm.filename);
-  await phaseRun(state, "smoke", resultRunner, command(spec.tools.tar, ["-xzf", raw, "-C", join(spec.paths.smoke, "raw")], spec.paths.smoke, commandEnv));
-  await phaseRun(state, "smoke", resultRunner, command(spec.tools.tar, ["-xzf", npm, "-C", join(spec.paths.smoke, "npm")], spec.paths.smoke, commandEnv));
-  await phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-package.mjs"), "verify", "--platform", TARGET, "--package-root", join(spec.paths.smoke, "npm/package"), "--manifest-sha256", packageRecord.packageManifestSha256], sourceRoot, commandEnv));
+  await runSmokeOperation("RAW_EXTRACT", () => phaseRun(state, "smoke", resultRunner, command(spec.tools.tar, ["-xzf", raw, "-C", join(spec.paths.smoke, "raw")], spec.paths.smoke, commandEnv)));
+  await runSmokeOperation("NPM_EXTRACT", () => phaseRun(state, "smoke", resultRunner, command(spec.tools.tar, ["-xzf", npm, "-C", join(spec.paths.smoke, "npm")], spec.paths.smoke, commandEnv)));
+  await runSmokeOperation("NPM_VERIFY", () => phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-package.mjs"), "verify", "--platform", TARGET, "--package-root", join(spec.paths.smoke, "npm/package"), "--manifest-sha256", packageRecord.packageManifestSha256], sourceRoot, commandEnv)));
   const smokeModule=await import(pathToFileURL(join(sourceRoot,"tools/native-rc-smoke.mjs")).href).catch(()=>fail("REAL_USER_STATE"));
   const accountHome=userInfo().homedir;
   if(accountHome!==env.HOME)fail("LIVE_RUNNER_HOME");
@@ -1177,16 +1239,9 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   ]) {
     // Keep the legacy observer campaign-scoped. The outer metadata-only
     // observer checks the real account without hashing any profile contents.
-    try {
-      await phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-smoke.mjs"), "--platform", TARGET, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", candidateSource, "--evidence", spec.output.smokeDir, "--source", sourceLabel, "--label", label], sourceRoot, smokeObserverEnvironment(commandEnv,env)));
-    } catch (error) {
-      if (scenario === "M") {
-        let receipt = null;
-        try { receipt = await readJson(join(spec.output.smokeDir, `${label}.receipt.json`), "MATERIAL_DIAGNOSTIC"); } catch { /* bounded hint unavailable */ }
-        annotateMaterialSmokeFailure(error, receipt, sourceLabel);
-      }
-      throw error;
-    }
+    const operation = sourceLabel === "raw-archive" ? (scenario === "A" ? "RAW_A" : "RAW_M") : (scenario === "A" ? "NPM_A" : "NPM_M");
+    await runSmokeOperation(operation, () => phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-smoke.mjs"), "--platform", TARGET, "--scenario", scenario, "--launch-root", launchRoot, "--checkout", candidateSource, "--evidence", spec.output.smokeDir, "--source", sourceLabel, "--label", label], sourceRoot, smokeObserverEnvironment(commandEnv,env))),
+      () => readJson(join(spec.output.smokeDir, `${label}.receipt.json`), "SMOKE_DIAGNOSTIC"));
     await assertRunnerAppStateAbsent(userStateLocations,accountHome);
   }
   // M proves the connected native controls/ack path; visual frame composition stays separate.
