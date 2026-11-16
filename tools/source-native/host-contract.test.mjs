@@ -219,12 +219,12 @@ function combinedPublicEvidenceFixture() {
   };
 }
 
-test("combined public evidence binds P, 17 lib tests, 9 policy tests, and seven observations", () => {
+test("combined public evidence binds P, 17 lib tests, 10 policy tests, and seven observations", () => {
   const base = combinedPublicEvidenceFixture();
   const evidence = buildPublicEvidence(base);
   assert.equal(evidence.qualificationScope, "macos-arm64-source-build-core-a-native-material-m-and-appearance-p");
   assert.equal(evidence.appearance.requiredRustTests.expected, 9);
-  assert.equal(evidence.appearance.requiredPolicyTests.expected, 9);
+  assert.equal(evidence.appearance.requiredPolicyTests.expected, 10);
   assert.equal(evidence.realUserState.observations, 7);
 
   assert.throws(() => buildPublicEvidence({ ...base, appearanceSmoke: { ...base.appearanceSmoke, runs: [] } }), (error) => error?.code === "PUBLIC_APPEARANCE_SMOKE");

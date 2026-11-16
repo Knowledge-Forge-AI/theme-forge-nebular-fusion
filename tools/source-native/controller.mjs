@@ -101,7 +101,7 @@ export const REQUIRED_APPEARANCE_TESTS = Object.freeze([
 // names closed and independent of the lib-test selectors: the list is observed
 // before execution and the exact same names are required in the receipt.
 //
-// The current source capsule contains these nine policy tests.  A future source
+// The current source capsule contains these ten policy tests.  A future source
 // refresh must change this allowlist and its bound list result together; a
 // missing or extra test is a hard refusal, never a best-effort count.
 export const REQUIRED_POLICY_TESTS = Object.freeze([
@@ -114,6 +114,7 @@ export const REQUIRED_POLICY_TESTS = Object.freeze([
   "launcher_remains_trivial",
   "scene_runner_test_fields_do_not_truncate_production_scan",
   "single_maintained_native_source_inventory_is_exact_and_complete",
+  "app_theme_payload_authentication_owner_is_confined",
 ]);
 const MATERIAL_STEPS = Object.freeze(["material-shell", "material-open-v2", "material-controls", "material-preview-light", "material-preview-dark", "material-invalidated", "material-recompile", "material-reset"]);
 const APPEARANCE_FAILURE_STAGES = Object.freeze([...APPEARANCE_STEPS.map(({ id }) => id), "driver"]);
@@ -374,8 +375,8 @@ export function validateSpec(spec, env = process.env) {
   absolute(spec.inputs.verifier.tarball.path, "SPEC_VERIFIER_TARBALL");
   digest(spec.inputs.verifier.tarball.sha256, "SPEC_VERIFIER_DIGEST");
   if (spec.inputs.verifier.tarball.sha256 !== "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b") fail("SPEC_VERIFIER_DIGEST");
-if (spec.inputs.archiveSha256 !== "7db67aaef27e1a779c8d8421258d78a4268df9f78ad387a8fdef114d86d8e813") fail("SPEC_ARCHIVE_DIGEST");
-if (spec.inputs.archiveBytes !== 8973228) fail("SPEC_ARCHIVE_SIZE");
+if (spec.inputs.archiveSha256 !== "2d15e0b745b686ec83d7d5e92bcf7e52af842d6c2a72d117d37f1c6601139a76") fail("SPEC_ARCHIVE_DIGEST");
+if (spec.inputs.archiveBytes !== 8973394) fail("SPEC_ARCHIVE_SIZE");
   if (!isRecord(spec.host)) fail("SPEC_HOST");
   for (const key of ["spec", "bridge", "receipt", "locator"]) absolute(spec.host[key], `SPEC_HOST_${key.toUpperCase()}`);
   if (!isRecord(spec.source) || typeof spec.source.commit !== "string") fail("SPEC_SOURCE");
