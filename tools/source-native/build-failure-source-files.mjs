@@ -1,4 +1,4 @@
-// Source-relative diagnostic IDs bound to input archive 2d15e0b7; no runtime discovery.
+// Source-relative diagnostic IDs bound to input archive a3c3217b; no runtime discovery.
 export const SOURCE_FILES=Object.freeze([
   "src-tauri/src/app_theme/mod.rs",
   "src-tauri/src/app_theme/payload_authentication.rs",

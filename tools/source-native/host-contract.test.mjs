@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { HOST_INPUT_SCHEMA, createCargoConfig } from "./host-inputs.mjs";
 import { CampaignError, hostPreparationFailureCode, hostPreparationBoundary, requirePhaseResult, formatCampaignFailure, runFixedCommand } from "./controller.mjs";
 import { buildPublicEvidence, REQUIRED_APPEARANCE_TESTS, REQUIRED_POLICY_TESTS } from "./controller.mjs";
+import { APPEARANCE_CSSOM_CHECKPOINTS, APPEARANCE_CSSOM_PROFILE, APPEARANCE_CSSOM_RESULT_SCHEMA } from "./appearance-cssom-controller.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const candidate = join(root, "host-inputs.mjs");
@@ -165,7 +166,7 @@ test("actual self-signal and missing executable remain failed without raw diagno
 
 function combinedPublicEvidenceFixture() {
   const commit = "1".repeat(40);
-  const archiveSha256 = "2".repeat(64);
+  const archiveSha256 = "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e";
   const packageManifestSha256 = "3".repeat(64);
   const requiredRustTests = {
     status: "passed-process-observation", expected: REQUIRED_APPEARANCE_TESTS.length,
@@ -178,25 +179,25 @@ function combinedPublicEvidenceFixture() {
     tests: REQUIRED_POLICY_TESTS.map((name) => ({ name, passed: 1, failed: 0 })),
   };
   const appearanceSmoke = {
-    schema: "nebular.source-native-appearance-smoke-v1", status: "passed-process-observation",
+    schema: APPEARANCE_CSSOM_RESULT_SCHEMA, profile: APPEARANCE_CSSOM_PROFILE, status: "passed-process-observation",
     platform: "darwin-arm64", scenario: "P", visualAppearanceQualified: false,
     requiredRustTests, requiredPolicyTests,
     runs: [
-      { source: "raw-archive", receiptSha256: "4".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false },
-      { source: "npm-package", receiptSha256: "5".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false },
+      { source: "raw-archive", receiptSha256: "4".repeat(64), legacyView: { source: "raw-archive", receiptSha256: "4".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false }, observations: APPEARANCE_CSSOM_CHECKPOINTS.map((checkpoint) => ({ checkpoint, slotCount: 4, activeCount: 1, pairConsistent: true, computedStylePresence: true })) },
+      { source: "npm-package", receiptSha256: "5".repeat(64), legacyView: { source: "npm-package", receiptSha256: "5".repeat(64), stepsPassed: 5, preferenceCustody: "passed", persistentUserState: "unchanged", visualAppearanceQualified: false }, observations: APPEARANCE_CSSOM_CHECKPOINTS.map((checkpoint) => ({ checkpoint, slotCount: 4, activeCount: 1, pairConsistent: true, computedStylePresence: true })) },
     ],
   };
   const sourceReceipt = { version: "0.6.1", sourceCandidate: "candidate-source", identity: "source-receipt-identity" };
   return {
     spec: { candidateVersion: "0.6.1", source: { commit }, inputs: { archiveSha256 } },
-    context: { repository: "Knowledge-Forge-AI/theme-forge-nebular-fusion", ref: "refs/heads/qualification/material-source-20261114" },
+    context: { repository: "Knowledge-Forge-AI/theme-forge-nebular-fusion", ref: "refs/heads/qualification/appearance-cssom-20261117" },
     sourceReceipt,
     bridge: {
       version: "0.6.1", nativeAcceptance: "not-claimed", status: "source-receipt-bridged",
       provenance: { fixtureOnly: false, gitObservation: "checkout-rev-parse", inputArchiveToSourceCandidate: "extractor-linked-manifest-to-source-candidate" },
       materialRoute: { authorityStatus: "held-self-derived-record" }, source: { commit }, sourceCandidate: sourceReceipt.sourceCandidate,
       sourceReceiptSha256: "6".repeat(64), sourceReceiptIdentity: sourceReceipt.identity,
-      inputArchive: { path: "authenticated-inputs/source-native/native-material-inputs59.tar.gz", sha256: archiveSha256, gitBlobSha1: "7".repeat(40) },
+      inputArchive: { path: "authenticated-inputs/source-native/native-material-inputs62.tar.gz", sha256: archiveSha256, gitBlobSha1: "7".repeat(40) },
     },
     tests: {
       installedModes: { status: "passed-process-observation", expected: 4, passed: 4, failed: 0 },
@@ -225,9 +226,21 @@ test("combined public evidence binds P, 17 lib tests, 10 policy tests, and seven
   assert.equal(evidence.qualificationScope, "macos-arm64-source-build-core-a-native-material-m-and-appearance-p");
   assert.equal(evidence.appearance.requiredRustTests.expected, 9);
   assert.equal(evidence.appearance.requiredPolicyTests.expected, 10);
+  assert.equal(evidence.appearance.schema, "nebular.source-native-appearance-evidence-v1");
+  assert.equal(evidence.appearance.profile, undefined);
+  for (const [index, row] of evidence.appearanceCssom.runs.entries()) {
+    assert.deepEqual(evidence.appearance.runs[index], row.legacyView);
+    assert.equal(evidence.appearance.runs[index].receiptSha256, row.receiptSha256);
+  }
+  assert.deepEqual(Object.keys(evidence.appearanceCssom).sort(), [
+    "platform", "profile", "runs", "scenario", "schema", "status", "visualAppearanceQualified",
+  ].sort());
+  assert.equal(evidence.appearanceCssom.schema, APPEARANCE_CSSOM_RESULT_SCHEMA);
+  assert.equal(evidence.appearanceCssom.profile, APPEARANCE_CSSOM_PROFILE);
+  assert.equal(evidence.appearanceCssom.runs[0].observations.length, 4);
   assert.equal(evidence.realUserState.observations, 7);
 
-  assert.throws(() => buildPublicEvidence({ ...base, appearanceSmoke: { ...base.appearanceSmoke, runs: [] } }), (error) => error?.code === "PUBLIC_APPEARANCE_SMOKE");
+  assert.throws(() => buildPublicEvidence({ ...base, appearanceSmoke: { ...base.appearanceSmoke, runs: [] } }), (error) => error?.code === "CSSOM_EVIDENCE");
   assert.throws(() => buildPublicEvidence({ ...base, tests: { ...base.tests, appearancePreferences: { ...base.tests.appearancePreferences, passed: 8, failed: 1 } } }), (error) => error?.code === "PUBLIC_TESTS");
   assert.throws(() => buildPublicEvidence({ ...base, realUserState: { ...base.realUserState, observations: 5 } }), (error) => error?.code === "PUBLIC_USER_STATE");
   const materialRuns = base.materialSmoke.runs.map((run) => ({ ...run }));

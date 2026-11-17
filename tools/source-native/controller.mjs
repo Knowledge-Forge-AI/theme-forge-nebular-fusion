@@ -13,14 +13,22 @@ import { createChildProcessPort } from "./host-inputs.mjs";
 import { classifyBuildOutput, validateBuildDiagnostic, INPUT_ARCHIVE_SHA256 } from "./build-failure-diagnostics.mjs";
 import {
   APPEARANCE_P_OPERATIONS,
-  APPEARANCE_RESULT_SCHEMA,
+  APPEARANCE_RESULT_SCHEMA as LEGACY_APPEARANCE_RESULT_SCHEMA,
   APPEARANCE_STEPS,
-  annotateAppearanceSmokeReceipt,
   appearanceSmokeInvocation,
-  formatAppearanceSmokeFailure,
-  runExplicitAppearanceP,
-  validateAppearanceSmokeRuns,
 } from "./appearance-orchestration.mjs";
+import {
+  APPEARANCE_CSSOM_PROFILE,
+  APPEARANCE_CSSOM_RESULT_SCHEMA,
+  annotateAppearanceSmokeReceipt,
+  formatAppearanceSmokeFailure,
+  legacyAppearanceEvidenceProjection,
+  runExplicitAppearanceCssomP,
+  validateAppearanceCssomEvidence,
+} from "./appearance-cssom-controller.mjs";
+
+export { APPEARANCE_CSSOM_PROFILE, APPEARANCE_CSSOM_RESULT_SCHEMA,
+  runExplicitAppearanceCssomP, validateAppearanceCssomEvidence };
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -40,11 +48,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const CONTROLLER_SCHEMA = "nebular.source-native-campaign66-controller-v1";
 export const EVIDENCE_SCHEMA = "nebular.source-native-campaign66-material-evidence-v1";
 export const REPOSITORY = "Knowledge-Forge-AI/theme-forge-nebular-fusion";
-export const REVIEWED_REF = "refs/heads/qualification/material-source-20261114";
+export const REVIEWED_REF = "refs/heads/qualification/appearance-cssom-20261117";
 export const TARGET = "darwin-arm64";
 export const TRIPLE = "aarch64-apple-darwin";
 export const CANDIDATE_VERSION = "0.6.1";
 export const RETENTION_DAYS = 14;
+export const CSSOM_ARCHIVE_PATH = "authenticated-inputs/source-native/native-material-inputs62.tar.gz";
+export const CSSOM_ARCHIVE_SHA256 = "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e";
+export const CSSOM_ARCHIVE_BYTES = 8975368;
 export const MAX_COMMAND_OUTPUT = 256 * 1024;
 export const COMMAND_TIMEOUT_MS = 1_800_000;
 export const COMMAND_KILL_GRACE_MS = 2_000;
@@ -369,14 +380,14 @@ export function validateSpec(spec, env = process.env) {
   absolute(spec.inputs.archive, "SPEC_ARCHIVE");
   digest(spec.inputs.archiveSha256, "SPEC_ARCHIVE_DIGEST");
   safePublicRelative(spec.inputs.archivePath, "SPEC_ARCHIVE_PATH");
-  if (spec.inputs.archivePath !== "authenticated-inputs/source-native/native-material-inputs59.tar.gz") fail("SPEC_ARCHIVE_PATH");
+  if (spec.inputs.archivePath !== CSSOM_ARCHIVE_PATH) fail("SPEC_ARCHIVE_PATH");
   if (!isRecord(spec.inputs.verifier) || !isRecord(spec.inputs.verifier.binding) || !isRecord(spec.inputs.verifier.tarball)) fail("SPEC_VERIFIER");
   absolute(spec.inputs.verifier.binding.path, "SPEC_VERIFIER_BINDING");
   absolute(spec.inputs.verifier.tarball.path, "SPEC_VERIFIER_TARBALL");
   digest(spec.inputs.verifier.tarball.sha256, "SPEC_VERIFIER_DIGEST");
   if (spec.inputs.verifier.tarball.sha256 !== "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b") fail("SPEC_VERIFIER_DIGEST");
-if (spec.inputs.archiveSha256 !== "2d15e0b745b686ec83d7d5e92bcf7e52af842d6c2a72d117d37f1c6601139a76") fail("SPEC_ARCHIVE_DIGEST");
-if (spec.inputs.archiveBytes !== 8973394) fail("SPEC_ARCHIVE_SIZE");
+if (spec.inputs.archiveSha256 !== CSSOM_ARCHIVE_SHA256) fail("SPEC_ARCHIVE_DIGEST");
+if (spec.inputs.archiveBytes !== CSSOM_ARCHIVE_BYTES) fail("SPEC_ARCHIVE_SIZE");
   if (!isRecord(spec.host)) fail("SPEC_HOST");
   for (const key of ["spec", "bridge", "receipt", "locator"]) absolute(spec.host[key], `SPEC_HOST_${key.toUpperCase()}`);
   if (!isRecord(spec.source) || typeof spec.source.commit !== "string") fail("SPEC_SOURCE");
@@ -1063,6 +1074,8 @@ async function materializePublicArtifacts(spec, packageRecord) {
 }
 
 export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification, nestedSeal, packageRecord, realUserState, materialSmoke, appearanceSmoke }) {
+  const cssomAppearanceSmoke = validateAppearanceCssomEvidence(appearanceSmoke);
+  const legacyAppearanceSmoke = legacyAppearanceEvidenceProjection(cssomAppearanceSmoke);
   if (!bridge || bridge.nativeAcceptance !== "not-claimed") fail("PUBLIC_BRIDGE");
   if (bridge.status !== "source-receipt-bridged" || bridge.provenance?.fixtureOnly !== false
       || bridge.provenance?.gitObservation !== "checkout-rev-parse"
@@ -1087,30 +1100,30 @@ export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, test
       || new Set(materialSmoke.runs.map(row=>row.source)).size !== 2
       || ["raw-archive","npm-package"].some(source=>!materialSmoke.runs.some(row=>row.source===source))
       || materialSmoke.runs.some(row=>!SHA256.test(row.receiptSha256??"")||row.stepsPassed!==8||row.sourceUnchanged!==true)) fail("PUBLIC_MATERIAL_SMOKE");
-  if (appearanceSmoke?.schema !== APPEARANCE_RESULT_SCHEMA
-      || appearanceSmoke.status !== "passed-process-observation"
-      || appearanceSmoke.platform !== TARGET || appearanceSmoke.scenario !== "P"
-      || appearanceSmoke.visualAppearanceQualified !== false
-      || !Array.isArray(appearanceSmoke.runs) || appearanceSmoke.runs.length !== 2
-      || new Set(appearanceSmoke.runs.map(row => row.source)).size !== 2
-      || ["raw-archive", "npm-package"].some(source => !appearanceSmoke.runs.some(row => row.source === source))
-      || appearanceSmoke.runs.some(row => row.stepsPassed !== APPEARANCE_STEPS.length
+  if (legacyAppearanceSmoke?.schema !== LEGACY_APPEARANCE_RESULT_SCHEMA
+      || legacyAppearanceSmoke.status !== "passed-process-observation"
+      || legacyAppearanceSmoke.platform !== TARGET || legacyAppearanceSmoke.scenario !== "P"
+      || legacyAppearanceSmoke.visualAppearanceQualified !== false
+      || !Array.isArray(legacyAppearanceSmoke.runs) || legacyAppearanceSmoke.runs.length !== 2
+      || new Set(legacyAppearanceSmoke.runs.map(row => row.source)).size !== 2
+      || ["raw-archive", "npm-package"].some(source => !legacyAppearanceSmoke.runs.some(row => row.source === source))
+      || legacyAppearanceSmoke.runs.some(row => row.stepsPassed !== APPEARANCE_STEPS.length
         || row.preferenceCustody !== "passed" || row.persistentUserState !== "unchanged"
         || row.visualAppearanceQualified !== false || !SHA256.test(row.receiptSha256 ?? ""))
-      || appearanceSmoke.requiredRustTests?.status !== "passed-process-observation"
-      || appearanceSmoke.requiredRustTests.expected !== REQUIRED_APPEARANCE_TESTS.length
-      || appearanceSmoke.requiredRustTests.passed !== REQUIRED_APPEARANCE_TESTS.length
-      || appearanceSmoke.requiredRustTests.failed !== 0
-      || !Array.isArray(appearanceSmoke.requiredRustTests.tests)
-      || appearanceSmoke.requiredRustTests.tests.length !== REQUIRED_APPEARANCE_TESTS.length
-      || REQUIRED_APPEARANCE_TESTS.some(name => !appearanceSmoke.requiredRustTests.tests.some(row => row.name === name && row.passed === 1 && row.failed === 0))) fail("PUBLIC_APPEARANCE_SMOKE");
-  if (appearanceSmoke.requiredPolicyTests?.status !== "passed-process-observation"
-      || appearanceSmoke.requiredPolicyTests.expected !== REQUIRED_POLICY_TESTS.length
-      || appearanceSmoke.requiredPolicyTests.passed !== REQUIRED_POLICY_TESTS.length
-      || appearanceSmoke.requiredPolicyTests.failed !== 0
-      || !Array.isArray(appearanceSmoke.requiredPolicyTests.tests)
-      || appearanceSmoke.requiredPolicyTests.tests.length !== REQUIRED_POLICY_TESTS.length
-      || REQUIRED_POLICY_TESTS.some(name => !appearanceSmoke.requiredPolicyTests.tests.some(row => row.name === name && row.passed === 1 && row.failed === 0))) fail("PUBLIC_APPEARANCE_SMOKE");
+      || legacyAppearanceSmoke.requiredRustTests?.status !== "passed-process-observation"
+      || legacyAppearanceSmoke.requiredRustTests.expected !== REQUIRED_APPEARANCE_TESTS.length
+      || legacyAppearanceSmoke.requiredRustTests.passed !== REQUIRED_APPEARANCE_TESTS.length
+      || legacyAppearanceSmoke.requiredRustTests.failed !== 0
+      || !Array.isArray(legacyAppearanceSmoke.requiredRustTests.tests)
+      || legacyAppearanceSmoke.requiredRustTests.tests.length !== REQUIRED_APPEARANCE_TESTS.length
+      || REQUIRED_APPEARANCE_TESTS.some(name => !legacyAppearanceSmoke.requiredRustTests.tests.some(row => row.name === name && row.passed === 1 && row.failed === 0))) fail("PUBLIC_APPEARANCE_SMOKE");
+  if (legacyAppearanceSmoke.requiredPolicyTests?.status !== "passed-process-observation"
+      || legacyAppearanceSmoke.requiredPolicyTests.expected !== REQUIRED_POLICY_TESTS.length
+      || legacyAppearanceSmoke.requiredPolicyTests.passed !== REQUIRED_POLICY_TESTS.length
+      || legacyAppearanceSmoke.requiredPolicyTests.failed !== 0
+      || !Array.isArray(legacyAppearanceSmoke.requiredPolicyTests.tests)
+      || legacyAppearanceSmoke.requiredPolicyTests.tests.length !== REQUIRED_POLICY_TESTS.length
+      || REQUIRED_POLICY_TESTS.some(name => !legacyAppearanceSmoke.requiredPolicyTests.tests.some(row => row.name === name && row.passed === 1 && row.failed === 0))) fail("PUBLIC_APPEARANCE_SMOKE");
   if (qualification?.status !== "pass" || !Array.isArray(qualification.checks) || qualification.checks.length === 0
       || qualification.checks.some(row=>row.ok!==true)) fail("PUBLIC_QUALIFICATION");
   if (nestedSeal?.status !== "pass" || nestedSeal.schema !== "nebular.source-native-packaging-verification-v1"
@@ -1135,14 +1148,23 @@ export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, test
     materialSmoke,
     appearance: {
       schema: "nebular.source-native-appearance-evidence-v1",
-      status: "passed-process-observation",
-      platform: TARGET,
-      scenario: "P",
+      status: legacyAppearanceSmoke.status,
+      platform: legacyAppearanceSmoke.platform,
+      scenario: legacyAppearanceSmoke.scenario,
       nativeAcceptance: "not-claimed",
       visualAppearanceQualified: false,
-      requiredRustTests: appearanceSmoke.requiredRustTests,
-      requiredPolicyTests: appearanceSmoke.requiredPolicyTests,
-      runs: appearanceSmoke.runs,
+      requiredRustTests: legacyAppearanceSmoke.requiredRustTests,
+      requiredPolicyTests: legacyAppearanceSmoke.requiredPolicyTests,
+      runs: legacyAppearanceSmoke.runs,
+    },
+    appearanceCssom: {
+      schema: APPEARANCE_CSSOM_RESULT_SCHEMA,
+      profile: APPEARANCE_CSSOM_PROFILE,
+      status: cssomAppearanceSmoke.status,
+      platform: cssomAppearanceSmoke.platform,
+      scenario: cssomAppearanceSmoke.scenario,
+      visualAppearanceQualified: false,
+      runs: cssomAppearanceSmoke.runs,
     },
     repository: context.repository,
     ref: context.ref,
@@ -1381,7 +1403,7 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   ], packageRecord.raw.executableSha256);
   let appearanceSmoke;
   try {
-    appearanceSmoke = await runExplicitAppearanceP({
+    appearanceSmoke = await runExplicitAppearanceCssomP({
       enabled: true,
       platform: TARGET,
       completedOperations: ["RAW_A", "NPM_A", "RAW_M", "NPM_M"],

@@ -22,7 +22,7 @@ jobs:
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.confirm_material_source_native == 'true' &&
       github.repository == 'Knowledge-Forge-AI/theme-forge-nebular-fusion' &&
-      github.ref == 'refs/heads/qualification/material-source-20261114'
+      github.ref == 'refs/heads/qualification/appearance-cssom-20261117'
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -45,7 +45,7 @@ jobs:
       - name: Recheck repository and ref before the controller
         env:
           EXPECTED_REPOSITORY: Knowledge-Forge-AI/theme-forge-nebular-fusion
-          EXPECTED_REF: refs/heads/qualification/material-source-20261114
+          EXPECTED_REF: refs/heads/qualification/appearance-cssom-20261117
         run: |
           set -eu
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
