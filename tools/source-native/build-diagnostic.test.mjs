@@ -24,10 +24,10 @@ const appearanceSourceFiles=[
 
 test('source IDs are fixed unique relative paths',()=>{
  const originalPrefix=SOURCE_FILES.slice(0,155);
- assert.equal(SOURCE_FILES.length,160);assert.ok(toolId>=0&&rustId>=0);
+ assert.equal(SOURCE_FILES.length,166);assert.ok(toolId>=0&&rustId>=0);
  assert.equal(createHash('sha256').update(JSON.stringify(originalPrefix)).digest('hex'),originalSourcePrefixSha256);
  assert.deepEqual([...originalPrefix].sort(),originalPrefix);
- assert.deepEqual(SOURCE_FILES.slice(155),appearanceSourceFiles);
+ assert.deepEqual(SOURCE_FILES.slice(155,160),appearanceSourceFiles);
  assert.equal(new Set(SOURCE_FILES).size,SOURCE_FILES.length);
  assert.ok(SOURCE_FILES.every(x=>!x.startsWith('/')&&!x.split('/').includes('..')));
 });
@@ -87,7 +87,7 @@ test('classification is capped and deduplicated',()=>{
 
 test('formatter rejects extra keys, unknown labels, paths and invalid numbers',()=>{
  const good=classify(`error[E0432]: private\n --> ${roots[0]}/${rustFile}:1:1`);
- const variants=[{...good,raw:'private-value'},{...good,markers:['private-value']},{...good,rustCodes:['private-value']},{...good,systemCodes:['private-value']},{...good,sites:[{file:160,line:1,column:1}]},{...good,sites:[{file:0,line:0,column:1}]},{...good,sites:[{file:0,line:1,column:Infinity}]},{...good,flags:{...good.flags,raw:'private-value'}},{...good,flags:{...good.flags,partial:'private-value'}}];
+ const variants=[{...good,raw:'private-value'},{...good,markers:['private-value']},{...good,rustCodes:['private-value']},{...good,systemCodes:['private-value']},{...good,sites:[{file:166,line:1,column:1}]},{...good,sites:[{file:0,line:0,column:1}]},{...good,sites:[{file:0,line:1,column:Infinity}]},{...good,flags:{...good.flags,raw:'private-value'}},{...good,flags:{...good.flags,partial:'private-value'}}];
  for(const bad of variants){
   assert.equal(validateBuildDiagnostic(bad),null);const error=new CampaignError('BUILD_CANDIDATE_FAILED');error.buildDiagnostic=bad;
   assert.equal(formatCampaignFailure(error),'SOURCE_NATIVE_BUILD_CANDIDATE_FAILED');
@@ -443,5 +443,15 @@ test('payload source-label mapping matches exact scanner deduplication over boun
    let expected;for(let i=0;i<5;i++)if(prefixes[i]&&[prefixes[i],payloadResolve(prefixes[i])].includes(needles[index])){expected=names[i];break}
    assert.equal(payloadMatchLabels(locatedError('unknown',index),prefixes).prefixSource,expected);
   }
+ }
+});
+
+test('illustration source IDs append exactly six fixed paths without changing existing IDs',()=>{
+ const illustrationSourceFiles=["src-tauri/src/commands/illustration.rs", "src-tauri/src/sidecar/illustration_protocol.rs", "src-tauri/src/sidecar/illustration_protocol/tests.rs", "src-tauri/src/sidecar/illustration_protocol/wire_presence.rs", "src-tauri/src/sidecar/supervisor/illustration.rs", "src-tauri/src/sidecar/supervisor/illustration/tests.rs"];
+ assert.deepEqual(SOURCE_FILES.slice(160),illustrationSourceFiles);
+ for(const [offset,file] of illustrationSourceFiles.entries()){
+  const diagnostic=classify(`error[E0308]: withheld\n --> ${roots[0]}/${file}:3:4\n`);
+  assert.deepEqual(diagnostic.sites,[{file:160+offset,line:3,column:4}]);
+  assert.equal(JSON.stringify(diagnostic).includes(file),false);
  }
 });

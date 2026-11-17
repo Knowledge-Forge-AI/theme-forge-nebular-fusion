@@ -1,10 +1,10 @@
-name: Nebular held source-native macOS candidate
+name: Nebular held saved-illustration macOS candidate
 
 on:
   workflow_dispatch:
     inputs:
-      confirm_material_source_native:
-        description: Run the held material-source native lane (no release or signing)
+      confirm_illustration_readonly:
+        description: Run held saved-illustration I after A/M/P (no release or signing)
         required: true
         type: boolean
         default: false
@@ -20,9 +20,9 @@ jobs:
   macos-arm64-source-native:
     if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.confirm_material_source_native == 'true' &&
+      github.event.inputs.confirm_illustration_readonly == 'true' &&
       github.repository == 'Knowledge-Forge-AI/theme-forge-nebular-fusion' &&
-      github.ref == 'refs/heads/qualification/appearance-cssom-20261117'
+      github.ref == 'refs/heads/qualification/illustration-readonly-20261117'
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -45,7 +45,7 @@ jobs:
       - name: Recheck repository and ref before the controller
         env:
           EXPECTED_REPOSITORY: Knowledge-Forge-AI/theme-forge-nebular-fusion
-          EXPECTED_REF: refs/heads/qualification/appearance-cssom-20261117
+          EXPECTED_REF: refs/heads/qualification/illustration-readonly-20261117
         run: |
           set -eu
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
