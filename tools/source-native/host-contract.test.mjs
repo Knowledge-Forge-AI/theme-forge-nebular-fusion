@@ -1,3 +1,4 @@
+import { illustrationFixture } from "./illustration-test-fixture.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, readFile, rm, lstat } from "node:fs/promises";
@@ -166,7 +167,7 @@ test("actual self-signal and missing executable remain failed without raw diagno
 
 function combinedPublicEvidenceFixture() {
   const commit = "1".repeat(40);
-  const archiveSha256 = "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e";
+  const archiveSha256 = "f74cda20869385b860c633b0d54503554755bc7a8418bd8f8c4e0788d9c82f95";
   const packageManifestSha256 = "3".repeat(64);
   const requiredRustTests = {
     status: "passed-process-observation", expected: REQUIRED_APPEARANCE_TESTS.length,
@@ -190,14 +191,14 @@ function combinedPublicEvidenceFixture() {
   const sourceReceipt = { version: "0.6.1", sourceCandidate: "candidate-source", identity: "source-receipt-identity" };
   return {
     spec: { candidateVersion: "0.6.1", source: { commit }, inputs: { archiveSha256 } },
-    context: { repository: "Knowledge-Forge-AI/theme-forge-nebular-fusion", ref: "refs/heads/qualification/appearance-cssom-20261117" },
+    context: { repository: "Knowledge-Forge-AI/theme-forge-nebular-fusion", ref: "refs/heads/qualification/illustration-receipt-custody-20261117" },
     sourceReceipt,
     bridge: {
       version: "0.6.1", nativeAcceptance: "not-claimed", status: "source-receipt-bridged",
       provenance: { fixtureOnly: false, gitObservation: "checkout-rev-parse", inputArchiveToSourceCandidate: "extractor-linked-manifest-to-source-candidate" },
       materialRoute: { authorityStatus: "held-self-derived-record" }, source: { commit }, sourceCandidate: sourceReceipt.sourceCandidate,
       sourceReceiptSha256: "6".repeat(64), sourceReceiptIdentity: sourceReceipt.identity,
-      inputArchive: { path: "authenticated-inputs/source-native/native-material-inputs62.tar.gz", sha256: archiveSha256, gitBlobSha1: "7".repeat(40) },
+      inputArchive: { path: "authenticated-inputs/source-native/native-illustration-inputs72.tar.gz", sha256: archiveSha256, gitBlobSha1: "7".repeat(40) },
     },
     tests: {
       installedModes: { status: "passed-process-observation", expected: 4, passed: 4, failed: 0 },
@@ -207,6 +208,7 @@ function combinedPublicEvidenceFixture() {
         { name: "release_smoke::io::tests::material_fixture_rejects_links_modes_empty_large_and_nonregular_entries", passed: 1, failed: 0 },
       ] },
       appearancePreferences: requiredRustTests, policy: requiredPolicyTests, nativeAcceptance: "not-claimed",
+      illustrationRust: illustrationFixture().additionalRustTests, sceneInventory: illustrationFixture().sceneInventoryTests,
     },
     qualification: { status: "pass", checks: [{ id: "qualified", ok: true }] },
     nestedSeal: { status: "pass", schema: "nebular.source-native-packaging-verification-v1", authorityStatus: "held-self-derived-record", manualConfirmation: "not-performed" },
@@ -217,6 +219,7 @@ function combinedPublicEvidenceFixture() {
       { source: "npm-package", receiptSha256: "b".repeat(64), stepsPassed: 8, sourceUnchanged: true },
     ] },
     appearanceSmoke,
+    illustrationSmoke: illustrationFixture(),
   };
 }
 
@@ -246,4 +249,18 @@ test("combined public evidence binds P, 17 lib tests, 10 policy tests, and seven
   const materialRuns = base.materialSmoke.runs.map((run) => ({ ...run }));
   materialRuns[0].stepsPassed = 7;
   assert.throws(() => buildPublicEvidence({ ...base, materialSmoke: { ...base.materialSmoke, runs: materialRuns } }), (error) => error?.code === "PUBLIC_MATERIAL_SMOKE");
+});
+
+test("combined public evidence refuses contradictory illustration test summaries",()=>{
+ const fixture=combinedPublicEvidenceFixture();
+ const valid=buildPublicEvidence(fixture);
+ assert.equal(valid.illustration.namespaceObservations.total,9);
+ assert.equal(valid.illustration.additionalRustTests.passed,11);
+ assert.equal(valid.illustration.sceneInventoryTests.passed,2);
+ for(const key of ["illustrationRust","sceneInventory"]){
+  const changed={...fixture,tests:{...fixture.tests,[key]:{...fixture.tests[key],failed:1}}};
+  assert.throws(()=>buildPublicEvidence(changed));
+ }
+ const changed=structuredClone(fixture);changed.illustrationSmoke.runs[0].facts.reverse();
+ assert.throws(()=>buildPublicEvidence(changed));
 });

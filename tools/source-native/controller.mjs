@@ -26,9 +26,25 @@ import {
   runExplicitAppearanceCssomP,
   validateAppearanceCssomEvidence,
 } from "./appearance-cssom-controller.mjs";
+import {
+  EXISTING_AMP_OPERATIONS,
+  ILLUSTRATION_I_OPERATIONS,
+  ILLUSTRATION_STEPS,
+  IllustrationOrchestrationError,
+  REQUIRED_ILLUSTRATION_RUST_TESTS,
+  REQUIRED_SCENE_INVENTORY_TEST_TARGET,
+  REQUIRED_SCENE_INVENTORY_TESTS,
+  buildIllustrationEvidence,
+  runExplicitIllustrationI,
+  validateIllustrationEvidence,
+} from "./illustration-orchestration.mjs";
 
 export { APPEARANCE_CSSOM_PROFILE, APPEARANCE_CSSOM_RESULT_SCHEMA,
-  runExplicitAppearanceCssomP, validateAppearanceCssomEvidence };
+  runExplicitAppearanceCssomP, validateAppearanceCssomEvidence,
+  EXISTING_AMP_OPERATIONS, ILLUSTRATION_I_OPERATIONS,
+  REQUIRED_ILLUSTRATION_RUST_TESTS, REQUIRED_SCENE_INVENTORY_TEST_TARGET,
+  REQUIRED_SCENE_INVENTORY_TESTS, buildIllustrationEvidence,
+  runExplicitIllustrationI, validateIllustrationEvidence };
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -48,14 +64,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const CONTROLLER_SCHEMA = "nebular.source-native-campaign66-controller-v1";
 export const EVIDENCE_SCHEMA = "nebular.source-native-campaign66-material-evidence-v1";
 export const REPOSITORY = "Knowledge-Forge-AI/theme-forge-nebular-fusion";
-export const REVIEWED_REF = "refs/heads/qualification/appearance-cssom-20261117";
+export const REVIEWED_REF = "refs/heads/qualification/illustration-receipt-custody-20261117";
 export const TARGET = "darwin-arm64";
 export const TRIPLE = "aarch64-apple-darwin";
 export const CANDIDATE_VERSION = "0.6.1";
 export const RETENTION_DAYS = 14;
-export const CSSOM_ARCHIVE_PATH = "authenticated-inputs/source-native/native-material-inputs62.tar.gz";
-export const CSSOM_ARCHIVE_SHA256 = "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e";
-export const CSSOM_ARCHIVE_BYTES = 8975368;
+export const CSSOM_ARCHIVE_PATH = "authenticated-inputs/source-native/native-illustration-inputs72.tar.gz";
+export const CSSOM_ARCHIVE_SHA256 = "f74cda20869385b860c633b0d54503554755bc7a8418bd8f8c4e0788d9c82f95";
+export const CSSOM_ARCHIVE_BYTES = 9105598;
 export const MAX_COMMAND_OUTPUT = 256 * 1024;
 export const COMMAND_TIMEOUT_MS = 1_800_000;
 export const COMMAND_KILL_GRACE_MS = 2_000;
@@ -151,11 +167,12 @@ export function annotateMaterialSmokeFailure(error, receipt, source) {
 
 // Fixed call-site labels identify the command that refused, never its private argv.
 export const SMOKE_OPERATIONS = Object.freeze([
-  "RAW_EXTRACT", "NPM_EXTRACT", "NPM_VERIFY", "RAW_A", "NPM_A", "RAW_M", "NPM_M", "RAW_P", "NPM_P",
+  "RAW_EXTRACT", "NPM_EXTRACT", "NPM_VERIFY", "RAW_A", "NPM_A", "RAW_M", "NPM_M", "RAW_P", "NPM_P", "RAW_I", "NPM_I",
 ]);
 const SMOKE_RECEIPT_STATES = new Set(["UNAVAILABLE", "REJECTED", "PASS", "FAIL"]);
 const CORE_A_STEPS = Object.freeze(["app-shell", "host-start", "host-status", "project-open", "brand-read", "theme-lab-compile", "app-theme-status", "app-theme-compile", "brand-system-view", "host-status-final", "driver"]);
 function smokeInvocation(operation) {
+  if (operation === "RAW_I" || operation === "NPM_I") return {scenario:"I",source:operation === "RAW_I" ? "raw-archive" : "npm-package",stages:[...ILLUSTRATION_STEPS.map(({id}) => id), "illustration-driver"]};
   if (operation === "RAW_A" || operation === "NPM_A") return {scenario:"A",source:operation === "RAW_A" ? "raw-archive" : "npm-package",stages:CORE_A_STEPS};
   if (operation === "RAW_M" || operation === "NPM_M") return {scenario:"M",source:operation === "RAW_M" ? "raw-archive" : "npm-package",stages:MATERIAL_FAILURE_STAGES};
   const appearance = appearanceSmokeInvocation(operation);
@@ -267,6 +284,31 @@ export class CampaignError extends Error {
 
 function fail(code) {
   throw new CampaignError(code);
+}
+
+// Fixed refusal categories only. Controller errors retain their existing
+// operation/boundary/cleanup annotations. Unknown callback values never enter
+// an error message, public field, or formatted diagnostic.
+const ILLUSTRATION_REFUSAL_CODES = new Set(["EXISTING_AMP_REQUIRED", "ILLUSTRATION_RUST_GATES", "I_CALLBACKS", "I_ENTRY", "I_EVIDENCE", "I_NOT_EXPLICIT", "I_OPERATION_FAILED", "I_PLATFORM", "I_PRIVACY", "I_RECEIPT", "I_RECEIPT_UNAVAILABLE", "I_RUNS", "LEGACY_POLICY_GATES", "LEGACY_RUST_GATES", "NAMESPACE", "REAL_USER_STATE", "SCENE_INVENTORY_GATES", "WIRE_INVALID"]);
+function illustrationCampaignError(error) {
+  if (error instanceof CampaignError) return error;
+  if (error instanceof IllustrationOrchestrationError && ILLUSTRATION_REFUSAL_CODES.has(error.code)) {
+    return new CampaignError(`ILLUSTRATION_${error.code}`);
+  }
+  return new CampaignError("ILLUSTRATION_INTERNAL");
+}
+
+export async function runIllustrationCheckpoint(options) {
+  try {
+    return await runExplicitIllustrationI({ ...options, preserveOperationError: error => error instanceof CampaignError });
+  } catch (error) {
+    throw illustrationCampaignError(error);
+  }
+}
+
+export function validateCampaignIllustrationEvidence(value) {
+  try { return validateIllustrationEvidence(value); }
+  catch (error) { throw illustrationCampaignError(error); }
 }
 
 function isRecord(value) {
@@ -980,6 +1022,23 @@ export function parseRustTestSummary(text, expected) {
   return { passed: Number(match[1]), failed: Number(match[2]) };
 }
 
+/** Require the exact named tests in one bounded Cargo execution output. */
+export function parseNamedRustTestExecution(text, expectedNames) {
+  if (!Array.isArray(expectedNames) || expectedNames.length < 1
+      || typeof text !== "string" || Buffer.byteLength(text) > MAX_COMMAND_OUTPUT) fail("RUST_TEST_SUMMARY");
+  const observed = [...text.matchAll(/^test\s+([A-Za-z0-9_:.-]+)\s+\.\.\.\s+ok$/gmu)].map((match) => match[1]);
+  if (observed.length !== expectedNames.length || new Set(observed).size !== expectedNames.length
+      || expectedNames.some((name) => !observed.includes(name))) fail("RUST_TEST_SUMMARY");
+  const summary = parseRustTestSummary(text, expectedNames.length);
+  return {
+    status: "passed-process-observation",
+    expected: expectedNames.length,
+    passed: summary.passed,
+    failed: summary.failed,
+    tests: expectedNames.map((name) => ({ name, passed: 1, failed: 0 })),
+  };
+}
+
 export function validateRustTestList(text, names, guard) {
   if (typeof text !== "string" || Buffer.byteLength(text) > MAX_COMMAND_OUTPUT) fail("RUST_TEST_LIST");
   const lines=text.split(/\r?\n/u).filter(Boolean);
@@ -1073,9 +1132,18 @@ async function materializePublicArtifacts(spec, packageRecord) {
   return Object.freeze({ directory: "public", files: copies.map(([, destination]) => destination.slice(spec.paths.publicDir.length + 1)).sort(), allowlist: [...publicArtifactAllowlist()] });
 }
 
-export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification, nestedSeal, packageRecord, realUserState, materialSmoke, appearanceSmoke }) {
+export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification, nestedSeal, packageRecord, realUserState, materialSmoke, appearanceSmoke, illustrationSmoke }) {
   const cssomAppearanceSmoke = validateAppearanceCssomEvidence(appearanceSmoke);
   const legacyAppearanceSmoke = legacyAppearanceEvidenceProjection(cssomAppearanceSmoke);
+  const validatedIllustrationSmoke = validateCampaignIllustrationEvidence(illustrationSmoke);
+  // The I projection must describe the same observed test/state summaries,
+  // rather than an independently supplied success record.
+  for (const [key, summary] of [["additionalRustTests", tests?.illustrationRust],
+    ["sceneInventoryTests", tests?.sceneInventory], ["requiredPolicyTests", tests?.policy]]) {
+    const rebound = validateCampaignIllustrationEvidence({ ...validatedIllustrationSmoke, [key]: summary });
+    if (JSON.stringify(rebound) !== JSON.stringify(validatedIllustrationSmoke)) fail("PUBLIC_TESTS");
+  }
+  if (JSON.stringify(validatedIllustrationSmoke.legacyRealUserState) !== JSON.stringify(realUserState)) fail("PUBLIC_USER_STATE");
   if (!bridge || bridge.nativeAcceptance !== "not-claimed") fail("PUBLIC_BRIDGE");
   if (bridge.status !== "source-receipt-bridged" || bridge.provenance?.fixtureOnly !== false
       || bridge.provenance?.gitObservation !== "checkout-rev-parse"
@@ -1166,6 +1234,7 @@ export function buildPublicEvidence({ spec, context, sourceReceipt, bridge, test
       visualAppearanceQualified: false,
       runs: cssomAppearanceSmoke.runs,
     },
+    illustration: validatedIllustrationSmoke,
     repository: context.repository,
     ref: context.ref,
     candidateVersion: spec.candidateVersion,
@@ -1324,6 +1393,25 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
     resultOk(executed, "NATIVE_TESTS");
     appearanceTests.push({name,...parseRustTestSummary(executed.text ?? "",present.tests)});
   }
+  // I has a separate closed source-owned lib-test set.  List and execute each
+  // exact test so a count-only or broad selector cannot silently substitute a
+  // different module.
+  const illustrationTests = [];
+  for (const name of REQUIRED_ILLUSTRATION_RUST_TESTS) {
+    const listing = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", name, "--", "--exact", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+    resultOk(listing, "NATIVE_TESTS");
+    const present = validateRustTestList(listing.text, [name], () => ({ tests: 1, status: "present-not-yet-executed" }));
+    const executed = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--lib", name, "--", "--exact", "--test-threads=1"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+    resultOk(executed, "NATIVE_TESTS");
+    illustrationTests.push({ name, ...parseRustTestSummary(executed.text ?? "", present.tests) });
+  }
+  const sceneInventoryList = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--test", REQUIRED_SCENE_INVENTORY_TEST_TARGET, "--", "--list"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+  resultOk(sceneInventoryList, "NATIVE_TESTS");
+  const sceneInventoryPresent = validateRustTestList(sceneInventoryList.text, REQUIRED_SCENE_INVENTORY_TESTS, () => ({ tests: REQUIRED_SCENE_INVENTORY_TESTS.length, status: "present-not-yet-executed" }));
+  const sceneInventoryRun = await resultRunner(command(authority.tools.cargo, ["test", "--locked", "--offline", "--test", REQUIRED_SCENE_INVENTORY_TEST_TARGET, "--", "--test-threads=1"], rust.cwd, scrubEnvironment(rust.environment), "text"));
+  resultOk(sceneInventoryRun, "NATIVE_TESTS");
+  const sceneInventoryTests = parseNamedRustTestExecution(sceneInventoryRun.text ?? "", REQUIRED_SCENE_INVENTORY_TESTS);
+  if (sceneInventoryPresent.tests !== sceneInventoryTests.expected) fail("RUST_TEST_SUMMARY");
   // The integration policy binary is a separate Cargo target.  List it before
   // execution, require the closed source-owned names, then run the target once
   // so the summary cannot be assembled from independent or skipped commands.
@@ -1340,7 +1428,9 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
     sourcePins: { ...sourceSummary, expected: source.tests, status: "passed-process-observation" },
     materialFixture: {status:"passed-process-observation",expected:2,passed:materialTests.reduce((n,row)=>n+row.passed,0),failed:materialTests.reduce((n,row)=>n+row.failed,0),tests:materialTests},
     appearancePreferences: {status:"passed-process-observation",expected:REQUIRED_APPEARANCE_TESTS.length,passed:appearanceTests.reduce((n,row)=>n+row.passed,0),failed:appearanceTests.reduce((n,row)=>n+row.failed,0),tests:appearanceTests},
-    policy: {status:"passed-process-observation",expected:REQUIRED_POLICY_TESTS.length,passed:policySummary.passed,failed:policySummary.failed,tests:policy.names.map(name=>({name,passed:1,failed:0}))},
+    illustrationRust: {status:"passed-process-observation",expected:REQUIRED_ILLUSTRATION_RUST_TESTS.length,passed:illustrationTests.reduce((n,row)=>n+row.passed,0),failed:illustrationTests.reduce((n,row)=>n+row.failed,0),tests:illustrationTests},
+    sceneInventory: sceneInventoryTests,
+    policy: {status:"passed-process-observation",expected:REQUIRED_POLICY_TESTS.length,passed:policySummary.passed,failed:policySummary.failed,tests:REQUIRED_POLICY_TESTS.map(name=>({name,passed:1,failed:0}))},
     nativeAcceptance: "not-claimed",
   };
 
@@ -1444,6 +1534,70 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
     tests: tests.policy.tests.map(({ name, passed, failed }) => ({ name, passed, failed })),
   };
   const appearanceEvidence = { ...appearanceSmoke, requiredRustTests: appearanceRustTests, requiredPolicyTests: appearancePolicyTests };
+  // I is deliberately nested below the completed A/M/P smoke seal.  It has
+  // its own receipt/run pair and its own post-run namespace absence check; it
+  // is never folded into the legacy direct smoke records.
+  const illustrationSmokeDir = join(spec.output.smokeDir, "illustration-i");
+  await mkdir(illustrationSmokeDir, { recursive: false, mode: 0o700 }).catch(() => fail("SMOKE_DIR"));
+  const illustrationRawLaunchRoot = await realpath(join(spec.paths.smoke, "raw")).catch(() => fail("I_EXECUTABLE_PATH"));
+  const illustrationRawExecutablePath = smokeModule.executablePath(illustrationRawLaunchRoot, TARGET);
+  const illustrationRawExecutable = await stat(illustrationRawExecutablePath).catch(() => fail("I_EXECUTABLE_PATH"));
+  if (!illustrationRawExecutable.isFile() || illustrationRawExecutable.size < 1) fail("I_EXECUTABLE_PATH");
+  const measuredIllustrationExecutableSha256 = await digestFile(illustrationRawExecutablePath);
+  if (measuredIllustrationExecutableSha256 !== packageRecord.raw.executableSha256) fail("I_EXECUTABLE_IDENTITY");
+  const illustrationLegacyRustNames = [
+    ...REQUIRED_INSTALLED_MODE_TESTS,
+    ...REQUIRED_SOURCE_PIN_TESTS,
+    ...materialTests.map(({ name }) => name),
+    ...appearanceTests.map(({ name }) => name),
+  ];
+  if (illustrationLegacyRustNames.length !== 17) fail("PUBLIC_APPEARANCE_SMOKE");
+  const illustrationLegacyRustTests = {
+    status: "passed-process-observation",
+    expected: 17,
+    passed: 17,
+    failed: 0,
+    tests: illustrationLegacyRustNames.map((name) => ({ name, passed: 1, failed: 0 })),
+  };
+  const illustrationSmoke = await runIllustrationCheckpoint({
+    enabled: true,
+    platform: TARGET,
+    completedOperations: EXISTING_AMP_OPERATIONS,
+    executableSha256: measuredIllustrationExecutableSha256,
+    requiredRustTests: illustrationLegacyRustTests,
+    requiredPolicyTests: {
+      status: tests.policy.status,
+      expected: tests.policy.expected,
+      passed: tests.policy.passed,
+      failed: tests.policy.failed,
+      tests: tests.policy.tests.map(({ name, passed, failed }) => ({ name, passed, failed })),
+    },
+    additionalRustTests: tests.illustrationRust,
+    sceneInventoryTests: tests.sceneInventory,
+    legacyRealUserState: { method: "fixed-app-namespace-absence-metadata", locations: 63, observations: 7, status: "passed" },
+    runOperation: async (operation) => {
+      const sourceLabel = operation === "RAW_I" ? "raw-archive" : "npm-package";
+      const label = sourceLabel === "raw-archive" ? "darwin-arm64-I-raw" : "darwin-arm64-I-npm";
+      const launchRoot = sourceLabel === "raw-archive" ? join(spec.paths.smoke, "raw") : join(spec.paths.smoke, "npm/package/payload");
+      const launchRootReal = await realpath(launchRoot).catch(() => fail("I_EXECUTABLE_PATH"));
+      const launchExecutablePath = smokeModule.executablePath(launchRootReal, TARGET);
+      const executableInfo = await stat(launchExecutablePath).catch(() => fail("I_EXECUTABLE_PATH"));
+      if (!executableInfo.isFile() || executableInfo.size < 1) fail("I_EXECUTABLE_PATH");
+      if (await digestFile(launchExecutablePath) !== measuredIllustrationExecutableSha256) fail("I_EXECUTABLE_IDENTITY");
+      // The previous A/M/P operation (or the preceding I operation) supplied
+      // the passed absence observation for this row; this operation adds one
+      // fresh post-run check below, preserving the 7+2 observation accounting.
+      await runSmokeOperation(operation, () => phaseRun(state, "smoke", resultRunner, command(spec.paths.authenticatedNode, [join(sourceRoot, "tools/native-rc-smoke.mjs"), "--platform", TARGET, "--scenario", "I", "--launch-root", launchRoot, "--checkout", candidateSource, "--evidence", illustrationSmokeDir, "--source", sourceLabel, "--label", label], sourceRoot, smokeObserverEnvironment(commandEnv, env))),
+        () => readJson(join(illustrationSmokeDir, `${label}.receipt.json`), "I_SMOKE_DIAGNOSTIC"));
+      const run = await readJson(join(illustrationSmokeDir, `${label}.run.json`), "I_SMOKE_RUN");
+      await assertRunnerAppStateAbsent(userStateLocations, accountHome);
+      return { run, namespaceBefore: { locations: 63, changed: 0 }, namespaceAfter: { locations: 63, changed: 0 } };
+    },
+    loadReceipt: async (operation) => {
+      const label = operation === "RAW_I" ? "darwin-arm64-I-raw" : "darwin-arm64-I-npm";
+      return readJsonWithDigest(join(illustrationSmokeDir, `${label}.receipt.json`), "I_SMOKE_RECEIPT");
+    },
+  });
   const sourceReceipt = await readJson(join(candidateRoot, "build-receipt.json"), "SOURCE_RECEIPT");
   if (!maintained?.inventoryTree) fail("MAINTAINED_API");
   await makeLegacyObservation({ spec, authority, sourceReceipt, stagedSource: candidateSource, payloadRoot, maintained });
@@ -1467,7 +1621,7 @@ export async function runCampaign(spec, { env = process.env, run = runFixedComma
   state.completed.push("nested-packaging-seal");
   const qualificationRecord = await readJson(spec.output.qualification, "QUALIFICATION");
   const realUserState={method:"fixed-app-namespace-absence-metadata",locations:63,observations:7,status:"passed"};
-  const evidence = buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification: qualificationRecord, nestedSeal, packageRecord,realUserState,materialSmoke,appearanceSmoke: appearanceEvidence });
+  const evidence = buildPublicEvidence({ spec, context, sourceReceipt, bridge, tests, qualification: qualificationRecord, nestedSeal, packageRecord,realUserState,materialSmoke,appearanceSmoke: appearanceEvidence, illustrationSmoke });
   await writeExclusiveJson(spec.output.publicEvidence, evidence, "PUBLIC_EVIDENCE_WRITE");
   await materializePublicArtifacts(spec, packageRecord);
   state.phaseIndex += 1;

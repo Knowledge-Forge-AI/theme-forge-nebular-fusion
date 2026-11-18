@@ -76,7 +76,7 @@ export async function buildSpec({ env = process.env } = {}) {
   const hostHelper = absolute(env.NEBULAR_HOST_INPUTS ?? join(repo, "tools/source-native/host-inputs.mjs"));
   const hostModule = await import(pathToFileURL(hostHelper).href).catch(() => null);
   if (!hostModule?.createCargoConfig) refuse();
-  const sourceArchive = absolute(env.NEBULAR_SOURCE_ARCHIVE ?? join(repo, "authenticated-inputs/source-native/native-material-inputs62.tar.gz"));
+  const sourceArchive = absolute(env.NEBULAR_SOURCE_ARCHIVE ?? join(repo, "authenticated-inputs/source-native/native-illustration-inputs72.tar.gz"));
   const verifierBinding = absolute(env.NEBULAR_VERIFIER_BINDING ?? join(repo, "authenticated-inputs/source-native/runtime-verifier/binding.json"));
   const verifierTarball = absolute(env.NEBULAR_VERIFIER_TARBALL ?? join(repo, "authenticated-inputs/source-native/runtime-verifier/openpgp-6.3.1.tgz"));
   const tools = {
@@ -132,7 +132,7 @@ export async function buildSpec({ env = process.env } = {}) {
   const hostSpec = {
     schema: "nebular-host-input-preparation-v1",
     mode: "actual",
-    bundle: { archivePath: sourceArchive, archiveSha256: "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e", manifestRelativePath: "bundle-manifest.json" },
+    bundle: { archivePath: sourceArchive, archiveSha256: "f74cda20869385b860c633b0d54503554755bc7a8418bd8f8c4e0788d9c82f95", manifestRelativePath: "bundle-manifest.json" },
     toolchains: { node, npm: npmCli, rust, cargo, compiler, linker, pkgConfig, systemLibraries: rustTargetLibDir, rustTargetLibDir, embeddedRuntime: paths.authenticatedNode },
     rustupRoot: rustupHome,
     rustupHome,
@@ -152,7 +152,7 @@ export async function buildSpec({ env = process.env } = {}) {
     retentionDays: RETENTION_DAYS,
     paths,
     tools,
-    inputs: { archive: sourceArchive, archiveSha256: "a3c3217b35c14ca9c08e58729133fe9670ebe39e64e081d1ee49a4a51034861e", archiveBytes: 8975368, archivePath: "authenticated-inputs/source-native/native-material-inputs62.tar.gz", verifier: { binding: { path: verifierBinding }, tarball: { path: verifierTarball, sha256: "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b" } } },
+    inputs: { archive: sourceArchive, archiveSha256: "f74cda20869385b860c633b0d54503554755bc7a8418bd8f8c4e0788d9c82f95", archiveBytes: 9105598, archivePath: "authenticated-inputs/source-native/native-illustration-inputs72.tar.gz", verifier: { binding: { path: verifierBinding }, tarball: { path: verifierTarball, sha256: "2900c3a0119eb134dc88257b873f53fa499df8e8e02ebb61301bd2378c9cc22b" } } },
     host: { spec: join(campaign, "host-spec.json"), bridge: absolute(env.NEBULAR_HOST_BRIDGE ?? join(repo, "tools/source-native/host-bridge.mjs")), receipt: join(campaign, "host-receipt.json"), locator: join(campaign, "host-locator.json") },
     source: { checkout: repo, ...sourceIdentity },
     output,
