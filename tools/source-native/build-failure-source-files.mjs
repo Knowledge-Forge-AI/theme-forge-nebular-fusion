@@ -1,4 +1,4 @@
-// Source-relative diagnostic IDs bound to input archive a3c3217b; no runtime discovery.
+// Source-relative diagnostic IDs bound to input archive 67471b19; no runtime discovery.
 export const SOURCE_FILES=Object.freeze([
   "src-tauri/src/app_theme/mod.rs",
   "src-tauri/src/app_theme/payload_authentication.rs",
@@ -159,5 +159,11 @@ export const SOURCE_FILES=Object.freeze([
   "src-tauri/src/appearance_preferences/mod.rs",
   "src-tauri/src/appearance_preferences/storage.rs",
   "src-tauri/src/commands/appearance_preferences.rs",
-  "src-tauri/tests/policy.rs"
+  "src-tauri/tests/policy.rs",
+  "src-tauri/src/commands/illustration.rs",
+  "src-tauri/src/sidecar/illustration_protocol.rs",
+  "src-tauri/src/sidecar/illustration_protocol/tests.rs",
+  "src-tauri/src/sidecar/illustration_protocol/wire_presence.rs",
+  "src-tauri/src/sidecar/supervisor/illustration.rs",
+  "src-tauri/src/sidecar/supervisor/illustration/tests.rs"
 ]);
